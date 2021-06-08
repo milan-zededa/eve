@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/lf-edge/eve/pkg/pillar/conntrack"
 	"github.com/lf-edge/eve/pkg/pillar/iptables"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/vishvananda/netlink"
@@ -329,10 +330,10 @@ func clearUDPFlows(aclArgs types.AppNetworkACLArgs, ACLs []types.ACE) {
 				continue
 			}
 			targetPort := uint16(action.TargetPort)
-			filter := ConntrackUDPFilter{
-				Protocol:   17, // UDP
-				Port:       uint16(dport),
-				TargetPort: uint16(targetPort),
+			filter := conntrack.PortMapFilter{
+				Protocol:     17, // UDP
+				ExternalPort: uint16(dport),
+				InternalPort: targetPort,
 			}
 			flowsDeleted, err := netlink.ConntrackDeleteFilter(netlink.ConntrackTable, family, filter)
 			if err != nil {
@@ -344,24 +345,6 @@ func clearUDPFlows(aclArgs types.AppNetworkACLArgs, ACLs []types.ACE) {
 				flowsDeleted, dport, targetPort)
 		}
 	}
-}
-
-// ConntrackUDPFilter : Custom filter to match on UDP protocol and ports
-type ConntrackUDPFilter struct {
-	Protocol   uint8
-	Port       uint16
-	TargetPort uint16
-}
-
-// MatchConntrackFlow : Implements CustomConntrackFilter interface to filter flows
-func (f ConntrackUDPFilter) MatchConntrackFlow(flow *netlink.ConntrackFlow) bool {
-	if flow.Forward.Protocol != f.Protocol {
-		return false
-	}
-	if flow.Forward.DstPort == f.Port || flow.Reverse.SrcPort == f.TargetPort {
-		return true
-	}
-	return false
 }
 
 // If no valid bridgeIP we assume IPv4
@@ -1419,8 +1402,11 @@ func updateACLConfiglet(ctx *zedrouterContext, aclArgs types.AppNetworkACLArgs, 
 	} else {
 		mark := uint32(aclArgs.AppNum << 24)
 		mask := uint32(0xff << 24)
-		number, err := netlink.ConntrackDeleteIPSrc(netlink.ConntrackTable, family,
-			srcIP, 0, 0, mark, mask, false)
+		number, err := netlink.ConntrackDeleteFilter(netlink.ConntrackTable, family,
+			conntrack.SrcIPFilter{
+				SrcIP:    srcIP,
+				Mark:     mark,
+				MarkMask: mask})
 		if err != nil {
 			log.Errorf("updateACLConfiglet: Error clearing flows before update - %s", err)
 		} else {
