@@ -63,7 +63,8 @@ message WirelessConfig {
 }
 
 message CellularConfig {
-  string APN = 1;                 // APN string
+  string APN = 1;                 // APN string - by default it is "internet"
+  string probeAddress = 2;        // IP/FQDN address to probe periodically for connectivity checking - by default it is "8.8.8.8"
 }
 
 message WifiConfig {

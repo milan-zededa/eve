@@ -540,6 +540,7 @@ message DevicePort {
   org.lfedge.eve.common.PhyIoMemberUsage usage = 30; // Usage of the Device port
   string networkUUID = 31; // Network UUID configured for the port.
   uint32 cost = 32; // Zero is free. Max is 255.
+  WirelessStatus wirelessStatus = 33; // defined for cellular/WiFi ports only
 }
 
 message ProxyStatus {
@@ -557,6 +558,57 @@ message ProxyEntry {
   uint32 type = 1; // From NPT_ types aka proxyProto
   string server = 2;
   uint32 port = 3;
+}
+
+message WirelessStatus {
+  WirelessType type = 1;
+  CellularStatus cellularStatus = 2;
+  // later we may add status for WiFi
+}
+
+enum WirelessType {
+  TypeNOOP = 0;
+  WiFi = 1;
+  Cellular = 2;
+}
+
+message CellularStatus {
+  // Logical label assigned to the physical cellular modem.
+  string deviceName = 1;
+  CellularModem modem = 2;
+  CellularOperatingState operatingState = 3;
+  CellularControlProtocol controlProtocol = 4;
+  string imei = 5;
+  repeated CellularProvider providers = 6;
+  string configError = 10;
+  string probeError = 11;
+}
+
+message CellularModem {
+  string model = 1;
+  string revision = 2;
+}
+
+enum CellularOperatingState {
+  OPERATING_STATE_UNSPECIFIED = 0;
+  OPERATING_STATE_OFFLINE = 1;
+  OPERATING_STATE_RADIO_OFF = 2; // AKA airplane mode
+  OPERATING_STATE_ONLINE = 3;
+  OPERATING_STATE_ONLINE_AND_CONNECTED = 4;
+  OPERATING_STATE_UNRECOGNIZED = 5;
+}
+
+enum CellularControlProtocol {
+  CONTROL_PROTOCOL_UNSPECIFIED = 0;
+  CONTROL_PROTOCOL_QMI = 1;
+  CONTROL_PROTOCOL_MBIM = 2;
+}
+
+message CellularProvider {
+  string plmn = 1;
+  string description = 2;
+  bool currentServing = 3;
+  bool roaming = 4;
 }
 
 // SW Info for the device base OS

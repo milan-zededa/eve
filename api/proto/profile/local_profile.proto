@@ -8,9 +8,36 @@ option go_package  = "github.com/lf-edge/eve/api/go/profile";
 
 option java_package = "org.lfedge.eve.profile";
 
+import "info/info.proto";
+
 // LocalProfile message is sent in response to a GET to
 // the api/v1/local_profile API
 message LocalProfile {
    string local_profile = 1;
    string server_token = 2;
 }
+
+// RadioStatus message is sent in request to a POST to
+// the api/v1/radio API
+message RadioStatus {
+   // airplane_mode is True if the airplane mode is enabled by config AND successfully
+   // applied for all radio devices.
+   // If the airplane mode was requested but this field is still returned as False,
+   // expect one or more cellular modems (in cellular_status) to be in a state
+   // of enabled radio and with a config error message attached.
+   bool airplane_mode = 1;
+   // If the last radio configuration change failed, error message is reported here.
+   // Please note that there is also a per-modem configuration error reported under CellularStatus.
+   string config_error = 2;
+   // Status of every LTE network.
+   repeated org.lfedge.eve.info.CellularStatus cellular_status = 3;
+   // XXX Later we can add status for every WiFi network.
+}
+
+// RadioConfig message may be returned in response to a POST to
+// the api/v1/radio API
+message RadioConfig {
+   bool airplane_mode = 1;
+   string server_token = 2;
+}
+

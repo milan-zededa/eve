@@ -483,11 +483,12 @@ type ZedAgentStatus struct {
 	Name                 string
 	ConfigGetStatus      ConfigGetStatus
 	RebootCmd            bool
-	RebootReason         string     // Current reason to reboot
-	BootReason           BootReason // Current reason to reboot
-	MaintenanceMode      bool       // Don't run apps etc
-	ForceFallbackCounter int        // Try image fallback when counter changes
-	CurrentProfile       string     // Current profile
+	RebootReason         string       // Current reason to reboot
+	BootReason           BootReason   // Current reason to reboot
+	MaintenanceMode      bool         // Don't run apps etc
+	ForceFallbackCounter int          // Try image fallback when counter changes
+	CurrentProfile       string       // Current profile
+	AirplaneMode         AirplaneMode // Currently requested airplane mode state
 }
 
 // Key :
@@ -549,4 +550,38 @@ type BaseOSMgrStatus struct {
 type BaseOs struct {
 	ContentTreeUUID          string
 	ConfigRetryUpdateCounter uint32
+}
+
+// AirplaneMode : used in ZedAgentStatus to record the *requested* airplane mode state.
+// Also used in DeviceNetworkStatus to publish the *actual* airplane mode state.
+// InProgress is used to wait for the operation changing the airplane mode state
+// to finalize before publishing the status update.
+// RequestedAt is used to match the request published by zedagent with the response
+// published by nim.
+type AirplaneMode struct {
+	// If enabled, all radio devices are switched off.
+	Enabled bool
+	// PermanentlyEnabled is true if the airplane mode was enabled permanently in grub.cfg
+	// using "set_permanent_rfkill" option. In that case, all radio devices are switched off
+	// immediately after boot (or never turned on) and cannot be enabled in the runtime,
+	// i.e. "Enabled" field is overridden and effectively ignored.
+	PermanentlyEnabled bool
+	// InProgess is true if change in the airplane-mode state is still in-progress.
+	InProgress  bool
+	// Time when the last change in the airplane mode state was requested (by a local profile server).
+	RequestedAt time.Time
+	// If the last radio configuration change failed, error message is reported here.
+	ConfigError string
+}
+
+func (am AirplaneMode) IsEnabled() bool {
+	return am.PermanentlyEnabled || am.Enabled
+}
+
+// StateAsString returns "ON" or "OFF".
+func (am AirplaneMode) StateAsString() string {
+	if am.IsEnabled() {
+		return "ON"
+	}
+	return "OFF"
 }

@@ -22,7 +22,7 @@ DESCRIPTOR = _descriptor.FileDescriptor(
   syntax='proto3',
   serialized_options=b'\n\025org.lfedge.eve.configZ$github.com/lf-edge/eve/api/go/config',
   create_key=_descriptor._internal_create_key,
-  serialized_pb=b'\n\x16\x63onfig/netconfig.proto\x12\x15org.lfedge.eve.config\x1a\x18\x63onfig/acipherinfo.proto\x1a\x0f\x63onfig/fw.proto\x1a\x13\x63onfig/netcmn.proto\"\x9f\x02\n\rNetworkConfig\x12\n\n\x02id\x18\x01 \x01(\t\x12\x30\n\x04type\x18\x05 \x01(\x0e\x32\".org.lfedge.eve.config.NetworkType\x12)\n\x02ip\x18\x06 \x01(\x0b\x32\x1d.org.lfedge.eve.config.ipspec\x12\x36\n\x03\x64ns\x18\x07 \x03(\x0b\x32).org.lfedge.eve.config.ZnetStaticDNSEntry\x12\x34\n\x08\x65ntProxy\x18\x08 \x01(\x0b\x32\".org.lfedge.eve.config.ProxyConfig\x12\x37\n\x08wireless\x18\n \x01(\x0b\x32%.org.lfedge.eve.config.WirelessConfig\"\xf9\x01\n\x0eNetworkAdapter\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tnetworkId\x18\x03 \x01(\t\x12\x0c\n\x04\x61\x64\x64r\x18\x04 \x01(\t\x12\x10\n\x08hostname\x18\x05 \x01(\t\x12\x11\n\tcryptoEid\x18\n \x01(\t\x12\x15\n\rlispsignature\x18\x06 \x01(\t\x12\x0f\n\x07pemcert\x18\x07 \x01(\x0c\x12\x15\n\rpemprivatekey\x18\x08 \x01(\x0c\x12\x12\n\nmacAddress\x18\t \x01(\t\x12(\n\x04\x61\x63ls\x18( \x03(\x0b\x32\x1a.org.lfedge.eve.config.ACE\x12\x16\n\x0e\x61\x63\x63\x65ss_vlan_id\x18) \x01(\r\"\xb3\x01\n\x0eWirelessConfig\x12\x31\n\x04type\x18\x01 \x01(\x0e\x32#.org.lfedge.eve.config.WirelessType\x12:\n\x0b\x63\x65llularCfg\x18\x05 \x03(\x0b\x32%.org.lfedge.eve.config.CellularConfig\x12\x32\n\x07wifiCfg\x18\n \x03(\x0b\x32!.org.lfedge.eve.config.WifiConfig\"\x1d\n\x0e\x43\x65llularConfig\x12\x0b\n\x03\x41PN\x18\x01 \x01(\t\"\xb7\x02\n\nWifiConfig\x12\x10\n\x08wifiSSID\x18\x01 \x01(\t\x12\x37\n\tkeyScheme\x18\x02 \x01(\x0e\x32$.org.lfedge.eve.config.WiFiKeyScheme\x12\x10\n\x08identity\x18\x05 \x01(\t\x12\x10\n\x08password\x18\n \x01(\t\x12=\n\x06\x63rypto\x18\x14 \x01(\x0b\x32-.org.lfedge.eve.config.WifiConfig.cryptoblock\x12\x10\n\x08priority\x18\x19 \x01(\x05\x12\x36\n\ncipherData\x18\x1e \x01(\x0b\x32\".org.lfedge.eve.config.CipherBlock\x1a\x31\n\x0b\x63ryptoblock\x12\x10\n\x08identity\x18\x0b \x01(\t\x12\x10\n\x08password\x18\x0c \x01(\tB=\n\x15org.lfedge.eve.configZ$github.com/lf-edge/eve/api/go/configb\x06proto3'
+  serialized_pb=b'\n\x16\x63onfig/netconfig.proto\x12\x15org.lfedge.eve.config\x1a\x18\x63onfig/acipherinfo.proto\x1a\x0f\x63onfig/fw.proto\x1a\x13\x63onfig/netcmn.proto\"\x9f\x02\n\rNetworkConfig\x12\n\n\x02id\x18\x01 \x01(\t\x12\x30\n\x04type\x18\x05 \x01(\x0e\x32\".org.lfedge.eve.config.NetworkType\x12)\n\x02ip\x18\x06 \x01(\x0b\x32\x1d.org.lfedge.eve.config.ipspec\x12\x36\n\x03\x64ns\x18\x07 \x03(\x0b\x32).org.lfedge.eve.config.ZnetStaticDNSEntry\x12\x34\n\x08\x65ntProxy\x18\x08 \x01(\x0b\x32\".org.lfedge.eve.config.ProxyConfig\x12\x37\n\x08wireless\x18\n \x01(\x0b\x32%.org.lfedge.eve.config.WirelessConfig\"\xf9\x01\n\x0eNetworkAdapter\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x11\n\tnetworkId\x18\x03 \x01(\t\x12\x0c\n\x04\x61\x64\x64r\x18\x04 \x01(\t\x12\x10\n\x08hostname\x18\x05 \x01(\t\x12\x11\n\tcryptoEid\x18\n \x01(\t\x12\x15\n\rlispsignature\x18\x06 \x01(\t\x12\x0f\n\x07pemcert\x18\x07 \x01(\x0c\x12\x15\n\rpemprivatekey\x18\x08 \x01(\x0c\x12\x12\n\nmacAddress\x18\t \x01(\t\x12(\n\x04\x61\x63ls\x18( \x03(\x0b\x32\x1a.org.lfedge.eve.config.ACE\x12\x16\n\x0e\x61\x63\x63\x65ss_vlan_id\x18) \x01(\r\"\xb3\x01\n\x0eWirelessConfig\x12\x31\n\x04type\x18\x01 \x01(\x0e\x32#.org.lfedge.eve.config.WirelessType\x12:\n\x0b\x63\x65llularCfg\x18\x05 \x03(\x0b\x32%.org.lfedge.eve.config.CellularConfig\x12\x32\n\x07wifiCfg\x18\n \x03(\x0b\x32!.org.lfedge.eve.config.WifiConfig\"3\n\x0e\x43\x65llularConfig\x12\x0b\n\x03\x41PN\x18\x01 \x01(\t\x12\x14\n\x0cprobeAddress\x18\x02 \x01(\t\"\xb7\x02\n\nWifiConfig\x12\x10\n\x08wifiSSID\x18\x01 \x01(\t\x12\x37\n\tkeyScheme\x18\x02 \x01(\x0e\x32$.org.lfedge.eve.config.WiFiKeyScheme\x12\x10\n\x08identity\x18\x05 \x01(\t\x12\x10\n\x08password\x18\n \x01(\t\x12=\n\x06\x63rypto\x18\x14 \x01(\x0b\x32-.org.lfedge.eve.config.WifiConfig.cryptoblock\x12\x10\n\x08priority\x18\x19 \x01(\x05\x12\x36\n\ncipherData\x18\x1e \x01(\x0b\x32\".org.lfedge.eve.config.CipherBlock\x1a\x31\n\x0b\x63ryptoblock\x12\x10\n\x08identity\x18\x0b \x01(\t\x12\x10\n\x08password\x18\x0c \x01(\tB=\n\x15org.lfedge.eve.configZ$github.com/lf-edge/eve/api/go/configb\x06proto3'
   ,
   dependencies=[config_dot_acipherinfo__pb2.DESCRIPTOR,config_dot_fw__pb2.DESCRIPTOR,config_dot_netcmn__pb2.DESCRIPTOR,])
 
@@ -259,6 +259,13 @@ _CELLULARCONFIG = _descriptor.Descriptor(
       message_type=None, enum_type=None, containing_type=None,
       is_extension=False, extension_scope=None,
       serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
+    _descriptor.FieldDescriptor(
+      name='probeAddress', full_name='org.lfedge.eve.config.CellularConfig.probeAddress', index=1,
+      number=2, type=9, cpp_type=9, label=1,
+      has_default_value=False, default_value=b"".decode('utf-8'),
+      message_type=None, enum_type=None, containing_type=None,
+      is_extension=False, extension_scope=None,
+      serialized_options=None, file=DESCRIPTOR,  create_key=_descriptor._internal_create_key),
   ],
   extensions=[
   ],
@@ -272,7 +279,7 @@ _CELLULARCONFIG = _descriptor.Descriptor(
   oneofs=[
   ],
   serialized_start=837,
-  serialized_end=866,
+  serialized_end=888,
 )
 
 
@@ -310,8 +317,8 @@ _WIFICONFIG_CRYPTOBLOCK = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=1131,
-  serialized_end=1180,
+  serialized_start=1153,
+  serialized_end=1202,
 )
 
 _WIFICONFIG = _descriptor.Descriptor(
@@ -383,8 +390,8 @@ _WIFICONFIG = _descriptor.Descriptor(
   extension_ranges=[],
   oneofs=[
   ],
-  serialized_start=869,
-  serialized_end=1180,
+  serialized_start=891,
+  serialized_end=1202,
 )
 
 _NETWORKCONFIG.fields_by_name['type'].enum_type = config_dot_netcmn__pb2._NETWORKTYPE
