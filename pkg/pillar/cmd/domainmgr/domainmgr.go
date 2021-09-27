@@ -2547,6 +2547,10 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle,
 	}
 	// Is any member a port? If so treat all as port
 	isPort := false
+	// Is any member of the group assigned to an application?
+	isAssigned := false
+	// Does the assignment group contain a wireless IO member?
+	hasWirelessIo := false
 	// expand list to include other PCI functions on the same PCI controller
 	// since they need to be treated as part of the same bundle even if the
 	// EVE controller doesn't know it
@@ -2555,6 +2559,19 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle,
 		if types.IsPort(ctx.deviceNetworkStatus, ib.Ifname) {
 			isPort = true
 		}
+		if ib.UsedByUUID != nilUUID {
+			isAssigned = true
+		}
+		if ib.Type == types.IoNetWLAN || ib.Type == types.IoNetWWAN {
+			hasWirelessIo = true
+		}
+	}
+	if !isAssigned && hasWirelessIo {
+		// Do not put disabled wireless devices (i.e. not associated with any network) into pciback,
+		// instead let EVE to properly un-configure them (e.g. turn off radio transmission).
+		// But note that IO assignment takes precedence here and if any member of the same group
+		// is assigned to an application, EVE will not be able to manage the state of the wireless device.
+		isPort = true
 	}
 	log.Functionf("updatePortAndPciBackIoBundle(%d %s %s) isPort %t members %d",
 		ib.Type, ib.Phylabel, ib.AssignmentGroup, isPort, len(list))
