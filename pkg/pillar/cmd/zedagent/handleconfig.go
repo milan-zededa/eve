@@ -7,8 +7,9 @@ import (
 	"bytes"
 	"fmt"
 	"io/ioutil"
-	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -31,6 +32,18 @@ var serverNameAndPort string
 
 // Notify simple struct to pass notification messages
 type Notify struct{}
+
+// localServerAddr contains a source IP and a destination URL to use to connect to a particular local server.
+type localServerAddr struct {
+	bridgeIP        net.IP
+	localServerAddr string
+}
+
+// localServerMap is a map of all local (profile, radio, ...) servers
+type localServerMap struct {
+	servers  map[string][]localServerAddr // key = bridge name, value = local servers
+	upToDate bool
+}
 
 type getconfigContext struct {
 	zedagentCtx              *zedagentContext    // Cross link
@@ -74,6 +87,11 @@ type getconfigContext struct {
 	globalProfile            string
 	localProfile             string
 	localProfileTrigger      chan Notify
+	localServerMap           localServerMap
+
+	// airplane mode
+	airplaneMode     types.AirplaneMode // the intended airplane-mode state
+	triggerRadioPOST chan Notify
 
 	callProcessLocalProfileServerChange bool //did we already call processLocalProfileServerChange
 
@@ -138,6 +156,7 @@ func configTimerTask(handleChannel chan interface{},
 		getconfigCtx.rebootFlag = rebootFlag
 		triggerPublishDevInfo(ctx)
 	}
+	getconfigCtx.localServerMap.upToDate = false
 	publishZedAgentStatus(getconfigCtx)
 
 	configInterval := ctx.globalConfig.GlobalValueInt(types.ConfigInterval)
@@ -166,6 +185,7 @@ func configTimerTask(handleChannel chan interface{},
 				getconfigCtx.rebootFlag = rebootFlag
 				triggerPublishDevInfo(ctx)
 			}
+			getconfigCtx.localServerMap.upToDate = false
 			ctx.ps.CheckMaxTimeTopic(wdName, "getLastestConfig", start,
 				warningTime, errorTime)
 			publishZedAgentStatus(getconfigCtx)
@@ -312,7 +332,7 @@ func getLatestConfig(url string, iteration int,
 		return false
 	}
 
-	if err := validateProtoMessage(url, resp); err != nil {
+	if err := zedcloud.ValidateProtoContentType(url, resp); err != nil {
 		log.Errorln("validateProtoMessage: ", err)
 		// Inform ledmanager about cloud connectivity
 		utils.UpdateLedManagerConfig(log, types.LedBlinkConnectedToController)
@@ -350,31 +370,6 @@ func getLatestConfig(url string, iteration int,
 	writeReceivedProtoMessage(contents)
 
 	return inhaleDeviceConfig(config, getconfigCtx, false)
-}
-
-func validateProtoMessage(url string, r *http.Response) error {
-	// No check Content-Type for empty response
-	if r.ContentLength == 0 {
-		return nil
-	}
-	var ctTypeStr = "Content-Type"
-	var ctTypeProtoStr = "application/x-proto-binary"
-
-	ct := r.Header.Get(ctTypeStr)
-	if ct == "" {
-		return fmt.Errorf("No content-type")
-	}
-	mimeType, _, err := mime.ParseMediaType(ct)
-	if err != nil {
-		return fmt.Errorf("Get Content-type error")
-	}
-	switch mimeType {
-	case ctTypeProtoStr:
-		return nil
-	default:
-		return fmt.Errorf("Content-type %s not supported",
-			mimeType)
-	}
 }
 
 func writeReceivedProtoMessage(contents []byte) {
@@ -577,7 +572,64 @@ func publishZedAgentStatus(getconfigCtx *getconfigContext) {
 		MaintenanceMode:      ctx.maintenanceMode,
 		ForceFallbackCounter: ctx.forceFallbackCounter,
 		CurrentProfile:       getconfigCtx.currentProfile,
+		AirplaneMode:         getconfigCtx.airplaneMode,
 	}
 	pub := getconfigCtx.pubZedAgentStatus
 	pub.Publish(agentName, status)
+}
+
+// updateLocalServerMap processes configuration of network instances to locate all instance of local servers matching
+// the given localServerURL.
+// Returns the source IP and normalized URL for one or more network instances on which the local server might be hosted
+// based on an IP address or a hostname in DNS records.
+func updateLocalServerMap(getconfigCtx *getconfigContext, localServerURL string) error {
+	url, err := url.Parse(localServerURL)
+	if err != nil {
+		return fmt.Errorf("updateLocalServerMap: url.Parse: %v", err)
+	}
+	srvMap := &getconfigCtx.localServerMap
+	*srvMap = localServerMap{servers: make(map[string][]localServerAddr), upToDate: true}
+	appendLocalServer := func(intf string, srvAddr localServerAddr) {
+		srvMap.servers[intf] = append(srvMap.servers[intf], srvAddr)
+	}
+	appNetworkStatuses := getconfigCtx.subAppNetworkStatus.GetAll()
+	networkInstanceConfigs := getconfigCtx.pubNetworkInstanceConfig.GetAll()
+	localServerHostname := url.Hostname()
+	localServerIP := net.ParseIP(localServerHostname)
+	for _, entry := range appNetworkStatuses {
+		appNetworkStatus := entry.(types.AppNetworkStatus)
+		for _, ulStatus := range appNetworkStatus.UnderlayNetworkList {
+			bridgeIP := net.ParseIP(ulStatus.BridgeIPAddr)
+			if bridgeIP == nil {
+				continue
+			}
+			if localServerIP != nil {
+				// check if the defined IP of localServer equals the allocated IP of the app
+				if ulStatus.AllocatedIPv4Addr == localServerIP.String() {
+					appendLocalServer(ulStatus.Bridge,
+						localServerAddr{localServerAddr: localServerURL, bridgeIP: bridgeIP})
+				}
+				continue
+			}
+			// check if defined hostname of localServer is in DNS records
+			for _, ni := range networkInstanceConfigs {
+				networkInstanceConfig := ni.(types.NetworkInstanceConfig)
+				for _, dnsNameToIPList := range networkInstanceConfig.DnsNameToIPList {
+					if dnsNameToIPList.HostName != localServerHostname {
+						continue
+					}
+					for _, ip := range dnsNameToIPList.IPs {
+						localServerURLReplaced := strings.Replace(
+							localServerURL, localServerHostname, ip.String(), 1)
+						log.Functionf(
+							"updateLocalServerMap: will use %s for bridge %s",
+							localServerURLReplaced, ulStatus.Bridge)
+						appendLocalServer(ulStatus.Bridge,
+							localServerAddr{localServerAddr: localServerURLReplaced, bridgeIP: bridgeIP})
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

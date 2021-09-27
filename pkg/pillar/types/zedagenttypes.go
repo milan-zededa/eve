@@ -567,7 +567,7 @@ type AirplaneMode struct {
 	// i.e. "Enabled" field is overridden and effectively ignored.
 	PermanentlyEnabled bool
 	// InProgess is true if change in the airplane-mode state is still in-progress.
-	InProgress  bool
+	InProgress bool
 	// Time when the last change in the airplane mode state was requested (by a local profile server).
 	RequestedAt time.Time
 	// If the last radio configuration change failed, error message is reported here.

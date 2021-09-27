@@ -2227,75 +2227,6 @@ const (
 	AddressTypeLast       AddressType = 255
 )
 
-// CellularMetrics are published by nim with metrics of all cellular modems.
-type CellularMetrics struct {
-	MetricList []CellularMetric
-}
-
-// CellularMetric are obtained from a cellular modem.
-type CellularMetric struct {
-	// Logical label in PhysicalIO.
-	DeviceName    string
-	NetworkMetric // ACL metrics are not used here
-	RSSI          int32
-	RSRQ          int32
-	RSRP          int32
-	SNR           int32
-}
-
-// Key is used for pubsub
-func (cm CellularMetrics) Key() string {
-	return "global"
-}
-
-// LogCreate :
-func (cm CellularMetrics) LogCreate(logBase *base.LogObject) {
-	logObject := base.NewLogObject(logBase, base.CellularMetricsLogType, "",
-		nilUUID, cm.LogKey())
-	if logObject == nil {
-		return
-	}
-	logObject.Metricf("Cellular metrics create")
-}
-
-// LogModify :
-func (cm CellularMetrics) LogModify(logBase *base.LogObject, old interface{}) {
-	logObject := base.EnsureLogObject(logBase, base.CellularMetricsLogType, "",
-		nilUUID, cm.LogKey())
-
-	oldCm, ok := old.(CellularMetric)
-	if !ok {
-		logObject.Clone().Fatalf("LogModify: Old object passed is not of CellularMetrics type")
-	}
-	// XXX remove?
-	logObject.CloneAndAddField("diff", cmp.Diff(oldCm, cm)).
-		Metricf("Cellular metrics modify")
-}
-
-// LogDelete :
-func (cm CellularMetrics) LogDelete(logBase *base.LogObject) {
-	logObject := base.EnsureLogObject(logBase, base.CellularMetricsLogType, "",
-		nilUUID, cm.LogKey())
-	logObject.Metricf("Cellular metrics delete")
-
-	base.DeleteLogObject(logBase, cm.LogKey())
-}
-
-// LogKey :
-func (cm CellularMetrics) LogKey() string {
-	return string(base.CellularMetricsLogType) + "-" + cm.Key()
-}
-
-// LookupCellularMetrics returns metrics corresponding to the given cellular modem.
-func (cm CellularMetrics) LookupCellularMetrics(devName string) (CellularMetric, bool) {
-	for _, metric := range cm.MetricList {
-		if devName == metric.DeviceName {
-			return metric, true
-		}
-	}
-	return CellularMetric{}, false
-}
-
 // NetworkInstanceConfig
 //		Config Object for NetworkInstance
 // 		Extracted from the protobuf NetworkInstanceConfig
@@ -3271,7 +3202,7 @@ const (
 	WCP_MBIM        WwanCtrlProt = "mbim"
 )
 
-// WwanMetrics is published by the wwan service and consumed by nim.
+// WwanMetrics is published by the wwan service.
 type WwanMetrics struct {
 	Modems []WwanModemMetrics `json:"modems"`
 }
@@ -3284,6 +3215,49 @@ func (wm WwanMetrics) LookupModemMetrics(devName string) (WwanModemMetrics, bool
 		}
 	}
 	return WwanModemMetrics{}, false
+}
+
+// Key is used for pubsub
+func (wm WwanMetrics) Key() string {
+	return "global"
+}
+
+// LogCreate :
+func (wm WwanMetrics) LogCreate(logBase *base.LogObject) {
+	logObject := base.NewLogObject(logBase, base.WwanMetricsLogType, "",
+		nilUUID, wm.LogKey())
+	if logObject == nil {
+		return
+	}
+	logObject.Metricf("Wwan metrics create")
+}
+
+// LogModify :
+func (wm WwanMetrics) LogModify(logBase *base.LogObject, old interface{}) {
+	logObject := base.EnsureLogObject(logBase, base.WwanMetricsLogType, "",
+		nilUUID, wm.LogKey())
+
+	oldCm, ok := old.(WwanMetrics)
+	if !ok {
+		logObject.Clone().Fatalf("LogModify: Old object passed is not of WwanMetrics type")
+	}
+	// XXX remove?
+	logObject.CloneAndAddField("diff", cmp.Diff(oldCm, wm)).
+		Metricf("Wwan metrics modify")
+}
+
+// LogDelete :
+func (wm WwanMetrics) LogDelete(logBase *base.LogObject) {
+	logObject := base.EnsureLogObject(logBase, base.WwanMetricsLogType, "",
+		nilUUID, wm.LogKey())
+	logObject.Metricf("Wwan metrics delete")
+
+	base.DeleteLogObject(logBase, wm.LogKey())
+}
+
+// LogKey :
+func (wm WwanMetrics) LogKey() string {
+	return string(base.WwanMetricsLogType) + "-" + wm.Key()
 }
 
 // WwanModemMetrics contains metrics for a single cellular modem.

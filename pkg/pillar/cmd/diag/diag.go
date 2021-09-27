@@ -13,7 +13,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -50,6 +49,7 @@ type diagContext struct {
 	DevicePortConfigList    *types.DevicePortConfigList
 	forever                 bool // Keep on reporting until ^C
 	pacContents             bool // Print PAC file contents
+	airplaneMode            bool
 	ledCounter              types.LedBlinkCount
 	derivedLedCounter       types.LedBlinkCount // Based on ledCounter + usableAddressCount
 	subGlobalConfig         pubsub.Subscription
@@ -359,7 +359,7 @@ func handleLedBlinkImpl(ctxArg interface{}, key string,
 	}
 	ctx.ledCounter = config.BlinkCounter
 	ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-		ctx.UsableAddressCount)
+		ctx.UsableAddressCount, ctx.airplaneMode)
 	log.Functionf("counter %d usableAddr %d, derived %d",
 		ctx.ledCounter, ctx.UsableAddressCount, ctx.derivedLedCounter)
 	// XXX wait in case we get another handle call?
@@ -402,12 +402,13 @@ func handleDNSImpl(ctxArg interface{}, key string,
 	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus)
 	log.Functionf("handleDNSImpl %d usable addresses", newAddrCount)
 	if (ctx.UsableAddressCount == 0 && newAddrCount != 0) ||
-		(ctx.UsableAddressCount != 0 && newAddrCount == 0) {
+		(ctx.UsableAddressCount != 0 && newAddrCount == 0) ||
+		updateAirplaneMode(ctx, ctx.DeviceNetworkStatus) {
 		ctx.UsableAddressCount = newAddrCount
 		ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-			ctx.UsableAddressCount)
-		log.Functionf("counter %d usableAddr %d, derived %d",
-			ctx.ledCounter, ctx.UsableAddressCount, ctx.derivedLedCounter)
+			ctx.UsableAddressCount, ctx.airplaneMode)
+		log.Functionf("counter %d, usableAddr %d, airplane-mode %t, derived %d",
+			ctx.ledCounter, ctx.UsableAddressCount, ctx.airplaneMode, ctx.derivedLedCounter)
 	}
 
 	// update proxy certs if configured
@@ -440,17 +441,32 @@ func handleDNSDelete(ctxArg interface{}, key string,
 	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus)
 	log.Functionf("handleDNSDelete %d usable addresses", newAddrCount)
 	if (ctx.UsableAddressCount == 0 && newAddrCount != 0) ||
-		(ctx.UsableAddressCount != 0 && newAddrCount == 0) {
+		(ctx.UsableAddressCount != 0 && newAddrCount == 0) ||
+		updateAirplaneMode(ctx, ctx.DeviceNetworkStatus) {
 		ctx.UsableAddressCount = newAddrCount
 		ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-			ctx.UsableAddressCount)
-		log.Functionf("counter %d usableAddr %d, derived %d",
-			ctx.ledCounter, ctx.UsableAddressCount, ctx.derivedLedCounter)
+			ctx.UsableAddressCount, ctx.airplaneMode)
+		log.Functionf("counter %d, usableAddr %d, airplane-mode %t, derived %d",
+			ctx.ledCounter, ctx.UsableAddressCount, ctx.airplaneMode, ctx.derivedLedCounter)
 	}
 	// XXX wait in case we get another handle call?
 	// XXX set output sched in ctx; print one second later?
 	printOutput(ctx)
 	log.Functionf("handleDNSDelete done for %s", key)
+}
+
+func updateAirplaneMode(ctx *diagContext, status *types.DeviceNetworkStatus) bool {
+	if status == nil {
+		return ctx.airplaneMode == false // default
+	}
+	// Note: permanently enabled airplane mode is not indicated
+	if !status.AirplaneMode.PermanentlyEnabled && !status.AirplaneMode.InProgress {
+		if ctx.airplaneMode != status.AirplaneMode.Enabled {
+			ctx.airplaneMode = status.AirplaneMode.Enabled
+			return true
+		}
+	}
+	return false
 }
 
 func handleDPCCreate(ctxArg interface{}, key string,
@@ -530,7 +546,7 @@ func printOutput(ctx *diagContext) {
 	switch ctx.derivedLedCounter {
 	case types.LedBlinkOnboarded:
 		fmt.Fprintf(outfile, "INFO: Summary: %s\n", ctx.derivedLedCounter)
-	case types.LedBlinkConnectedToController:
+	case types.LedBlinkConnectedToController, types.LedBlinkAirplaneMode:
 		fmt.Fprintf(outfile, "WARNING: Summary: %s\n", ctx.derivedLedCounter)
 	default:
 		fmt.Fprintf(outfile, "ERROR: Summary: %s\n", ctx.derivedLedCounter)
@@ -960,8 +976,8 @@ func parsePrint(configURL string, resp *http.Response, contents []byte) {
 		return
 	}
 
-	if err := validateConfigMessage(configURL, resp); err != nil {
-		log.Errorln("validateConfigMessage: ", err)
+	if err := zedcloud.ValidateProtoContentType(configURL, resp); err != nil {
+		log.Errorln("ValidateProtoContentType: ", err)
 		return
 	}
 
@@ -980,29 +996,6 @@ func parsePrint(configURL string, resp *http.Response, contents []byte) {
 	config := configResponse.GetConfig()
 	uuidStr := strings.TrimSpace(config.GetId().Uuid)
 	log.Functionf("Changed ConfigResponse with uuid %s", uuidStr)
-}
-
-// From zedagent/handleconfig.go
-func validateConfigMessage(configURL string, r *http.Response) error {
-
-	var ctTypeStr = "Content-Type"
-	var ctTypeProtoStr = "application/x-proto-binary"
-
-	ct := r.Header.Get(ctTypeStr)
-	if ct == "" {
-		return fmt.Errorf("No content-type")
-	}
-	mimeType, _, err := mime.ParseMediaType(ct)
-	if err != nil {
-		return fmt.Errorf("Get Content-type error")
-	}
-	switch mimeType {
-	case ctTypeProtoStr:
-		return nil
-	default:
-		return fmt.Errorf("Content-type %s not supported",
-			mimeType)
-	}
 }
 
 func readConfigResponseProtoMessage(contents []byte) (*zconfig.ConfigResponse, error) {

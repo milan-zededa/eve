@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shirou/gopsutil/host"
+
 	"github.com/eriknordmark/ipinfo"
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes"
@@ -27,7 +29,6 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/utils"
 	"github.com/lf-edge/eve/pkg/pillar/vault"
 	"github.com/lf-edge/eve/pkg/pillar/zedcloud"
-	"github.com/shirou/gopsutil/host"
 )
 
 var (
@@ -446,21 +447,6 @@ func PublishDeviceInfoToZedCloud(ctx *zedagentContext) {
 		ReportDeviceInfo.HostName = hostname
 	}
 
-	// Note that these are associated with the device and not with a
-	// device name like ppp0 or wwan0
-	lte := readLTEInfo()
-	lteNets := readLTENetworks()
-	if lteNets != nil {
-		lte = append(lte, lteNets...)
-	}
-	for _, i := range lte {
-		item := new(info.DeprecatedMetricItem)
-		item.Key = i.Key
-		item.Type = info.DepMetricItemType(i.Type)
-		// setDeprecatedMetricAnyValue(item, i.Value)
-		ReportDeviceInfo.MetricItems = append(ReportDeviceInfo.MetricItems, item)
-	}
-
 	ReportDeviceInfo.LastRebootReason = ctx.rebootReason
 	ReportDeviceInfo.LastBootReason = info.BootReason(ctx.bootReason)
 	if ctx.bootReason != types.BootReasonNone {
@@ -740,6 +726,58 @@ func encodeNetInfo(port types.NetworkPortStatus) *info.ZInfoNetwork {
 	return networkInfo
 }
 
+func encodeCellularStatus(devName string, wwanStatus types.WwanModemStatus) *info.CellularStatus {
+	var opState info.CellularOperatingState
+	switch wwanStatus.OpMode {
+	case types.WOM_UNSPECIFIED:
+		opState = info.CellularOperatingState_OPERATING_STATE_UNSPECIFIED
+	case types.WOM_ONLINE:
+		opState = info.CellularOperatingState_OPERATING_STATE_ONLINE
+	case types.WOM_ONLINE_AND_CONNECTED:
+		opState = info.CellularOperatingState_OPERATING_STATE_ONLINE_AND_CONNECTED
+	case types.WOM_RADIO_OFF:
+		opState = info.CellularOperatingState_OPERATING_STATE_RADIO_OFF
+	case types.WOM_OFFLINE:
+		opState = info.CellularOperatingState_OPERATING_STATE_OFFLINE
+	case types.WOM_UNRECOGNIZED:
+		opState = info.CellularOperatingState_OPERATING_STATE_UNRECOGNIZED
+	}
+
+	var ctrlProto info.CellularControlProtocol
+	switch wwanStatus.ControlProtocol {
+	case types.WCP_UNSPECIFIED:
+		ctrlProto = info.CellularControlProtocol_CONTROL_PROTOCOL_UNSPECIFIED
+	case types.WCP_MBIM:
+		ctrlProto = info.CellularControlProtocol_CONTROL_PROTOCOL_MBIM
+	case types.WCP_QMI:
+		ctrlProto = info.CellularControlProtocol_CONTROL_PROTOCOL_QMI
+	}
+
+	var providers []*info.CellularProvider
+	for _, provider := range wwanStatus.Providers {
+		providers = append(providers, &info.CellularProvider{
+			Plmn:           provider.PLMN,
+			Description:    provider.Description,
+			CurrentServing: provider.CurrentServing,
+			Roaming:        provider.Roaming,
+		})
+	}
+
+	return &info.CellularStatus{
+		DeviceName: devName,
+		Modem: &info.CellularModem{
+			Model:    wwanStatus.Modem.Model,
+			Revision: wwanStatus.Modem.Revision,
+		},
+		OperatingState:  opState,
+		ControlProtocol: ctrlProto,
+		Providers:       providers,
+		Imei:            wwanStatus.IMEI,
+		ConfigError:     wwanStatus.ConfigError,
+		ProbeError:      wwanStatus.ProbeError,
+	}
+}
+
 func encodeSystemAdapterInfo(ctx *zedagentContext) *info.SystemAdapterInfo {
 	dpcl := types.DevicePortConfigList{}
 	item, err := ctx.subDevicePortConfigList.Get("global")
@@ -768,6 +806,16 @@ func encodeSystemAdapterInfo(ctx *zedagentContext) *info.SystemAdapterInfo {
 		dps.Ports = make([]*info.DevicePort, len(dpc.Ports))
 		for j, p := range dpc.Ports {
 			dps.Ports[j] = encodeNetworkPortConfig(ctx, &p)
+			if i == dpcl.CurrentIndex && p.WirelessCfg.WType == types.WirelessTypeCellular {
+				portStatus := deviceNetworkStatus.GetPortByLogicallabel(p.Logicallabel)
+				if portStatus == nil {
+					continue
+				}
+				dps.Ports[j].WirelessStatus = &info.WirelessStatus{
+					Type:           info.WirelessType_Cellular,
+					CellularStatus: encodeCellularStatus(p.Logicallabel, portStatus.WirelessStatus.Cellular),
+				}
+			}
 		}
 		sainfo.Status[i] = dps
 	}

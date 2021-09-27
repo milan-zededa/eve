@@ -94,6 +94,16 @@ func lookupAppDiskMetric(ctx *zedagentContext, diskPath string) *types.AppDiskMe
 	return &metric
 }
 
+func lookupCellularModemMetric(ctx *zedagentContext, devName string) (types.WwanModemMetrics, bool) {
+	sub := ctx.subWwanMetrics
+	m, _ := sub.Get("global")
+	if m == nil {
+		return types.WwanModemMetrics{}, false
+	}
+	metric := m.(types.WwanMetrics)
+	return metric.LookupModemMetrics(devName)
+}
+
 func encodeErrorInfo(et types.ErrorDescription) *info.ErrorInfo {
 	if et.ErrorTime.IsZero() {
 		// No Success / Error to report
@@ -316,6 +326,8 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 	aclMetric.TotalRuleCount = networkMetrics.TotalRuleCount
 	ReportDeviceMetric.Acl = aclMetric
 
+	ReportDeviceMetric.Cellular = getCellularMetrics(ctx)
+
 	zedboxStats := new(metrics.ZedboxStats)
 	zedboxStats.NumGoRoutines = uint32(runtime.NumGoroutine()) // number of zedbox goroutines
 	ReportDeviceMetric.Zedbox = zedboxStats
@@ -520,17 +532,6 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 		runtimeStorageOverhead, appRunTimeStorage)
 	ReportDeviceMetric.RuntimeStorageOverheadMB = runtimeStorageOverhead
 	ReportDeviceMetric.AppRunTimeStorageMB = appRunTimeStorage
-
-	// Note that these are associated with the device and not with a
-	// device name like ppp0 or wwan0
-	lte := readLTEMetrics()
-	for _, i := range lte {
-		item := new(metrics.MetricItem)
-		item.Key = i.Key
-		item.Type = metrics.MetricItemType(i.Type)
-		setMetricAnyValue(item, i.Value)
-		ReportDeviceMetric.MetricItems = append(ReportDeviceMetric.MetricItems, item)
-	}
 
 	const nanoSecToSec uint64 = 1000000000
 
@@ -749,6 +750,48 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 	}
 }
 
+func getCellularMetrics(ctx *zedagentContext) (cellularMetrics []*metrics.CellularMetric) {
+	m, err := ctx.subWwanMetrics.Get("global")
+	if err != nil {
+		log.Errorf("subWwanMetrics.Get failed: %v", err)
+		return cellularMetrics
+	}
+	wwanMetrics, ok := m.(types.WwanMetrics)
+	if !ok {
+		log.Errorln("unexpected type of wwan metrics")
+		return cellularMetrics
+	}
+	for _, modem := range wwanMetrics.Modems {
+		if modem.DeviceName == "" {
+			// skip unmanaged modems for now
+			continue
+		}
+		cellularMetrics = append(cellularMetrics,
+			&metrics.CellularMetric{
+				DeviceName: modem.DeviceName,
+				SignalStrength: &metrics.CellularSignalStrength{
+					Rssi: modem.SignalInfo.RSSI,
+					Rsrq: modem.SignalInfo.RSRP,
+					Rsrp: modem.SignalInfo.RSRP,
+					Snr:  modem.SignalInfo.SNR,
+				},
+				PacketStats: &metrics.CellularPacketStats{
+					Rx: &metrics.NetworkStats{
+						TotalPackets: modem.PacketStats.RxPackets,
+						Drops:        modem.PacketStats.RxDrops,
+						TotalBytes:   modem.PacketStats.RxBytes,
+					},
+					Tx: &metrics.NetworkStats{
+						TotalPackets: modem.PacketStats.TxPackets,
+						Drops:        modem.PacketStats.TxDrops,
+						TotalBytes:   modem.PacketStats.TxBytes,
+					},
+				},
+			})
+	}
+	return cellularMetrics
+}
+
 func getDiskInfo(ctx *zedagentContext, vrs types.VolumeRefStatus, appDiskDetails *metrics.AppDiskMetric) error {
 	appDiskMetric := lookupAppDiskMetric(ctx, vrs.ActiveFileLocation)
 	if appDiskMetric == nil {
@@ -914,6 +957,7 @@ func encodeNetworkPortConfig(ctx *zedagentContext,
 	if npc.NetworkUUID != nilUUID {
 		dp.NetworkUUID = npc.NetworkUUID.String()
 	}
+
 	return dp
 }
 

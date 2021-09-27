@@ -45,7 +45,8 @@ type ledManagerContext struct {
 	subDeviceNetworkStatus pubsub.Subscription
 	deviceNetworkStatus    types.DeviceNetworkStatus
 	usableAddressCount     int
-	derivedLedCounter      types.LedBlinkCount // Based on ledCounter + usableAddressCount
+	airplaneMode           bool
+	derivedLedCounter      types.LedBlinkCount // Based on ledCounter, usableAddressCount and airplaneMode
 	GCInitialized          bool
 }
 
@@ -417,7 +418,7 @@ func handleLedBlinkImpl(ctxArg interface{}, key string,
 	}
 	ctx.ledCounter = config.BlinkCounter
 	ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-		ctx.usableAddressCount)
+		ctx.usableAddressCount, ctx.airplaneMode)
 	log.Functionf("counter %d usableAddr %d, derived %d",
 		ctx.ledCounter, ctx.usableAddressCount, ctx.derivedLedCounter)
 	ctx.countChange <- ctx.derivedLedCounter
@@ -437,7 +438,7 @@ func handleLedBlinkDelete(ctxArg interface{}, key string,
 	// XXX or should we tell the blink go routine to exit?
 	ctx.ledCounter = 0
 	ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-		ctx.usableAddressCount)
+		ctx.usableAddressCount, ctx.airplaneMode)
 	log.Functionf("counter %d usableAddr %d, derived %d",
 		ctx.ledCounter, ctx.usableAddressCount, ctx.derivedLedCounter)
 	ctx.countChange <- ctx.derivedLedCounter
@@ -698,12 +699,13 @@ func handleDNSImpl(ctxArg interface{}, key string,
 	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus)
 	log.Functionf("handleDNSImpl %d usable addresses", newAddrCount)
 	if (ctx.usableAddressCount == 0 && newAddrCount != 0) ||
-		(ctx.usableAddressCount != 0 && newAddrCount == 0) {
+		(ctx.usableAddressCount != 0 && newAddrCount == 0) ||
+		updateAirplaneMode(ctx, &ctx.deviceNetworkStatus) {
 		ctx.usableAddressCount = newAddrCount
 		ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-			ctx.usableAddressCount)
-		log.Functionf("counter %d usableAddr %d, derived %d",
-			ctx.ledCounter, ctx.usableAddressCount, ctx.derivedLedCounter)
+			ctx.usableAddressCount, ctx.airplaneMode)
+		log.Functionf("counter %d, usableAddr %d, airplane-mode %t, derived %d",
+			ctx.ledCounter, ctx.usableAddressCount, ctx.airplaneMode, ctx.derivedLedCounter)
 		ctx.countChange <- ctx.derivedLedCounter
 	}
 	log.Functionf("handleDNSImpl done for %s", key)
@@ -721,15 +723,30 @@ func handleDNSDelete(ctxArg interface{}, key string, statusArg interface{}) {
 	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus)
 	log.Functionf("handleDNSDelete %d usable addresses", newAddrCount)
 	if (ctx.usableAddressCount == 0 && newAddrCount != 0) ||
-		(ctx.usableAddressCount != 0 && newAddrCount == 0) {
+		(ctx.usableAddressCount != 0 && newAddrCount == 0) ||
+		updateAirplaneMode(ctx, &ctx.deviceNetworkStatus) {
 		ctx.usableAddressCount = newAddrCount
 		ctx.derivedLedCounter = types.DeriveLedCounter(ctx.ledCounter,
-			ctx.usableAddressCount)
-		log.Functionf("counter %d usableAddr %d, derived %d",
-			ctx.ledCounter, ctx.usableAddressCount, ctx.derivedLedCounter)
+			ctx.usableAddressCount, ctx.airplaneMode)
+		log.Functionf("counter %d, usableAddr %d, airplane-mode %t, derived %d",
+			ctx.ledCounter, ctx.usableAddressCount, ctx.airplaneMode, ctx.derivedLedCounter)
 		ctx.countChange <- ctx.derivedLedCounter
 	}
 	log.Functionf("handleDNSDelete done for %s", key)
+}
+
+func updateAirplaneMode(ctx *ledManagerContext, status *types.DeviceNetworkStatus) bool {
+	if status == nil {
+		return ctx.airplaneMode == false // default
+	}
+	// Note: permanently enabled airplane mode is not indicated
+	if !status.AirplaneMode.PermanentlyEnabled && !status.AirplaneMode.InProgress {
+		if ctx.airplaneMode != status.AirplaneMode.Enabled {
+			ctx.airplaneMode = status.AirplaneMode.Enabled
+			return true
+		}
+	}
+	return false
 }
 
 func handleGlobalConfigCreate(ctxArg interface{}, key string,

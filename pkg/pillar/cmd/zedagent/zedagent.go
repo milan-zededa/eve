@@ -56,7 +56,9 @@ const (
 	errorTime   = 3 * time.Minute
 	warningTime = 40 * time.Second
 	// Maximum allowed number of flow messages enqueued and waiting to be published.
-	flowlogQueueCap = 100
+	flowlogQueueCap    = 100
+	kernelCmdArgs      = "/proc/cmdline"
+	permanentRFKillArg = "eve_permanent_rfkill"
 )
 
 // Set from Makefile
@@ -79,6 +81,7 @@ var cipherMetricsZR types.CipherMetricsMap
 
 // Context for handleDNSModify
 type DNSContext struct {
+	getconfigCtx           *getconfigContext
 	DNSinitialized         bool // Received DeviceNetworkStatus
 	subDeviceNetworkStatus pubsub.Subscription
 	triggerGetConfig       bool
@@ -119,6 +122,8 @@ type zedagentContext struct {
 	subAppDiskMetric          pubsub.Subscription
 	subCapabilities           pubsub.Subscription
 	subAppInstMetaData        pubsub.Subscription
+	subWwanMetrics            pubsub.Subscription
+	subDeviceNetworkStatus    pubsub.Subscription
 	rebootCmd                 bool
 	rebootCmdDeferred         bool
 	deviceReboot              bool
@@ -303,6 +308,19 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	attestCtx.zedagentCtx = &zedagentCtx
 	zedagentCtx.attestCtx = &attestCtx
 
+	pubZedAgentStatus, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName: agentName,
+		TopicType: types.ZedAgentStatus{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	pubZedAgentStatus.ClearRestarted()
+	getconfigCtx.pubZedAgentStatus = pubZedAgentStatus
+
+	// check if radio devices are allowed
+	initializeAirplaneMode(&getconfigCtx)
+
 	// Wait until we have been onboarded aka know our own UUID
 	onboard, err := utils.WaitForOnboarded(ps, log, agentName, warningTime, errorTime)
 	if err != nil {
@@ -415,15 +433,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	pubBaseOs.ClearRestarted()
 	getconfigCtx.pubBaseOs = pubBaseOs
 
-	pubZedAgentStatus, err := ps.NewPublication(pubsub.PublicationOptions{
-		AgentName: agentName,
-		TopicType: types.ZedAgentStatus{},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	pubZedAgentStatus.ClearRestarted()
-	getconfigCtx.pubZedAgentStatus = pubZedAgentStatus
 	pubDatastoreConfig, err := ps.NewPublication(pubsub.PublicationOptions{
 		AgentName: agentName,
 		TopicType: types.DatastoreConfig{},
@@ -536,6 +545,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	getconfigCtx.subAppNetworkStatus = subAppNetworkStatus
 	subAppNetworkStatus.Activate()
 
+	// XXX Network instance metrics are here
 	subNetworkInstanceMetrics, err := ps.NewSubscription(pubsub.SubscriptionOptions{
 		AgentName:   "zedrouter",
 		MyAgentName: agentName,
@@ -819,7 +829,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	getconfigCtx.subNodeAgentStatus = subNodeAgentStatus
 	subNodeAgentStatus.Activate()
 
-	DNSctx := DNSContext{}
+	DNSctx := DNSContext{getconfigCtx: &getconfigCtx}
 	subDeviceNetworkStatus, err := ps.NewSubscription(pubsub.SubscriptionOptions{
 		AgentName:     "nim",
 		MyAgentName:   agentName,
@@ -836,6 +846,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 		log.Fatal(err)
 	}
 	DNSctx.subDeviceNetworkStatus = subDeviceNetworkStatus
+	zedagentCtx.subDeviceNetworkStatus = subDeviceNetworkStatus
 	subDeviceNetworkStatus.Activate()
 
 	subDevicePortConfigList, err := ps.NewSubscription(pubsub.SubscriptionOptions{
@@ -965,6 +976,21 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	zedagentCtx.subAppInstMetaData = subAppInstMetaData
 	subAppInstMetaData.Activate()
 
+	subWwanMetrics, err := ps.NewSubscription(pubsub.SubscriptionOptions{
+		AgentName:   "nim",
+		MyAgentName: agentName,
+		TopicImpl:   types.WwanMetrics{},
+		Activate:    false,
+		Ctx:         &zedagentCtx,
+		WarningTime: warningTime,
+		ErrorTime:   errorTime,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	zedagentCtx.subWwanMetrics = subWwanMetrics
+	subWwanMetrics.Activate()
+
 	//initialize cipher processing block
 	cipherModuleInitialize(&zedagentCtx, ps)
 
@@ -1043,7 +1069,11 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 			subEncryptedKeyFromDevice.ProcessChange(change)
 
 		case change := <-getconfigCtx.subAppNetworkStatus.MsgChan():
+			getconfigCtx.localServerMap.upToDate = false
 			subAppNetworkStatus.ProcessChange(change)
+
+		case change := <-subWwanMetrics.MsgChan():
+			subWwanMetrics.ProcessChange(change)
 
 		case change := <-deferredChan:
 			start := time.Now()
@@ -1065,6 +1095,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	}
 
 	// Subscribe to network metrics from zedrouter
+	// XXX These are network metrics
 	subNetworkMetrics, err := ps.NewSubscription(pubsub.SubscriptionOptions{
 		AgentName:   "zedrouter",
 		MyAgentName: agentName,
@@ -1188,6 +1219,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	localProfileTickerHandle := <-handleChannel
 	getconfigCtx.localProfileTickerHandle = localProfileTickerHandle
 
+	// start task fetching radio config from local server
+	go radioPOSTTask(&getconfigCtx)
+
 	// start cipher module tasks
 	cipherModuleStart(&zedagentCtx)
 
@@ -1230,6 +1264,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 			subNodeAgentStatus.ProcessChange(change)
 
 		case change := <-getconfigCtx.subAppNetworkStatus.MsgChan():
+			getconfigCtx.localServerMap.upToDate = false
 			subAppNetworkStatus.ProcessChange(change)
 
 		case change := <-subDeviceNetworkStatus.MsgChan():
@@ -1386,6 +1421,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 
 		case change := <-subAppInstMetaData.MsgChan():
 			subAppInstMetaData.ProcessChange(change)
+
+		case change := <-subWwanMetrics.MsgChan():
+			subWwanMetrics.ProcessChange(change)
 
 		case <-stillRunning.C:
 			// Fault injection
@@ -1589,6 +1627,16 @@ func handleDNSImpl(ctxArg interface{}, key string,
 
 	if zedcloudCtx.V2API {
 		zedcloud.UpdateTLSProxyCerts(zedcloudCtx)
+	}
+
+	airplaneModeCfg := &ctx.getconfigCtx.airplaneMode
+	airplaneModeStatus := &status.AirplaneMode
+	if airplaneModeCfg.RequestedAt.Equal(airplaneModeStatus.RequestedAt) {
+		if airplaneModeCfg.InProgress && !airplaneModeStatus.InProgress {
+			// airplane-mode state changing operation has finalized
+			airplaneModeCfg.InProgress = false
+			triggerRadioPOST(ctx.getconfigCtx)
+		}
 	}
 	log.Functionf("handleDNSImpl done for %s", key)
 }
