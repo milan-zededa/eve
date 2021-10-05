@@ -46,3 +46,5 @@ COPY rpi /lib/firmware/
 COPY ath10k /lib/firmware/ath10k
 # FIXME: this is binary block firmware for HiKey
 COPY ti-connectivity /lib/firmware/ti-connectivity
+
+COPY ath9k_htc /lib/firmware/ath9k_htc
