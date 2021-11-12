@@ -924,8 +924,8 @@ func handleInterfaceChange(ctx *nimContext, ifindex int, logstr string, force bo
 	// link drops so call directly
 	ifname, _, _ := devicenetwork.IfindexToName(log, ifindex)
 	log.Functionf("%s(%s) ifindex %d force %t", logstr, ifname, ifindex, force)
-	if ifname != "" && !types.IsPort(*ctx.deviceNetworkContext.DeviceNetworkStatus, ifname) {
-		log.Tracef("%s(%s): not port", logstr, ifname)
+	if ifname != "" && !types.IsEndpoint(*ctx.deviceNetworkContext.DeviceNetworkStatus, ifname) {
+		log.Tracef("%s(%s): not endoint", logstr, ifname)
 		return
 	}
 	if force {

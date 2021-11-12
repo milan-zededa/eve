@@ -831,6 +831,10 @@ func encodeSystemAdapterInfo(ctx *zedagentContext) *info.SystemAdapterInfo {
 
 		dps.Ports = make([]*info.DevicePort, len(dpc.Ports))
 		for j, p := range dpc.Ports {
+			if !p.IsEndpoint {
+				// info for intermediary ports is not published
+				continue
+			}
 			dps.Ports[j] = encodeNetworkPortConfig(ctx, &p)
 			if i == dpcl.CurrentIndex && p.WirelessCfg.WType == types.WirelessTypeCellular {
 				portStatus := deviceNetworkStatus.GetPortByLogicallabel(p.Logicallabel)
