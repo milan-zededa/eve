@@ -1,21 +1,18 @@
 ---
 name: Eden
 on:
-  push:
+  pull_request:
     branches:
       - "master"
       - "[0-9]+.[0-9]+"
-  pull_request_review:
-    types: [submitted]
 
 jobs:
   integration:
     runs-on: ubuntu-20.04
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         hv: ["kvm", "zfs-kvm"]
-    if: ${{ github.event.review.state == 'approved' || github.ref == 'refs/heads/master' }}
     steps:
       - name: Check
         run: |
@@ -77,6 +74,10 @@ jobs:
           EDITOR=cat ./eden config edit default
           echo > ${{ github.workspace }}/eve/tests/eden/workflow/testdata/eden_stop.txt
           ./eden test ${{ github.workspace }}/eve/tests/eden/workflow -v debug
+      - name: Setup tmate session
+        if: ${{ failure() }}
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 45
       - name: Collect logs
         if: ${{ always() }}
         run: |
