@@ -101,6 +101,8 @@ RUN if [ "$(uname -m)" = "aarch64" ] ; then                                     
 
 SHELL ["/bin/sh", "-c"]
 
+RUN apk add --no-cache wget curl
+
 # FIXME: replace with tini+monit ASAP
 WORKDIR /
 CMD ["/init.sh"]
