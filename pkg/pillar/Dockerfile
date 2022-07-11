@@ -101,7 +101,7 @@ RUN if [ "$(uname -m)" = "aarch64" ] ; then                                     
 
 SHELL ["/bin/sh", "-c"]
 
-RUN apk add --no-cache wget curl
+RUN apk add --no-cache wget curl tcpdump
 
 # FIXME: replace with tini+monit ASAP
 WORKDIR /
