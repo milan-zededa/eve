@@ -257,12 +257,12 @@ func (m *DpcManager) getDNSInfo(port *types.NetworkPortStatus) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("getDNSInfo: failed to get index for interface %s: %v",
+		return fmt.Errorf("HEY!!! getDNSInfo: failed to get index for interface %s: %v",
 			port.IfName, err)
 	}
 	dnsInfo, err := m.NetworkMonitor.GetInterfaceDNSInfo(ifIndex)
 	if err != nil {
-		return fmt.Errorf("getDNSInfo: failed to get DNS info for interface %s: %v",
+		return fmt.Errorf("HEY!!! getDNSInfo: failed to get DNS info for interface %s: %v",
 			port.IfName, err)
 	}
 	port.DNSServers = dnsInfo.DNSServers
@@ -270,6 +270,7 @@ func (m *DpcManager) getDNSInfo(port *types.NetworkPortStatus) error {
 	if len(dnsInfo.Domains) > 0 {
 		port.DomainName = dnsInfo.Domains[0]
 	}
+	m.Log.Noticef("HEY!!! Found DNS servers for interface %s: %v", port.IfName, dnsInfo.DNSServers)
 	return nil
 }
 

@@ -424,6 +424,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 		return nil, nil, senderStatus, err
 	}
 	dnsServers := types.GetDNSServers(*ctx.DeviceNetworkStatus, intf)
+	log.Noticef("HEY!!! GetDNSServers for %s returned: %v", intf, dnsServers)
 	if len(dnsServers) == 0 {
 		if ctx.FailureFunc != nil {
 			ctx.FailureFunc(log, intf, reqUrl, 0, 0, false)
@@ -473,7 +474,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 		}
 		localTCPAddr := net.TCPAddr{IP: localAddr}
 		localUDPAddr := net.UDPAddr{IP: localAddr}
-		log.Tracef("Connecting to %s using intf %s source %v\n",
+		log.Noticef("HEY!!! Connecting to %s using intf %s source %v\n",
 			reqUrl, intf, localTCPAddr)
 		var dnsIsAvail bool
 		resolverDial := func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -483,6 +484,8 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 				if dnsServer != nil && dnsServer.Equal(ip) {
 					dnsIsAvail = true
 					// XXX can we fallback to TCP? Would get a mismatched address if we do
+					log.Noticef("HEY!!! Connecting to %s/%s using source %v\n",
+						network, address, localUDPAddr)
 					d := net.Dialer{LocalAddr: &localUDPAddr}
 					return d.Dial(network, address)
 				}

@@ -172,11 +172,13 @@ func (m *LinuxNetworkMonitor) GetInterfaceAddrs(ifIndex int) ([]*net.IPNet, net.
 	}
 	addrs := ifAddrs{hwAddr: link.Attrs().HardwareAddr}
 	for _, addr := range addrs4 {
-		addrs.ipAddrs = append(addrs.ipAddrs, addr.IPNet)
+		addrs.ipAddrs = append(addrs.ipAddrs, ipNetFromNetlinkAddr(addr))
 	}
 	for _, addr := range addrs6 {
-		addrs.ipAddrs = append(addrs.ipAddrs, addr.IPNet)
+		addrs.ipAddrs = append(addrs.ipAddrs, ipNetFromNetlinkAddr(addr))
 	}
+	m.Log.Noticef("HEY!!! interface %+v has addresses: %+v",
+		link.Attrs().Name, addrs)
 	m.ifIndexToAddrs[ifIndex] = addrs
 	return addrs.ipAddrs, addrs.hwAddr, nil
 }
@@ -189,15 +191,17 @@ func (m *LinuxNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) (info DNSInfo, er
 	if !m.initialized {
 		m.init()
 	}
-	if info, cached := m.ifIndexToDNS[ifIndex]; cached {
-		return info, nil
-	}
 	attrs, err := m.getInterfaceAttrs(ifIndex)
 	if err != nil {
 		return info, err
 	}
 	ifName := attrs.IfName
+	if info, cached := m.ifIndexToDNS[ifIndex]; cached {
+		m.Log.Noticef("HEY!!! Returning cached DNS info for %s: %v", ifName, info)
+		return info, nil
+	}
 	resolvConf := devicenetwork.IfnameToResolvConf(ifName)
+	m.Log.Noticef("HEY!!! Resolv conf file for ifName %s is: %s", ifName, resolvConf)
 	if resolvConf == "" {
 		m.Log.Warnf("No resolv.conf for %s", ifName)
 		return info, nil
@@ -500,6 +504,7 @@ func (m *LinuxNetworkMonitor) watcher() {
 		case dnsChange := <-dnsWatcher.Events:
 			switch dnsChange.Op {
 			case fsnotify.Create, fsnotify.Remove, fsnotify.Write:
+				m.Log.Noticef("HEY!!! Resolv.conf has changed: %+v", dnsChange)
 				ifName := devicenetwork.ResolvConfToIfname(dnsChange.Name)
 				if ifName == "" {
 					continue
@@ -616,5 +621,19 @@ func trimQuotes(str string) string {
 		return str[1 : len(str)-1]
 	} else {
 		return str
+	}
+}
+
+func ipNetFromNetlinkAddr(addr netlink.Addr) *net.IPNet {
+	// For interfaces with a peer (like Point-to-Point, which in EVE is used for wwan),
+	// we must take mask from the peer.
+	// See: https://github.com/vishvananda/netlink/commit/b1cc70dea22210e3b9deca021a824f4edfd9dcf1
+	mask := addr.Mask
+	if addr.Peer != nil {
+		mask = addr.Peer.Mask
+	}
+	return &net.IPNet{
+		IP:   addr.IP,
+		Mask: mask,
 	}
 }

@@ -841,10 +841,12 @@ func tryLookupIP(ctx *diagContext, ifname string) bool {
 			return false
 		}
 		localUDPAddr := net.UDPAddr{IP: localAddr}
-		log.Tracef("tryLookupIP: using intf %s source %v", ifname, localUDPAddr)
+		log.Noticef("HEY!!! tryLookupIP: using intf %s source %v", ifname, localUDPAddr)
 		resolverDial := func(ctx context.Context, network, address string) (net.Conn, error) {
 			log.Tracef("resolverDial %v %v", network, address)
 			d := net.Dialer{LocalAddr: &localUDPAddr}
+			log.Noticef("HEY!!! tryLookupIP: using source %v to connect to %s/%s", localUDPAddr,
+				network, address)
 			return d.Dial(network, address)
 		}
 		r := net.Resolver{Dial: resolverDial, PreferGo: true,
