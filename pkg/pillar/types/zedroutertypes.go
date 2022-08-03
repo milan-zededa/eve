@@ -3330,8 +3330,11 @@ type WwanNetworkConfig struct {
 	LogicalLabel string        `json:"logical-label"`
 	PhysAddrs    WwanPhysAddrs `json:"physical-addrs"`
 	// XXX Multiple APNs are not yet supported.
-	Apns  []string  `json:"apns"`
-	Probe WwanProbe `json:"probe"`
+	Apns []string `json:"apns"`
+	// List of statically configured DNS servers.
+	// Will override DNS configuration received from the LTE network.
+	DnsServers []string  `json:"dns-servers"`
+	Probe      WwanProbe `json:"probe"`
 	// Some LTE modems have GNSS receiver integrated and can be used
 	// for device location tracking.
 	// Enable this option to have location info periodically obtained
@@ -3363,13 +3366,17 @@ func (wnc WwanNetworkConfig) Equal(wnc2 WwanNetworkConfig) bool {
 	if wnc.LocationTracking != wnc2.LocationTracking {
 		return false
 	}
-	if len(wnc.Apns) != len(wnc2.Apns) {
-		return false
-	}
-	for _, apn1 := range wnc.Apns {
+	return strSliceIsSubset(wnc.Apns, wnc2.Apns) &&
+		strSliceIsSubset(wnc2.Apns, wnc.Apns) &&
+		strSliceIsSubset(wnc.DnsServers, wnc2.DnsServers) &&
+		strSliceIsSubset(wnc2.DnsServers, wnc.DnsServers)
+}
+
+func strSliceIsSubset(set, superset []string) bool {
+	for _, item1 := range set {
 		var found bool
-		for _, apn2 := range wnc2.Apns {
-			if apn1 == apn2 {
+		for _, item2 := range superset {
+			if item1 == item2 {
 				found = true
 				break
 			}
