@@ -63,6 +63,12 @@ parse_json_attr() {
   echo "$JSON" | jq -rc ".$JSON_PATH | select (.!=null)"
 }
 
+parse_json_list_attr() {
+  local JSON="$1"
+  local JSON_PATH="$2"
+  echo "$JSON" | jq -rc ".$JSON_PATH[]" 2>/dev/null
+}
+
 mod_reload() {
   local RLIST
   for mod in "$@" ; do
@@ -227,10 +233,18 @@ bringup_iface() {
   #      Verify it by cat /proc/net/netstat | awk '{print $80}'
   ip route add default via "$GW" dev "$IFACE" metric 65000
   mkdir "$BBS/resolv.conf" || :
-  cat > "$BBS/resolv.conf/${IFACE}.dhcp" <<__EOT__
+  local RESOLV_CONF="$BBS/resolv.conf/${IFACE}.dhcp"
+  if [ -n "$DNS_SERVERS" ]; then
+    # Statically configured DNS servers override config received from the LTE network.
+    echo "$DNS_SERVERS" | while read -r SRV; do
+      echo "nameserver $SRV"
+    done > "$RESOLV_CONF"
+  else
+    cat > "$RESOLV_CONF" <<__EOT__
 nameserver $DNS1
 nameserver $DNS2
 __EOT__
+  fi
 }
 
 probe() {
@@ -397,6 +411,7 @@ event_stream | while read -r EVENT; do
     PROBE_ADDR="${PROBE_ADDR:-$DEFAULT_PROBE_ADDR}"
     APN="$(parse_json_attr "$NETWORK" "apns[0]")" # FIXME XXX limited to a single APN for now
     APN="${APN:-$DEFAULT_APN}"
+    DNS_SERVERS="$(parse_json_list_attr "$NETWORK" "\"dns-servers\"")"
     LOC_TRACKING="$(parse_json_attr "$NETWORK" "\"location-tracking\"")"
 
     if ! lookup_modem "${IFACE}" "${USB_ADDR}" "${PCI_ADDR}" 2>/tmp/wwan.stderr; then

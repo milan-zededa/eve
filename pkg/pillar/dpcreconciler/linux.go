@@ -1178,6 +1178,10 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				port.Logicallabel)
 			continue
 		}
+		var dnsServers []string
+		for _, ip := range port.DnsServers {
+			dnsServers = append(dnsServers, ip.String())
+		}
 		// XXX Limited to a single APN for now
 		cellCfg := port.WirelessCfg.Cellular[0]
 		network := types.WwanNetworkConfig{
@@ -1187,7 +1191,8 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				USB:       ioBundle.UsbAddr,
 				PCI:       ioBundle.PciLong,
 			},
-			Apns: []string{cellCfg.APN},
+			Apns:       []string{cellCfg.APN},
+			DnsServers: dnsServers,
 			Probe: types.WwanProbe{
 				Disable: cellCfg.DisableProbe,
 				Address: cellCfg.ProbeAddr,
