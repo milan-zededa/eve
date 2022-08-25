@@ -171,7 +171,8 @@ mbim_wait_for_register() {
   # procedure (for the initial EPS bearer activation).
   # Note that qmicli is able to apply this change even in the mbim mode.
   # On the other hand, mbimcli does not yet provide command to manipulate with profiles.
-  qmi --wds-modify-profile="3gpp,1,apn=${APN},pdp-type=ip"
+  qmi --wds-modify-profile="3gpp,1,apn=${APN},pdp-type=IPV4V6"
+  qmi --wds-set-default-profile-num="3gpp,1"
 
   echo "[$CDC_DEV] Waiting for the device to register on the network"
   local CMD="mbim --query-registration-state | grep -qE 'Register state:.*(home|roaming|partner)' && echo registered"
