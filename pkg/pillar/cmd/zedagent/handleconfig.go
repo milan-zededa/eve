@@ -97,8 +97,10 @@ type getconfigContext struct {
 	pubEdgeNodeInfo           pubsub.Publication
 	NodeAgentStatus           *types.NodeAgentStatus
 	configProcessingSkipFlag  bool
-	lastReceivedConfig        time.Time
-	lastProcessedConfig       time.Time
+	lastReceivedConfig        time.Time // controller or local clocks
+	lastProcessedConfig       time.Time // controller or local clocks
+	lastConfigTimestamp       time.Time // controller clocks (zero if not available)
+	lastConfigSource          configSource
 	localProfileServer        string
 	profileServerToken        string
 	currentProfile            string
@@ -150,7 +152,105 @@ var nilUUID uuid.UUID
 // current epoch received from controller
 var controllerEpoch int64
 
-func handleConfigInit(networkSendTimeout uint32, agentMetrics *zedcloud.AgentMetrics) *zedcloud.ZedCloudContext {
+type configSource int
+
+const (
+	fromController configSource = iota
+	savedConfig
+	fromBootstrap
+)
+
+func loadBootstrapConfig(getconfigCtx *getconfigContext) {
+	//  Check if bootstrap config has been already loaded.
+	if _, err := os.Stat(types.BootstrapConfFileName); err != nil {
+		if os.IsNotExist(err) {
+			// No bootstrap config to read
+			return
+		}
+		// Potentially there is a problem reading bootstrap config,
+		// but continue and try anyway.
+		log.Errorf("Failed to stat bootstrap config: %v", err)
+	}
+	changed, configSha, err := fileutils.CompareSha(
+		types.BootstrapConfFileName, types.BootstrapShaFileName)
+	if err != nil {
+		log.Errorf("CompareSha failed for bootstrap config: %s", err)
+		// We will not record SHA for applied bootstrap config
+		// and as a result load it again with the next boot.
+		// However, with config timestamp preventing accidental revert
+		// to an older configuration, this should not be a problem.
+		configSha = nil
+	} else if !changed {
+		// This bootstrap config was already applied.
+		return
+	}
+
+	// Load file content.
+	contents, err := ioutil.ReadFile(types.BootstrapConfFileName)
+	if err != nil {
+		log.Errorf("Failed to read bootstrap config: %v", err)
+		return
+	}
+
+	// Mark bootstrap config as processed by storing SHA hash of its content
+	// under /persit/ingested.
+	// We do this even even if the unmarshalling (or anything else) below fails.
+	// This is to avoid repeated failing attempts to load invalid config on each boot.
+	defer func() {
+		if configSha != nil {
+			err := fileutils.SaveShaInFile(types.BootstrapShaFileName, configSha)
+			if err != nil {
+				log.Errorf("Failed to save SHA of bootstrap config: %v", err)
+			}
+		}
+	}()
+
+	// Unmarshal BootstrapConfig.
+	bootstrap := zconfig.BootstrapConfig{}
+	err = proto.Unmarshal(contents, &bootstrap)
+	if err != nil {
+		log.Errorf("Failed to unmarshal bootstrap config: %v", err)
+		return
+	}
+
+	// Verify controller certificate chain.
+	sigCertBytes, err := zedcloud.VerifySigningCertChain(log, bootstrap.ControllerCerts)
+	if err != nil {
+		log.Errorf("Controller cert chain verification failed for bootstrap config: %v", err)
+		return
+	}
+
+	// Verify payload signature
+	zedcloudCtx := zedcloud.NewContext(log, zedcloud.ContextOptions{})
+	if err = zedcloud.LoadServerSigningCert(&zedcloudCtx, sigCertBytes); err != nil {
+		log.Errorf("Failed to load signing server cert from bootstrap config: %v", err)
+		return
+	}
+	_, err = zedcloud.VerifyAuthContainer(&zedcloudCtx, bootstrap.SignedConfig)
+	if err != nil {
+		log.Errorf("Signature verification failed for bootstrap config: %v", err)
+		return
+	}
+
+	// Unmarshal EdgeDevConfig from the payload of AuthContainer.
+	devConfig := zconfig.EdgeDevConfig{}
+	payload := bootstrap.SignedConfig.GetProtectedPayload().GetPayload()
+	if payload == nil {
+		log.Error("Bootstrap config payload is nil")
+		return
+	}
+	err = proto.Unmarshal(payload, &devConfig)
+	if err != nil {
+		log.Errorf("Failed to unmarshal bootstrap config payload: %v", err)
+		return
+	}
+
+	// Apply bootstrap config.
+	inhaleDeviceConfig(&devConfig, fromBootstrap, getconfigCtx)
+	log.Notice("Bootstrap config was applied")
+}
+
+func initZedcloudContext(networkSendTimeout uint32, agentMetrics *zedcloud.AgentMetrics) *zedcloud.ZedCloudContext {
 
 	// get the server name
 	bytes, err := ioutil.ReadFile(types.ServerFileName)
@@ -380,8 +480,7 @@ func getLatestConfig(url string, iteration int,
 						ts.Format(time.RFC3339Nano))
 					getconfigCtx.readSavedConfig = true
 					getconfigCtx.configGetStatus = types.ConfigGetReadSaved
-					return inhaleDeviceConfig(config, getconfigCtx,
-						true)
+					return inhaleDeviceConfig(config, savedConfig, getconfigCtx)
 				}
 			}
 		}
@@ -456,7 +555,7 @@ func getLatestConfig(url string, iteration int,
 	}
 	saveReceivedProtoMessage(contents)
 
-	return inhaleDeviceConfig(config, getconfigCtx, false)
+	return inhaleDeviceConfig(config, fromController, getconfigCtx)
 }
 
 func saveReceivedProtoMessage(contents []byte) {
@@ -626,7 +725,8 @@ func readConfigResponseProtoMessage(resp *http.Response, contents []byte) (bool,
 }
 
 // Returns a configProcessingSkipFlag
-func inhaleDeviceConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext, usingSaved bool) bool {
+func inhaleDeviceConfig(config *zconfig.EdgeDevConfig, source configSource,
+	getconfigCtx *getconfigContext) bool {
 	log.Tracef("Inhaling config")
 
 	// if they match return
@@ -655,7 +755,7 @@ func inhaleDeviceConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigCo
 	}
 
 	// add new BaseOS/App instances; returns configProcessingSkipFlag
-	return parseConfig(config, getconfigCtx, usingSaved)
+	return parseConfig(config, getconfigCtx, source)
 }
 
 var (
