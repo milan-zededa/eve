@@ -112,7 +112,7 @@ func TestParsePhysicalNetworkAdapters(t *testing.T) {
 
 	parseDeviceIoListConfig(config, getconfigCtx)
 	parseNetworkXObjectConfig(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -173,7 +173,7 @@ func TestDPCWithError(t *testing.T) {
 
 	parseDeviceIoListConfig(config, getconfigCtx)
 	parseNetworkXObjectConfig(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -300,7 +300,7 @@ func TestParseVlans(t *testing.T) {
 	parseDeviceIoListConfig(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
 	parseNetworkXObjectConfig(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -359,7 +359,7 @@ func TestParseVlans(t *testing.T) {
 		Cost:           30,
 		Addr:           "192.168.1.150",
 	})
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -466,7 +466,7 @@ func TestParseBonds(t *testing.T) {
 	parseDeviceIoListConfig(config, getconfigCtx)
 	parseBonds(config, getconfigCtx)
 	parseNetworkXObjectConfig(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -620,7 +620,7 @@ func TestParseVlansOverBonds(t *testing.T) {
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
 	parseNetworkXObjectConfig(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
@@ -781,7 +781,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 			},
 		},
 	}
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err := getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc := portConfig.(types.DevicePortConfig)
@@ -794,7 +794,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 
 	// fix:
 	config.SystemAdapterList[1].LowerLayerName = "warehouse"
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -821,7 +821,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 		},
 	}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -833,7 +833,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	config.Bonds[0].Logicallabel = "bond-shopfloor"
 	config.SystemAdapterList[0].LowerLayerName = "bond-shopfloor"
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -852,7 +852,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 		},
 	}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -870,7 +870,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 		},
 	}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -903,7 +903,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 		},
 	}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -917,7 +917,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	// fix:
 	config.Bonds[0].LowerLayerNames = []string{"shopfloor"}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -957,7 +957,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	}
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -972,7 +972,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	config.Vlans[1].VlanId = 200
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1014,7 +1014,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	}
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1029,7 +1029,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	config.Bonds[0].LowerLayerNames = []string{"shopfloor"} // remove warehouse from the LAG
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1068,7 +1068,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 		},
 	}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1083,7 +1083,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	config.Bonds[0].LowerLayerNames = []string{"shopfloor"}
 	config.Bonds[1].LowerLayerNames = []string{"warehouse"}
 	parseBonds(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1111,7 +1111,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	}
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)
@@ -1124,7 +1124,7 @@ func TestInvalidLowerLayerReferences(t *testing.T) {
 	config.Vlans[0].VlanId = 1000
 	parseBonds(config, getconfigCtx)
 	parseVlans(config, getconfigCtx)
-	parseSystemAdapterConfig(config, getconfigCtx, true)
+	parseSystemAdapterConfig(config, fromController, getconfigCtx, true)
 	portConfig, err = getconfigCtx.pubDevicePortConfig.Get("zedagent")
 	g.Expect(err).To(BeNil())
 	dpc = portConfig.(types.DevicePortConfig)

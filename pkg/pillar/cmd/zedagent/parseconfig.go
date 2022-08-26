@@ -40,14 +40,36 @@ const (
 
 // Returns a configProcessingSkipFlag
 func parseConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext,
-	usingSaved bool) bool {
+	source configSource) bool {
 
 	// Do not accept new commands from Local profile server while new config
 	// from the controller is being applied.
-	getconfigCtx.localCommands.Lock()
-	defer getconfigCtx.localCommands.Unlock()
+	if getconfigCtx.localCommands != nil {
+		getconfigCtx.localCommands.Lock()
+		defer getconfigCtx.localCommands.Unlock()
+	}
 
-	getconfigCtx.lastReceivedConfig = time.Now()
+	// Update lastReceivedConfig even if the config processing is skipped.
+	if config.ConfigTimestamp.IsValid() {
+		getconfigCtx.lastReceivedConfig = config.ConfigTimestamp.AsTime()
+	} else {
+		getconfigCtx.lastReceivedConfig = time.Now()
+	}
+
+	// Make sure we do not accidentally revert to an older configuration.
+	// This depends on the controller attaching config timestamp.
+	// If not provided, the check is skipped.
+	if config.ConfigTimestamp.IsValid() {
+		configTimestamp := config.ConfigTimestamp.AsTime()
+		if getconfigCtx.lastConfigTimestamp.After(configTimestamp) {
+			log.Warnf("Skipping obsolete device configuration "+
+				"(timestamp: %v, currently applied: %v)", configTimestamp,
+				getconfigCtx.lastConfigTimestamp)
+			return false
+		}
+		getconfigCtx.lastConfigTimestamp = configTimestamp
+	}
+
 	ctx := getconfigCtx.zedagentCtx
 
 	// XXX - DO NOT LOG entire config till secrets are in encrypted blobs
@@ -57,7 +79,7 @@ func parseConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext,
 	// Process Config items even when configProcessingSkipFlag is set.
 	// Allows us to recover if the system got stuck after setting
 	// configProcessingSkipFlag
-	parseConfigItems(config, getconfigCtx)
+	parseConfigItems(config, getconfigCtx, source)
 
 	// Did MaintenanceMode change?
 	if ctx.apiMaintenanceMode != config.MaintenanceMode {
@@ -75,7 +97,7 @@ func parseConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext,
 		publishZedAgentStatus(ctx.getconfigCtx)
 	}
 
-	if !usingSaved {
+	if source == fromController {
 		rebootFlag, shutdownFlag := parseOpCmds(config, getconfigCtx)
 
 		// Any new reboot command?
@@ -96,9 +118,12 @@ func parseConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext,
 	} else if ctx.maintenanceMode {
 		log.Noticef("parseConfig: Ignoring config due to maintenanceMode")
 	} else {
-		handleControllerCertsSha(ctx, config)
-		parseCipherContext(getconfigCtx, config)
-		parseDatastoreConfig(config, getconfigCtx)
+		if source != fromBootstrap {
+			handleControllerCertsSha(ctx, config)
+			parseCipherContext(getconfigCtx, config)
+			parseDatastoreConfig(config, getconfigCtx)
+		}
+
 		// DeviceIoList has some defaults for Usage and UsagePolicy
 		// used by systemAdapters
 		physioChanged := parseDeviceIoListConfig(config, getconfigCtx)
@@ -107,29 +132,35 @@ func parseConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigContext,
 		vlansChanged := parseVlans(config, getconfigCtx)
 		// Network objects are used for systemAdapters
 		networksChanged := parseNetworkXObjectConfig(config, getconfigCtx)
+		sourceChanged := getconfigCtx.lastConfigSource != source
 		// system adapter configuration that we publish, depends
 		// on Physio, VLAN, Bond and Networks configuration.
 		// If any of these change, we should re-parse system adapters and
 		// publish updated configuration.
-		forceSystemAdaptersParse := physioChanged || networksChanged || vlansChanged || bondsChanged
-		parseSystemAdapterConfig(config, getconfigCtx, forceSystemAdaptersParse)
-		parseBaseOS(getconfigCtx, config)
-		parseBaseOsConfig(getconfigCtx, config)
-		parseNetworkInstanceConfig(config, getconfigCtx)
-		parseContentInfoConfig(getconfigCtx, config)
-		parseVolumeConfig(getconfigCtx, config)
+		forceSystemAdaptersParse := physioChanged || networksChanged || vlansChanged ||
+			bondsChanged || sourceChanged
+		parseSystemAdapterConfig(config, source, getconfigCtx, forceSystemAdaptersParse)
 
-		// parseProfile must be called before processing of app instances from config
-		parseProfile(getconfigCtx, config)
-		parseAppInstanceConfig(config, getconfigCtx)
+		if source != fromBootstrap {
+			parseBaseOS(getconfigCtx, config)
+			parseBaseOsConfig(getconfigCtx, config)
+			parseNetworkInstanceConfig(config, getconfigCtx)
+			parseContentInfoConfig(getconfigCtx, config)
+			parseVolumeConfig(getconfigCtx, config)
 
-		parseEvConfig(getconfigCtx, config)
+			// parseProfile must be called before processing of app instances from config
+			parseProfile(getconfigCtx, config)
+			parseAppInstanceConfig(config, getconfigCtx)
 
-		parseDisksConfig(getconfigCtx, config)
+			parseEvConfig(getconfigCtx, config)
 
-		parseEdgeNodeInfo(getconfigCtx, config)
+			parseDisksConfig(getconfigCtx, config)
 
-		getconfigCtx.lastProcessedConfig = time.Now()
+			parseEdgeNodeInfo(getconfigCtx, config)
+		}
+
+		getconfigCtx.lastProcessedConfig = getconfigCtx.lastReceivedConfig
+		getconfigCtx.lastConfigSource = source
 	}
 	return false
 }
@@ -652,7 +683,7 @@ func parseAppInstanceConfig(config *zconfig.EdgeDevConfig,
 
 var systemAdaptersPrevConfigHash []byte
 
-func parseSystemAdapterConfig(config *zconfig.EdgeDevConfig,
+func parseSystemAdapterConfig(config *zconfig.EdgeDevConfig, source configSource,
 	getconfigCtx *getconfigContext, forceParse bool) {
 
 	sysAdapters := config.GetSystemAdapterList()
@@ -689,6 +720,9 @@ func parseSystemAdapterConfig(config *zconfig.EdgeDevConfig,
 
 	portConfig := &types.DevicePortConfig{}
 	portConfig.Version = version
+	if source == fromBootstrap {
+		portConfig.Key = "bootstrap" // Instead of "zedagent".
+	}
 	var newPorts []*types.NetworkPortConfig
 	for _, sysAdapter := range sysAdapters {
 		ports, err := parseOneSystemAdapterConfig(getconfigCtx, sysAdapter, version)
@@ -735,7 +769,8 @@ func parseSystemAdapterConfig(config *zconfig.EdgeDevConfig,
 	// the change can be sent back to the controller using ctx.devicePortConfigList
 	if cmp.Equal(getconfigCtx.devicePortConfig.Ports, portConfig.Ports) &&
 		cmp.Equal(getconfigCtx.devicePortConfig.TestResults, portConfig.TestResults) &&
-		getconfigCtx.devicePortConfig.Version == portConfig.Version {
+		getconfigCtx.devicePortConfig.Version == portConfig.Version &&
+		getconfigCtx.devicePortConfig.Key == portConfig.Key {
 		log.Functionf("parseSystemAdapterConfig: DevicePortConfig - " +
 			"Done with no change")
 		return
@@ -743,9 +778,13 @@ func parseSystemAdapterConfig(config *zconfig.EdgeDevConfig,
 	log.Functionf("parseSystemAdapterConfig: version %d/%d differs",
 		getconfigCtx.devicePortConfig.Version, portConfig.Version)
 
-	// This is suboptimal after a reboot since the config will be the same
-	// yet the timestamp be new. HandleDPCModify takes care of that.
-	portConfig.TimePriority = time.Now()
+	if config.ConfigTimestamp.IsValid() {
+		portConfig.TimePriority = config.ConfigTimestamp.AsTime()
+	} else {
+		// This is suboptimal after a reboot since the config will be the same
+		// yet the timestamp be new. HandleDPCModify takes care of that.
+		portConfig.TimePriority = time.Now()
+	}
 	getconfigCtx.devicePortConfig = *portConfig
 
 	getconfigCtx.pubDevicePortConfig.Publish("zedagent", *portConfig)
@@ -2220,7 +2259,8 @@ func parseUnderlayNetworkConfigEntry(
 
 var itemsPrevConfigHash []byte
 
-func parseConfigItems(config *zconfig.EdgeDevConfig, ctx *getconfigContext) {
+func parseConfigItems(config *zconfig.EdgeDevConfig, ctx *getconfigContext,
+	source configSource) {
 
 	items := config.GetConfigItems()
 	h := sha256.New()
@@ -2254,8 +2294,14 @@ func parseConfigItems(config *zconfig.EdgeDevConfig, ctx *getconfigContext) {
 	// should default to "false".
 	// That way bringup of new hardware models can be done using an
 	// attached keyboard and monitor.
-	newGlobalConfig.SetGlobalValueBool(types.UsbAccess, false)
-	newGlobalConfig.SetGlobalValueBool(types.VgaAccess, false)
+	if source == fromBootstrap {
+		newGlobalConfig.SetGlobalValueBool(types.UsbAccess, true)
+		newGlobalConfig.SetGlobalValueBool(types.VgaAccess, true)
+	} else {
+		// from controller (live or saved)
+		newGlobalConfig.SetGlobalValueBool(types.UsbAccess, false)
+		newGlobalConfig.SetGlobalValueBool(types.VgaAccess, false)
+	}
 	newGlobalStatus := types.NewGlobalStatus()
 
 	for _, item := range items {

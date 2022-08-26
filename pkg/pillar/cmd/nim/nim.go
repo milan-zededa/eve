@@ -258,17 +258,21 @@ func (n *nim) run(ctx context.Context) (err error) {
 	dpcAvailTimer := time.After(dpcAvailableTimeLimit)
 
 	waitForLastResort := n.enabledLastResort
-	waitForAA := true
-
 	lastResortIsReady := func() error {
 		if err = n.subDevicePortConfigO.Activate(); err != nil {
+			return err
+		}
+		if err = n.subDevicePortConfigA.Activate(); err != nil {
 			return err
 		}
 		if err = n.subZedAgentStatus.Activate(); err != nil {
 			return err
 		}
-		err = n.subAssignableAdapters.Activate()
-		return err
+		if err = n.subAssignableAdapters.Activate(); err != nil {
+			return err
+		}
+		go n.queryControllerDNS()
+		return nil
 	}
 	if !waitForLastResort {
 		if err = lastResortIsReady(); err != nil {
@@ -320,14 +324,6 @@ func (n *nim) run(ctx context.Context) (err error) {
 
 		case change := <-n.subAssignableAdapters.MsgChan():
 			n.subAssignableAdapters.ProcessChange(change)
-			if waitForAA && n.assignableAdapters.Initialized {
-				n.Log.Noticef("Assignable Adapters are initialized")
-				if err = n.subDevicePortConfigA.Activate(); err != nil {
-					return err
-				}
-				go n.queryControllerDNS()
-				waitForAA = false
-			}
 
 		case event := <-netEvents:
 			ifChange, isIfChange := event.(netmonitor.IfChange)
@@ -803,6 +799,12 @@ func (n *nim) handleZedAgentStatusImpl(_ string, statusArg interface{}) {
 // Otherwise the ShaFile and Shavalue is used to write the sha for the new file to avoid
 // re-application of the same config.
 func (n *nim) ingestDevicePortConfig() {
+	// Skip these legacy DPC json files if there is bootstrap config.
+	if _, err := os.Stat(types.BootstrapConfFileName); err == nil {
+		n.Log.Notice("Not ingesting DPC jsons from config partition: " +
+			"bootstrap config is present")
+		return
+	}
 	locations, err := ioutil.ReadDir(configDevicePortConfigDir)
 	if err != nil {
 		// Directory might not exist

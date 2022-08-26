@@ -286,23 +286,32 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	initializePublications(zedagentCtx)
 	initializeSubscriptions(zedagentCtx)
 
-	// upgradeconverter ensures we have a ConfigItemValueMap so we
-	// read it to get the initial values
-	item, err := zedagentCtx.pubGlobalConfig.Get("global")
-	if err != nil {
-		log.Fatalf("ConfigItemValueMap missing: %s", err)
-	}
-	zedagentCtx.globalConfig = item.(types.ConfigItemValueMap)
-	log.Functionf("initialized GlobalConfig")
-
 	// Run a periodic timer so we always update StillRunning
 	stillRunning := time.NewTicker(25 * time.Second)
 	ps.StillRunning(agentName, warningTime, errorTime)
 
 	initializeDirs()
 
-	// Apply saved radio config ASAP.
+	// Load bootstrap configuration if present.
 	getconfigCtx := zedagentCtx.getconfigCtx
+	loadBootstrapConfig(getconfigCtx)
+
+	// Get GlobalConfig.
+	// If not present (e.g. loading of bootstrap config failed), use default values.
+	item, err := zedagentCtx.pubGlobalConfig.Get("global")
+	if err == nil {
+		zedagentCtx.globalConfig = item.(types.ConfigItemValueMap)
+	} else {
+		zedagentCtx.globalConfig = *types.DefaultConfigItemValueMap()
+		err := zedagentCtx.pubGlobalConfig.Publish("global", zedagentCtx.globalConfig)
+		if err != nil {
+			// Could fail if no space left in the filesystem.
+			log.Fatalf("Failed to publish default globalConfig: %s", err)
+		}
+	}
+	log.Noticef("Initialized GlobalConfig: %v", zedagentCtx.globalConfig)
+
+	// Apply saved radio config ASAP.
 	initializeRadioConfig(getconfigCtx)
 
 	// Wait until we have been onboarded aka know our own UUID.
