@@ -15,6 +15,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -889,7 +890,22 @@ func tryPing(ctx *diagContext, ifname string, reqURL string) bool {
 	if reqURL == "" {
 		reqURL = zedcloud.URLPathString(ctx.serverNameAndPort, zedcloudCtx.V2API, nilUUID, "ping")
 	} else {
+		// Temporarily change TLS config for the non-controller destination.
 		zedcloudCtx.TlsConfig.InsecureSkipVerify = true
+		origServerName := zedcloudCtx.TlsConfig.ServerName
+		parsedURL, err := url.Parse(reqURL)
+		if err != nil {
+			log.Errorf("Failed to parse request URL: %v", err)
+		} else {
+			// Make sure the ClientHello TLS message contains the correct SNI,
+			// which transparent proxies often depend on.
+			zedcloudCtx.TlsConfig.ServerName = strings.Split(parsedURL.Host, ":")[0]
+		}
+		defer func() {
+			// Revert back the original TLS config.
+			zedcloudCtx.TlsConfig.InsecureSkipVerify = false
+			zedcloudCtx.TlsConfig.ServerName = origServerName
+		}()
 	}
 
 	retryCount := 0
