@@ -283,9 +283,12 @@ func VerifyAllIntf(ctx *ZedCloudContext,
 	defer cancel()
 
 	for _, intf := range intfs {
-		if intfSuccessCount >= successCount {
-			// We have enough uplinks with cloud connectivity working.
-			break
+		portStatus := types.GetPort(*ctx.DeviceNetworkStatus, intf)
+		hasError := portStatus != nil && portStatus.HasError()
+		if !hasError && intfSuccessCount >= successCount {
+			// We have enough uplinks with cloud connectivity working
+			// and this interface does not have error condition to retest.
+			continue
 		}
 		// This VerifyAllIntf() is called for "ping" url only, it does
 		// not have return envelope verifying check after the call nor
