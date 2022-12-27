@@ -14,6 +14,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/devicenetwork"
 	"github.com/lf-edge/eve/pkg/pillar/hardware"
+	"github.com/lf-edge/eve/pkg/pillar/netdump"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/lf-edge/eve/pkg/pillar/zedcloud"
 	uuid "github.com/satori/go.uuid"
@@ -35,6 +36,7 @@ type ZedcloudConnectivityTester struct {
 
 	iteration     int
 	prevTLSConfig *tls.Config
+	netDumper     *netdump.NetDumper // TODO
 }
 
 // TestConnectivity uses VerifyAllIntf from the zedcloud package, which
