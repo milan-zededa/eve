@@ -2316,13 +2316,13 @@ func parseConfigItems(ctx *getconfigContext, config *zconfig.EdgeDevConfig,
 		newGlobalConfig.SetGlobalValueBool(types.UsbAccess, true)
 		newGlobalConfig.SetGlobalValueBool(types.VgaAccess, true)
 		newGlobalConfig.SetGlobalValueBool(types.ConsoleAccess, true)
-		newGlobalConfig.SetGlobalValueInt(types.NetDumpTopicPubInterval, types.HourInSec)
+		newGlobalConfig.SetGlobalValueInt(types.NetDumpTopicPubInterval, 300) //types.HourInSec)
 	} else {
 		// from controller (live or saved)
 		newGlobalConfig.SetGlobalValueBool(types.UsbAccess, false)
 		newGlobalConfig.SetGlobalValueBool(types.VgaAccess, false)
 		newGlobalConfig.SetGlobalValueBool(types.ConsoleAccess, false)
-		newGlobalConfig.SetGlobalValueInt(types.NetDumpTopicPubInterval, 24*types.HourInSec)
+		newGlobalConfig.SetGlobalValueInt(types.NetDumpTopicPubInterval, 600) //24*types.HourInSec)
 	}
 	newGlobalStatus := types.NewGlobalStatus()
 

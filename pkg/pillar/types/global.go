@@ -814,7 +814,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	// Add NetDump settings
 	configItemSpecMap.AddBoolItem(NetDumpEnable, true)
 	// Default NetDumpTopicPubInterval is increased to one day after onboarding.
-	configItemSpecMap.AddIntItem(NetDumpTopicPubInterval, HourInSec, 60, 0xFFFFFFFF)
+	configItemSpecMap.AddIntItem(NetDumpTopicPubInterval, 300 /*HourInSec*/, 60, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(NetDumpTopicMaxCount, 10, 1, 0xFFFFFFFF)
 	return configItemSpecMap
 }
