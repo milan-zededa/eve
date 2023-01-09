@@ -34,6 +34,8 @@ func (m *DpcManager) addDPC(ctx context.Context, dpc types.DevicePortConfig) {
 	// index has changed. We don't care about inserts at the end of the list.
 	configChanged := m.updateDPCListAndPublish(dpc, false)
 
+	m.Log.Noticef("Received DPC %+v, config changed: %t", dpc, configChanged)
+
 	// We could have just booted up and not run RestartVerify even once.
 	// If we see a DPC configuration that we already have in the persistent
 	// DPC list that we load from storage, we will return with out testing it.

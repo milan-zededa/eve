@@ -782,6 +782,8 @@ func parseSystemAdapterConfig(getconfigCtx *getconfigContext, config *zconfig.Ed
 		portConfig.RecordFailure(errStr)
 	}
 
+	log.Noticef("HEY!!! Have new DPC: %+v", portConfig)
+
 	// Any content change?
 	// Even if only ErrorAndTime changed we publish so
 	// the change can be sent back to the controller using ctx.devicePortConfigList

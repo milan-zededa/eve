@@ -112,6 +112,7 @@ func (c *WlanConfigurator) NeedsRecreate(oldItem, newItem depgraph.Item) (recrea
 }
 
 func (c *WlanConfigurator) installWifiConfig(config []WifiConfig) error {
+	c.Log.Noticef("HEY!!! Install WiFi config: %+v", config)
 	if _, err := os.Stat(devicenetwork.RunWlanDir); os.IsNotExist(err) {
 		err = os.Mkdir(devicenetwork.RunWlanDir, 600)
 		if err != nil {
