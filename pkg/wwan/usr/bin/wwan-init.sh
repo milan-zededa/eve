@@ -63,6 +63,10 @@ parse_json_attr() {
   echo "$JSON" | jq -rc ".$JSON_PATH | select (.!=null)"
 }
 
+join_lines_with_semicolon() {
+  cat - | sed ':a;N;$!ba;s/\n/; /g'
+}
+
 mod_reload() {
   local RLIST
   for mod in "$@" ; do
@@ -480,7 +484,11 @@ event_stream | while read -r EVENT; do
     PROBE_DISABLED="$(parse_json_attr "$PROBE" "disable")"
     PROBE_ADDR="$(parse_json_attr "$PROBE" "address")"
     PROXIES="$(parse_json_attr "$NETWORK" "proxies")"
-    APN="$(parse_json_attr "$NETWORK" "apns[0]")" # FIXME XXX limited to a single APN for now
+    APN_CONFIG="$(parse_json_attr "$NETWORK" "apns[0]")" # FIXME XXX limited to a single APN for now
+    APN_USERNAME="$(parse_json_attr "$APN_CONFIG" "username")"
+    APN_PASSWORD="$(parse_json_attr "$APN_CONFIG" "password")"
+    APN_AUTHPROTO="$(parse_json_attr "$APN_CONFIG" "\"auth-proto\"")"
+    APN="$(parse_json_attr "$APN_CONFIG" "apn")"
     APN="${APN:-$DEFAULT_APN}"
     LOC_TRACKING="$(parse_json_attr "$NETWORK" "\"location-tracking\"")"
 
@@ -506,7 +514,8 @@ event_stream | while read -r EVENT; do
     ADDRS="$(json_struct \
       "$(json_str_attr interface "$IFACE")" \
       "$(json_str_attr usb       "$USB_ADDR")" \
-      "$(json_str_attr pci       "$PCI_ADDR")")"
+      "$(json_str_attr pci       "$PCI_ADDR")" \
+      "$(json_str_attr dev       "$CDC_DEV")")"
 
     if [ "$EVENT" = "METRICS" ]; then
       collect_network_metrics 2>/dev/null
@@ -522,7 +531,14 @@ event_stream | while read -r EVENT; do
     # reflect updated config or just probe the current status
     if [ "$RADIO_SILENCE" != "true" ]; then
       if [ "$CONFIG_CHANGE" = "y" ] || ! check_connectivity; then
-        echo "[$CDC_DEV] Restarting connection (APN=${APN}, interface=${IFACE})"
+        if [ -n "$APN_USERNAME" ]; then
+          PASSWORD="$(printf "%s" "$APN_PASSWORD" | tr -c '' '*')"
+          echo "[$CDC_DEV] Restarting connection (APN=${APN}, " \
+               "username=${APN_USERNAME}, password=${PASSWORD}, " \
+               "auth-proto=${APN_AUTHPROTO}, interface=${IFACE})"
+        else
+          echo "[$CDC_DEV] Restarting connection (APN=${APN}, interface=${IFACE})"
+        fi
         {
           bringdown_iface                 &&\
           "${PROTOCOL}_stop_network"      &&\
@@ -537,7 +553,7 @@ event_stream | while read -r EVENT; do
         } 2>/tmp/wwan.stderr
         RV=$?
         if [ $RV -ne 0 ]; then
-          CONFIG_ERROR="$(sort -u < /tmp/wwan.stderr)"
+          CONFIG_ERROR="$(sort -u < /tmp/wwan.stderr | join_lines_with_semicolon)"
           CONFIG_ERROR="${CONFIG_ERROR:-(Re)Connection attempt failed with rv=$RV}"
         fi
         # retry probe to update PROBE_ERROR
@@ -548,7 +564,7 @@ event_stream | while read -r EVENT; do
       if [ "$("${PROTOCOL}_get_op_mode")" != "radio-off" ]; then
         echo "[$CDC_DEV] Trying to disable radio (APN=${APN}, interface=${IFACE})"
         if ! "${PROTOCOL}_toggle_rf" off 2>/tmp/wwan.stderr; then
-          CONFIG_ERROR="$(cat /tmp/wwan.stderr)"
+          CONFIG_ERROR="$(join_lines_with_semicolon </tmp/wwan.stderr)"
         else
           if ! wait_for radio-off "${PROTOCOL}_get_op_mode"; then
             CONFIG_ERROR="Timeout waiting for radio to turn off"
@@ -600,7 +616,8 @@ __EOT__
     ADDRS="$(json_struct \
         "$(json_str_attr interface "$IFACE")" \
         "$(json_str_attr usb       "$USB_ADDR")" \
-        "$(json_str_attr pci       "$PCI_ADDR")")"
+        "$(json_str_attr pci       "$PCI_ADDR")" \
+        "$(json_str_attr dev       "$CDC_DEV")")"
 
     if [ "$EVENT" = "METRICS" ]; then
       collect_network_metrics 2>/dev/null

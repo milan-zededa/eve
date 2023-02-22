@@ -3069,7 +3069,7 @@ type WwanNetworkConfig struct {
 	LogicalLabel string        `json:"logical-label"`
 	PhysAddrs    WwanPhysAddrs `json:"physical-addrs"`
 	// XXX Multiple APNs are not yet supported.
-	Apns []string `json:"apns"`
+	Apns []WwanAPN `json:"apns"`
 	// Proxies configured for the cellular network.
 	Proxies []ProxyEntry `json:"proxies"`
 	// Probe used to detect broken connection.
@@ -3081,6 +3081,16 @@ type WwanNetworkConfig struct {
 	// microservice. This is further distributed to the controller and
 	// to applications by zedagent.
 	LocationTracking bool `json:"location-tracking"`
+}
+
+// WwanAPN : Access Point configuration for cellular connectivity.
+type WwanAPN struct {
+	APN      string `json:"apn"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	// AuthProto is one of: PAP, CHAP, BOTH (only with QMI modems),
+	// MSCHAPV2 (only with MBIM modems)
+	AuthProto string `json:"auth-proto"`
 }
 
 // WwanProbe : cellular connectivity verification probe.
@@ -3144,6 +3154,8 @@ type WwanPhysAddrs struct {
 	// PCI address in the long format.
 	// For example: 0000:00:15.0
 	PCI string `json:"pci"`
+	// Dev : device file representing the modem (e.g. /dev/cdc-wdm0).
+	Dev string `json:"dev"`
 }
 
 // WwanStatus is published by the wwan service and consumed by nim.

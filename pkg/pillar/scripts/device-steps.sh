@@ -192,6 +192,11 @@ access_usb
 # We append on every boot since /etc/hosts starts from read-only rootfs
 [ -f /config/hosts ] && cat /config/hosts >> /etc/hosts
 
+# Apply persisted wwan config
+mkdir -p /persist/wwan
+mkdir -p /run/wwan
+[ -f /persist/wwan/config.json ] && cp /persist/wwan/config.json /run/wwan/config.json
+
 echo "$(date -Ins -u) Starting services"
 
 for AGENT in $AGENTS; do

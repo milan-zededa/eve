@@ -1145,8 +1145,10 @@ func (r *LinuxDpcReconciler) getIntendedWirelessCfg(dpc types.DevicePortConfig,
 	rsImposed := radioSilence.Imposed
 	intendedWirelessCfg.PutItem(
 		r.getIntendedWlanConfig(dpc, rsImposed), nil)
-	intendedWirelessCfg.PutItem(
-		r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
+	/*
+		intendedWirelessCfg.PutItem(
+			r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
+	*/
 	return intendedWirelessCfg
 }
 
@@ -1260,7 +1262,7 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				USB:       ioBundle.UsbAddr,
 				PCI:       ioBundle.PciLong,
 			},
-			Apns:    []string{cellCfg.APN},
+			Apns:    []types.WwanAPN{{APN: cellCfg.APN}},
 			Proxies: port.Proxies,
 			Probe: types.WwanProbe{
 				Disable: cellCfg.DisableProbe,

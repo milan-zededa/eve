@@ -142,7 +142,12 @@ mbim_start_network() {
   # may be useful to check --query-packet-service-state just in case.
   mbim --attach-packet-service
   sleep 10
-  mbim --connect="apn='${APN}'"
+
+  local ARGS="apn='${APN}'"
+  if [ -n "$APN_USERNAME" ]; then
+    ARGS="$ARGS,username='${APN_USERNAME}',password='${APN_PASSWORD}',auth='${APN_AUTHPROTO}'"
+  fi
+  mbim --connect="$ARGS"
 }
 
 mbim_wait_for_sim() {

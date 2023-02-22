@@ -201,6 +201,12 @@ func (m *DpcManager) reloadWwanStatus() {
 	}
 
 	if changed || wasInProgress {
+		if m.currentDPC() != nil {
+			changedDPC := m.setDiscoveredWwanIfNames(m.currentDPC())
+			if changedDPC {
+				m.publishDPCL()
+			}
+		}
 		m.updateDNS()
 	}
 	if changed && m.PubWwanStatus != nil {
@@ -339,4 +345,21 @@ func (m *DpcManager) doUpdateRadioSilence(ctx context.Context, newRS types.Radio
 
 	m.radioSilence.ConfigError = strings.Join(errMsgs, "\n")
 	m.updateDNS()
+}
+
+// TODO: perhaps should be called also when Manager performs fallback from one DPC to another
+// (before submitting to Reconciler).
+func (m *DpcManager) setDiscoveredWwanIfNames(dpc *types.DevicePortConfig) bool {
+	var changed bool
+	for i := range dpc.Ports {
+		port := &dpc.Ports[i]
+		if port.WirelessCfg.WType == types.WirelessTypeCellular {
+			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
+			if found && wwanNetStatus.PhysAddrs.Interface != "" {
+				changed = changed || port.IfName != wwanNetStatus.PhysAddrs.Interface
+				port.IfName = wwanNetStatus.PhysAddrs.Interface
+			}
+		}
+	}
+	return changed
 }

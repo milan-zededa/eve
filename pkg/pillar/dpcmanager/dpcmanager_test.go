@@ -1128,7 +1128,7 @@ func TestWireless(test *testing.T) {
 				PhysAddrs: types.WwanPhysAddrs{
 					Interface: "wwan0",
 				},
-				Apns:             []string{"apn"},
+				Apns:             []types.WwanAPN{{APN: "apn"}},
 				LocationTracking: true,
 			},
 		},
