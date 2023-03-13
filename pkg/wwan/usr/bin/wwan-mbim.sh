@@ -47,12 +47,16 @@ mbim_get_op_mode() {
     echo "radio-off"
     return
   fi
-  if mbim --query-packet-service-state | grep -q "Packet service state:\s*'attached'"; then
-    echo "online-and-connected"
-  else
-    # FIXME XXX detect offline state
-    echo "online"
+  if mbim_get_registration_status | grep -qvE '(home|roaming|partner)'; then
+    echo "offline"
+    return
   fi
+  if [ "$(mbim_get_packet_service_state)" = "attached" ] && \
+     [ "$(mbim_get_connection_state)" = "activated" ]; then
+     echo "online-and-connected"
+     return
+  fi
+  echo "online"
 }
 
 mbim_get_imei() {
@@ -136,13 +140,7 @@ mbim_get_ip_settings() {
 
 mbim_start_network() {
   echo "[$CDC_DEV] Starting network for APN ${APN}"
-  # NOTE that after --attach-packet-service we may end in a state
-  # where packet service is attached but WDS hasn't come up online
-  # just yet. We're blocking on WDS in wait_for_wds(). However, it
-  # may be useful to check --query-packet-service-state just in case.
   mbim --attach-packet-service
-  sleep 10
-
   local ARGS="apn='${APN}'"
   if [ -n "$APN_USERNAME" ]; then
     ARGS="$ARGS,username='${APN_USERNAME}',password='${APN_PASSWORD}',auth='${APN_AUTHPROTO}'"
@@ -160,15 +158,33 @@ mbim_wait_for_sim() {
   fi
 }
 
+# Returns one of: "unknown", "activated", "activating", "deactivated", "deactivating".
+mbim_get_connection_state() {
+  parse_modem_attr "$(mbim --query-connection-state)" "Activation state"
+}
+
+# Returns one of: "unknown", "attaching", "attached", "detaching", "detached".
+mbim_get_packet_service_state() {
+  parse_modem_attr "$(mbim --query-packet-service-state)" "Packet service state"
+}
+
 mbim_wait_for_wds() {
   echo "[$CDC_DEV] Waiting for DATA services to connect"
-  # FIXME XXX there seems to be cases where this looks like connected
-  local CMD="mbim --query-connection-state | grep -q 'Activation state: .activated.' && echo connected"
 
-  if ! wait_for connected "$CMD"; then
-    echo "Timeout waiting for DATA services to connect" >&2
+  if ! wait_for attached mbim_get_packet_service_state; then
+    echo "Timeout waiting for Packet service to attach" >&2
     return 1
   fi
+  if ! wait_for activated mbim_get_connection_state; then
+    echo "Timeout waiting for connection to activate" >&2
+    return 1
+  fi
+}
+
+# Returns one of: "unknown", "deregistered", "searching", "home", "roaming",
+# "partner" (registered in a preferred roaming network), "denied".
+mbim_get_registration_status() {
+  parse_modem_attr "$(mbim --query-registration-state)" "Register state"
 }
 
 mbim_wait_for_register() {
@@ -182,7 +198,7 @@ mbim_wait_for_register() {
   qmi --wds-modify-profile="3gpp,${PROFILE_NUM},apn=${APN}"
 
   echo "[$CDC_DEV] Waiting for the device to register on the network"
-  local CMD="mbim --query-registration-state | grep -qE 'Register state:.*(home|roaming|partner)' && echo registered"
+  local CMD="mbim_get_registration_status | grep -qE '(home|roaming|partner)' && echo registered"
 
   if ! wait_for registered "$CMD"; then
     echo "Timeout waiting for the device to register on the network" >&2

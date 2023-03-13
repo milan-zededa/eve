@@ -22,7 +22,7 @@ METRICS_PATH="${BBS}/metrics.json"
 LOCINFO_PATH="${BBS}/location.json"
 
 LTESTAT_TIMEOUT=120
-PROBE_INTERVAL=300  # how often to probe the connectivity status (in seconds)
+PROBE_INTERVAL=30  # how often to probe the connectivity status (in seconds)
 METRICS_INTERVAL=60 # how often to obtain and publish metrics (in seconds)
 UNAVAIL_SIGNAL_METRIC=$(printf "%d" 0x7FFFFFFF) # max int32
 
@@ -260,9 +260,21 @@ bringdown_iface() {
 }
 
 check_connectivity() {
+  local EVENT="$1"
   # First check the connectivity status as reported by the modem.
-  if [ "$("${PROTOCOL}_get_op_mode")" != "online-and-connected" ]; then
+  local OP_STATUS="$("${PROTOCOL}_get_op_mode")"
+  if [ "$OP_STATUS" != "online-and-connected" ]; then
+    echo "[$CDC_DEV] Check connectivity: modem operational mode is ${OP_STATUS}"
     return 1
+  fi
+  if "${PROTOCOL}_get_ip_address" | grep -vq "$IPV4_REGEXP"; then
+    echo "[$CDC_DEV] Check connectivity: no IP address assigned"
+    return 1
+  fi
+  if [ "$EVENT" = "QUICK-PROBE" ]; then
+    # Do not generate any traffic during a quick probe.
+    # Assume that the connectivity is OK if modem says so.
+    return 0
   fi
   # (optionally) Check connectivity by communicating with a remote endpoint.
   probe_connectivity
@@ -276,7 +288,7 @@ probe_connectivity() {
   fi
   if [ -n "$PROBE_ADDR" ]; then
     # User-configured ICMP probe address.
-    add_probe_error "$(icmp_probe "$PROBE_ADDR")"
+    icmp_probe "$PROBE_ADDR"
     return
   fi
   # Default probing behaviour (not configured by user).
@@ -313,7 +325,7 @@ __EOT__
   # This is a last-resort probing option.
   # In a private LTE network ICMP requests headed towards public DNS servers
   # may be blocked by the firewall and thus produce probing false negatives.
-  add_probe_error "$(icmp_probe "$DEFAULT_PROBE_ADDR")"
+  icmp_probe "$DEFAULT_PROBE_ADDR"
 }
 
 add_probe_error() {
@@ -325,33 +337,40 @@ add_probe_error() {
   else
     PROBE_ERROR="$1"
   fi
+  echo "[$CDC_DEV] Check connectivity: $1"
 }
 
 icmp_probe() {
-  local PROBE_ADDR="$1"
+  local PING_ADDR="$1"
   # ping is supposed to return 0 even if just a single packet out of 3 gets through
-  local PROBE_OUTPUT
-  if PROBE_OUTPUT="$(ping -W 20 -w 20 -c 3 -I "$IFACE" "$PROBE_ADDR" 2>&1)"; then
+  local PING_OUTPUT
+  if PING_OUTPUT="$(ping -W 20 -w 20 -c 3 -I "$IFACE" "$PING_ADDR" 2>&1)"; then
     return 0
   else
-    local PROBE_ERROR="$(printf "%s" "$PROBE_OUTPUT" | grep "packet loss")"
-    if [ -z "$PROBE_ERROR" ]; then
-      PROBE_ERROR="$PROBE_OUTPUT"
+    local PING_ERROR="$(printf "%s" "$PING_OUTPUT" | grep "packet loss")"
+    if [ -z "$PING_ERROR" ]; then
+      PING_ERROR="$PING_OUTPUT"
     fi
-    echo "Failed to ping $PROBE_ADDR via $IFACE: $PROBE_ERROR"
+    add_probe_error "Failed to ping $PING_ADDR via $IFACE: $PING_ERROR"
     return 1
   fi
 }
 
 collect_network_status() {
-  local QUICK="$1"
+  local EVENT="$1"
   local PROVIDERS="[]"
-  if [ "$QUICK" != "y" ]; then
+  if [ "$EVENT" = "LONG-PROBE" ]; then
     # The process of scanning for available providers takes up to 1 minute.
-    # It is done only during PROBING events and skipped when config is changed
+    # It is done only during LONG-PROBE events and skipped when config is changed
     # (e.g. radio-silence mode is switched ON/OFF) so that the updated status is promptly
     # published for better user experience.
     PROVIDERS="$("${PROTOCOL}_get_providers")"
+  else
+    # Just preserve the list of providers previously obtained for this modem.
+    PROVIDERS="$(jq -rc --arg CDC_DEV "$CDC_DEV" \
+                 '.networks[] | select(."physical-addrs".dev==$CDC_DEV) | ."providers"' \
+                 "${STATUS_PATH}")"
+    PROVIDERS="${PROVIDERS:-"[]"}"
   fi
   local MODULE="$(json_struct \
     "$(json_str_attr imei     "$("${PROTOCOL}_get_imei")")" \
@@ -439,18 +458,39 @@ modprobe -a qcserial usb_wwan qmi_wwan cdc_wdm cdc_mbim cdc_acm
 rfkill unblock wwan
 
 # Main event loop
+PROBE_ITER=0
+ENFORCE_LONG_PROBE=n
 event_stream | while read -r EVENT; do
   if ! echo "$EVENT" | grep -q "PROBE\|METRICS\|config.json"; then
     continue
   fi
 
-  CONFIG_CHANGE=n
   if [ "$EVENT" != "PROBE" ] && [ "$EVENT" != "METRICS" ]; then
-    CONFIG_CHANGE=y
+    EVENT="CONFIG-CHANGE"
+    # Next probe will update the set of visible/used providers.
+    ENFORCE_LONG_PROBE="y"
+  fi
+
+  if [ "$EVENT" = "PROBE" ]; then
+    PROBE_ITER="$((PROBE_ITER+1))"
+    # Every 30 seconds check the modem connectivity status.
+    # Quick probe only checks the status as reported by the modem,
+    # without generating any traffic.
+    EVENT="QUICK-PROBE"
+    if [ "$((PROBE_ITER % 10))" = "0" ] || [ ! -f "${STATUS_PATH}" ]; then
+      # Every 5 minutes update status.json.
+      # Also enforce standard probing if status.json is missing.
+      EVENT="STANDARD-PROBE"
+    fi
+    if [ "$((PROBE_ITER % 100))" = "0" ] || [ "$ENFORCE_LONG_PROBE" = "y" ]; then
+      # Every 50 minutes additionally query the set of visible providers.
+      EVENT="LONG-PROBE"
+    fi
+    ENFORCE_LONG_PROBE=n
   fi
 
   CONFIG="$(cat "${CONFIG_PATH}" 2>/dev/null)"
-  if [ "$CONFIG_CHANGE" = "y" ]; then
+  if [ "$EVENT" = "CONFIG-CHANGE" ]; then
     if [ "$LAST_CONFIG" = "$CONFIG" ]; then
       # spurious notification, ignore
       continue
@@ -530,7 +570,7 @@ event_stream | while read -r EVENT; do
 
     # reflect updated config or just probe the current status
     if [ "$RADIO_SILENCE" != "true" ]; then
-      if [ "$CONFIG_CHANGE" = "y" ] || ! check_connectivity; then
+      if [ "$EVENT" = "CONFIG-CHANGE" ] || ! check_connectivity "$EVENT"; then
         if [ -n "$APN_USERNAME" ]; then
           PASSWORD="$(printf "%s" "$APN_PASSWORD" | tr -c '' '*')"
           echo "[$CDC_DEV] Restarting connection (APN=${APN}, " \
@@ -557,8 +597,10 @@ event_stream | while read -r EVENT; do
           CONFIG_ERROR="${CONFIG_ERROR:-(Re)Connection attempt failed with rv=$RV}"
         fi
         # retry probe to update PROBE_ERROR
-        sleep 3
-        probe_connectivity
+        if [ "$EVENT" != "QUICK-PROBE" ]; then
+          sleep 3
+          probe_connectivity
+        fi
       fi
     else # Radio-silence is ON
       if [ "$("${PROTOCOL}_get_op_mode")" != "radio-off" ]; then
@@ -575,13 +617,15 @@ event_stream | while read -r EVENT; do
       fi
     fi
 
-    collect_network_status "$CONFIG_CHANGE"
+    if [ "$EVENT" != "QUICK-PROBE" ]; then
+      collect_network_status "$EVENT"
+    fi
   done <<__EOT__
   $(echo "$CONFIG" | jq -c '.networks[]' 2>/dev/null)
 __EOT__
 
   # Start/stop location tracking.
-  if [ "$CONFIG_CHANGE" = "y" ]; then
+  if [ "$EVENT" = "CONFIG-CHANGE" ]; then
     if [ -n "$LOC_TRACKING_DEV" ]; then
       if [ -z "$LOC_TRACKER" ]; then
         location_tracking "${LOC_TRACKING_LL}" "${LOC_TRACKING_DEV}"\
@@ -637,8 +681,15 @@ __EOT__
       fi
     fi
 
-    collect_network_status "$CONFIG_CHANGE"
+    if [ "$EVENT" != "QUICK-PROBE" ]; then
+      collect_network_status "$EVENT"
+    fi
   done
+
+  # Do not update status.json during a quick probe, continue with the next event..
+  if [ "$EVENT" = "QUICK-PROBE" ]; then
+    continue
+  fi
 
   if [ "$EVENT" = "METRICS" ]; then
     json_struct \
