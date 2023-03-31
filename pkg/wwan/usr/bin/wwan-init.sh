@@ -227,9 +227,13 @@ bringup_iface() {
   if [ -n "$MTU" ]; then
     ip link set mtu "$MTU" dev "$IFACE"
   fi
+  local METRIC=65000
+  # If interface name is something unexpected, metric will stay as 65000.
+  local IDX="${IFACE#"wwan"}"
+  METRIC="$((METRIC+IDX))"
   # NOTE we may want to disable /proc/sys/net/ipv4/conf/default/rp_filter instead
   #      Verify it by cat /proc/net/netstat | awk '{print $80}'
-  ip route add default via "$GW" dev "$IFACE" metric 65000
+  ip route add default via "$GW" dev "$IFACE" metric "${METRIC}"
   mkdir -p "$BBS/resolv.conf"
   local RESOLV_CONF="$BBS/resolv.conf/${IFACE}.dhcp"
   : > "$RESOLV_CONF"
