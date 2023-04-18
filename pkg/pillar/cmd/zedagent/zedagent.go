@@ -29,6 +29,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/lf-edge/eve/pkg/pillar/utils"
 	"os"
 	"time"
 
@@ -774,7 +775,17 @@ func mainEventLoop(zedagentCtx *zedagentContext, stillRunning *time.Ticker) {
 
 	hwInfoTiker := time.NewTicker(3 * time.Hour)
 
+	goRoutine := utils.GetGoRoutineID()
+	log.Noticef("HEY! Main event loop go routine ID is: %d", goRoutine)
+
 	for {
+		newGoRoutine := utils.GetGoRoutineID()
+		if newGoRoutine != goRoutine {
+			log.Noticef("HEY! Main event loop go routine ID changed from %d to %d",
+				goRoutine, newGoRoutine)
+			goRoutine = newGoRoutine
+		}
+
 		select {
 		case change := <-zedagentCtx.subOnboardStatus.MsgChan():
 			zedagentCtx.subOnboardStatus.ProcessChange(change)

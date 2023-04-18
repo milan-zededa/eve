@@ -1,7 +1,10 @@
 package utils
 
 import (
+	"bytes"
 	"fmt"
+	"runtime"
+	"strconv"
 
 	"github.com/lf-edge/eve/pkg/pillar/pubsub"
 	"github.com/lf-edge/eve/pkg/pillar/types"
@@ -27,4 +30,28 @@ func LookupDatastoreConfig(sub pubsub.Subscription, dsID uuid.UUID) (*types.Data
 	}
 	dst := cfg.(types.DatastoreConfig)
 	return &dst, nil
+}
+
+var (
+	goroutinePrefix = []byte("goroutine ")
+)
+
+func GetGoRoutineID() int {
+	buf := make([]byte, 32)
+	n := runtime.Stack(buf, false)
+	buf = buf[:n]
+	// goroutine 1 [running]: ...
+
+	buf, ok := bytes.CutPrefix(buf, goroutinePrefix)
+	if !ok {
+		return 0
+	}
+
+	i := bytes.IndexByte(buf, ' ')
+	if i < 0 {
+		return 0
+	}
+
+	id, _ := strconv.Atoi(string(buf[:i]))
+	return id
 }
