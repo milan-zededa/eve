@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/dpcreconciler/genericitems"
@@ -23,7 +24,7 @@ type Route struct {
 	AdapterLL string
 }
 
-// Name combines the interface name, route table ID and the destination
+// Name combines the IP version, interface name, route table ID and the destination
 // address to construct a unique route identifier.
 func (r Route) Name() string {
 	var dst string
@@ -32,8 +33,8 @@ func (r Route) Name() string {
 	} else {
 		dst = r.Route.Dst.String()
 	}
-	return fmt.Sprintf("%d/%s/%s",
-		r.Table, r.AdapterIfName, dst)
+	return fmt.Sprintf("%s/%d/%s/%s",
+		r.ipVersion(), r.Table, r.AdapterIfName, dst)
 }
 
 // Label is more human-readable than name.
@@ -44,8 +45,19 @@ func (r Route) Label() string {
 	} else {
 		dst = r.Route.Dst.String()
 	}
-	return fmt.Sprintf("IP route table %d dst %s dev %v via %v",
-		r.Table, dst, r.AdapterLL, r.Gw)
+	return fmt.Sprintf("%s route table %d dst %s dev %v via %v",
+		r.ipVersion(), r.Table, dst, r.AdapterLL, r.Gw)
+}
+
+func (r Route) ipVersion() string {
+	ipVer := "IPv4"
+	if r.Dst != nil && r.Dst.IP.To4() == nil {
+		ipVer = "IPv6"
+	}
+	if r.Gw != nil && r.Gw.To4() == nil {
+		ipVer = "IPv6"
+	}
+	return ipVer
 }
 
 // Type of the item.
