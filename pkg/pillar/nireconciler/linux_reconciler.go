@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/libs/reconciler"
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/conntrack"
 	"github.com/lf-edge/eve/pkg/pillar/iptables"
 	"github.com/lf-edge/eve/pkg/pillar/netmonitor"
 	generic "github.com/lf-edge/eve/pkg/pillar/nireconciler/genericitems"
@@ -23,6 +25,7 @@ import (
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
+	"github.com/vishvananda/netlink"
 )
 
 const (
@@ -436,6 +439,34 @@ func (r *LinuxNIReconciler) reconcile(ctx context.Context) (updates []Reconciler
 		// Detect and collect status updates.
 		if pReconcile.forNI != emptyUUID {
 			niStatus := r.updateNIStatus(pReconcile.forNI, currSG, statusUpdateMap)
+			// Clear UDP flows if any NAT ACL rule has changed.
+			var natV4RuleChanged, natV6RuleChanged bool
+			for _, log := range rs.OperationLog {
+				rule, isRule := log.Item.(iptables.Rule)
+				if isRule && rule.Table == "nat" {
+					if rule.ForIPv6 {
+						natV6RuleChanged = true
+					} else {
+						natV4RuleChanged = true
+					}
+				}
+			}
+			if natV4RuleChanged || natV6RuleChanged {
+				for _, app := range r.apps {
+					for i, vif := range app.vifs {
+						if vif.NI != pReconcile.forNI {
+							continue
+						}
+						acls := app.config.UnderlayNetworkList[i].ACLs
+						if natV4RuleChanged {
+							r.clearUDPFlows(acls, false)
+						}
+						if natV6RuleChanged {
+							r.clearUDPFlows(acls, true)
+						}
+					}
+				}
+			}
 			// Remove NI subgraph if the network instance has been fully un-configured.
 			niInfo := r.nis[pReconcile.forNI]
 			if niInfo == nil || niInfo.deleted {
@@ -545,10 +576,12 @@ func (r *LinuxNIReconciler) updateNIStatus(niID uuid.UUID, currNISG dg.GraphR,
 	if niInfo != nil {
 		brIfName = niInfo.brIfName
 	}
+	brIfIndex, _, _ := r.netMonitor.GetInterfaceIndex(brIfName)
 	niStatus = NIReconcileStatus{
 		NI:              niID,
 		Deleted:         niInfo == nil || niInfo.deleted,
 		BrIfName:        brIfName,
+		BrIfIndex:       brIfIndex,
 		AsyncInProgress: asyncInProgress,
 		FailedItems:     failedItems,
 	}
@@ -613,6 +646,63 @@ func (r *LinuxNIReconciler) updateNIStatus(niID uuid.UUID, currNISG dg.GraphR,
 		}
 	}
 	return niStatus
+}
+
+// This function looks for any UDP port map rules among the ACLs and if so clears
+// any sessions corresponding only to them.
+func (r *LinuxNIReconciler) clearUDPFlows(ACLs []types.ACE, ipv6 bool) {
+	for _, ace := range ACLs {
+		var protocol, port string
+		for _, match := range ace.Matches {
+			switch match.Type {
+			case "protocol":
+				protocol = match.Value
+			case "lport":
+				port = match.Value
+			}
+		}
+		if protocol == "" && port != "" {
+			// malformed rule.
+			continue
+		}
+		// Not interested in non-UDP sessions
+		if protocol != "udp" {
+			continue
+		}
+		for _, action := range ace.Actions {
+			if action.PortMap != true {
+				continue
+			}
+			var family netlink.InetFamily = syscall.AF_INET
+			if ipv6 {
+				family = syscall.AF_INET6
+			}
+			dport, err := strconv.ParseInt(port, 10, 32)
+			if err != nil {
+				r.log.Errorf(
+					"%s: clearUDPFlows: Port number %s cannot be parsed to integer",
+					LogAndErrPrefix, port)
+				continue
+			}
+			targetPort := uint16(action.TargetPort)
+			filter := conntrack.PortMapFilter{
+				Protocol:     17, // UDP
+				ExternalPort: uint16(dport),
+				InternalPort: targetPort,
+			}
+			flowsDeleted, err := netlink.ConntrackDeleteFilter(netlink.ConntrackTable,
+				family, filter)
+			if err != nil {
+				r.log.Errorf(
+					"%s: clearUDPFlows: Failed clearing UDP flows for lport: %v, "+
+						"target port: %v", LogAndErrPrefix, dport, targetPort)
+				continue
+			}
+			r.log.Noticef(
+				"%s: clearUDPFlows: Cleared %v UDP flows for lport: %v, "+
+					"target port: %v", LogAndErrPrefix, flowsDeleted, dport, targetPort)
+		}
+	}
 }
 
 func (r *LinuxNIReconciler) addPendingReconcile(

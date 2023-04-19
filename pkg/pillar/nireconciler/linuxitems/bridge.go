@@ -101,6 +101,16 @@ func (c *BridgeConfigurator) Create(ctx context.Context, item dg.Item) error {
 		c.Log.Error(err)
 		return err
 	}
+	// Disable ICMP redirects.
+	sysctlSetting := fmt.Sprintf("net.ipv4.conf.%s.send_redirects=0", bridge.IfName)
+	args := []string{"-w", sysctlSetting}
+	out, err := base.Exec(c.Log, "sysctl", args...).CombinedOutput()
+	if err != nil {
+		err = fmt.Errorf("failed to disable ICMP redirects for bridge %s, "+
+			"output from sysctl with args %v: %s", bridge.IfName, args, out)
+		c.Log.Error(err)
+		return err
+	}
 	// Assign IP addresses.
 	link, err := netlink.LinkByName(bridge.IfName)
 	if err != nil {

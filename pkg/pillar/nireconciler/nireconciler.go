@@ -102,6 +102,14 @@ type Uplink struct {
 	NTPServers   []net.IP
 }
 
+// Equal compares two uplinks for equality.
+func (u Uplink) Equal(u2 Uplink) bool {
+	return u.LogicalLabel == u2.LogicalLabel &&
+		u.IfName == u2.IfName &&
+		utils.EqualSetsFn(u.DNSServers, u2.DNSServers, utils.EqualIPs) &&
+		utils.EqualSetsFn(u.NTPServers, u2.NTPServers, utils.EqualIPs)
+}
+
 // AppVIF : describes interface created to connect application with network instance.
 // This comes from zedrouter.
 type AppVIF struct {
@@ -171,6 +179,9 @@ type NIReconcileStatus struct {
 	Deleted bool
 	// BrIfName : name of the bridge interface inside the network stack.
 	BrIfName string
+	// BrIfIndex : integer used as a handle for the bridge interface
+	// inside the network stack.
+	BrIfIndex int
 	// AsyncInProgress is true if any async operations are in progress.
 	AsyncInProgress bool
 	// FailedItems : The set of configuration items currently in a failed state.
