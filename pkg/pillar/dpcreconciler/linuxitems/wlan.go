@@ -33,7 +33,7 @@ type WifiConfig struct {
 
 // String describes WifiConfig without revealing any sensitive info.
 func (wc WifiConfig) String() string {
-	return fmt.Sprintf("WifiConfig: {SSID: %s, Key-Scheme: %d, "+
+	return fmt.Sprintf("WifiConfig: {SSID: %s, KeyScheme: %d, "+
 		"Identity: %s, Priority: %d}", wc.SSID, wc.KeyScheme, wc.Identity, wc.Priority)
 }
 

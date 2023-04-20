@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"syscall"
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
@@ -131,12 +130,12 @@ func (c *IPRuleConfigurator) makeNetlinkRule(rule IPRule) *netlink.Rule {
 	r.Mark = rule.Mark
 	r.Mask = rule.Mask
 	r.Priority = rule.Priority
-	r.Family = syscall.AF_INET
+	r.Family = netlink.FAMILY_V4
 	if rule.Src != nil && rule.Src.IP.To4() == nil {
-		r.Family = syscall.AF_INET6
+		r.Family = netlink.FAMILY_V6
 	}
 	if rule.Dst != nil && rule.Dst.IP.To4() == nil {
-		r.Family = syscall.AF_INET6
+		r.Family = netlink.FAMILY_V6
 	}
 	return r
 }

@@ -7,12 +7,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/netmonitor"
 	"github.com/lf-edge/eve/pkg/pillar/nireconciler/genericitems"
 	"github.com/vishvananda/netlink"
+)
+
+var (
+	_, ipv4Any, _ = net.ParseCIDR("0.0.0.0/0")
+	_, ipv6Any, _ = net.ParseCIDR("::/0")
 )
 
 // Route : Network route.
@@ -47,9 +53,9 @@ func (r Route) Name() string {
 		dst = r.Route.Dst.String()
 	}
 	if r.outputIfName() == "" {
-		return fmt.Sprintf("%s/%d/%s", r.ipVersion(), r.Table, dst)
+		return fmt.Sprintf("%s/%d/%s", r.ipVersionStr(), r.Table, dst)
 	}
-	return fmt.Sprintf("%s/%d/%s/%s", r.ipVersion(), r.Table, dst, r.outputIfName())
+	return fmt.Sprintf("%s/%d/%s/%s", r.ipVersionStr(), r.Table, dst, r.outputIfName())
 }
 
 // Label is more human-readable than name.
@@ -62,21 +68,21 @@ func (r Route) Label() string {
 	}
 	if r.outputIfName() == "" {
 		return fmt.Sprintf("%s route table %d dst %s is unreachable",
-			r.ipVersion(), r.Table, dst)
+			r.ipVersionStr(), r.Table, dst)
 	}
 	return fmt.Sprintf("%s route table %d dst %s dev %s via %v",
-		r.ipVersion(), r.Table, dst, r.outputIfName(), r.Gw)
+		r.ipVersionStr(), r.Table, dst, r.outputIfName(), r.Gw)
 }
 
-func (r Route) ipVersion() string {
-	ipVer := "IPv4"
-	if r.Dst != nil && r.Dst.IP.To4() == nil {
-		ipVer = "IPv6"
+func (r Route) ipVersionStr() string {
+	switch r.Family {
+	case netlink.FAMILY_V4:
+		return "IPv4"
+	case netlink.FAMILY_V6:
+		return "IPv6"
+	default:
+		return "IPv?"
 	}
-	if r.Gw != nil && r.Gw.To4() == nil {
-		ipVer = "IPv6"
-	}
-	return ipVer
 }
 
 func (r Route) hasDefaultDst() bool {
@@ -102,7 +108,24 @@ func (r Route) outputIfName() string {
 
 // Type of the item.
 func (r Route) Type() string {
-	return genericitems.RouteTypename
+	if r.Family == netlink.FAMILY_V4 {
+		return genericitems.IPv4RouteTypename
+	}
+	return genericitems.IPv6RouteTypename
+}
+
+// Any destination IP and nil destination IP are treated as the same.
+// However, netlink RouteAdd and RouteDel require a non-nil destination IP.
+func (r Route) normalizedNetlinkRoute() netlink.Route {
+	route := r.Route
+	if route.Dst == nil {
+		if route.Family == netlink.FAMILY_V4 {
+			route.Dst = ipv4Any
+		} else {
+			route.Dst = ipv6Any
+		}
+	}
+	return route
 }
 
 // Equal compares two Route instances.
@@ -111,7 +134,8 @@ func (r Route) Equal(other dg.Item) bool {
 	if !isRoute {
 		return false
 	}
-	return r.Route.Equal(r2.Route) && r.OutputIf == r2.OutputIf
+	return r.normalizedNetlinkRoute().Equal(r2.normalizedNetlinkRoute()) &&
+		r.OutputIf == r2.OutputIf
 }
 
 // External returns false.
@@ -121,8 +145,8 @@ func (r Route) External() bool {
 
 // String describes Route in detail.
 func (r Route) String() string {
-	return fmt.Sprintf("Network route for output interface %s: %s",
-		r.outputIfName(), r.Route.String())
+	return fmt.Sprintf("Network route for output interface '%s' with priority %d: %s",
+		r.outputIfName(), r.Route.Priority, r.Route.String())
 }
 
 // Dependencies lists the output interface as the only dependency.
@@ -205,7 +229,7 @@ func (c *RouteConfigurator) Create(ctx context.Context, item dg.Item) error {
 
 func (c *RouteConfigurator) makeNetlinkRoute(route Route) (*netlink.Route, error) {
 	// Copy, do not change the original.
-	netlinkRoute := route.Route
+	netlinkRoute := route.normalizedNetlinkRoute()
 	if netlinkRoute.LinkIndex == 0 && route.outputIfName() != "" {
 		// Caller has left it to RouteConfigurator to find the interface index.
 		ifIdx, exists, err := c.NetworkMonitor.GetInterfaceIndex(route.outputIfName())

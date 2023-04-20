@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"syscall"
 	"testing"
 	"time"
 
@@ -42,7 +41,7 @@ func initTest(test *testing.T) *GomegaWithT {
 	log := base.NewSourceLogObject(logger, "test", 1234)
 	networkMonitor = &netmonitor.MockNetworkMonitor{
 		Log:    log,
-		MainRT: syscall.RT_TABLE_MAIN,
+		MainRT: unix.RT_TABLE_MAIN,
 	}
 	niReconciler = nirec.NewLinuxNIReconciler(log, logger, networkMonitor, nil,
 		false, false)
@@ -282,12 +281,14 @@ var (
 			IfIndex: 2,
 			Dst:     ipAddressWithPrefix("0.0.0.0/0"),
 			Gw:      ipAddress("192.168.10.1"),
-			Table:   syscall.RT_TABLE_MAIN,
+			Table:   unix.RT_TABLE_MAIN,
 			Data: netlink.Route{
 				LinkIndex: 2,
 				Dst:       nil,
 				Gw:        ipAddress("192.168.10.1"),
-				Table:     syscall.RT_TABLE_MAIN,
+				Table:     unix.RT_TABLE_MAIN,
+				Family:    netlink.FAMILY_V4,
+				Protocol:  unix.RTPROT_DHCP,
 			},
 		},
 	}
@@ -331,12 +332,14 @@ var (
 			IfIndex: 4,
 			Dst:     ipAddressWithPrefix("0.0.0.0/0"),
 			Gw:      ipAddress("172.20.0.1"),
-			Table:   syscall.RT_TABLE_MAIN,
+			Table:   unix.RT_TABLE_MAIN,
 			Data: netlink.Route{
 				LinkIndex: 4,
 				Dst:       nil,
 				Gw:        ipAddress("172.20.0.1"),
-				Table:     syscall.RT_TABLE_MAIN,
+				Table:     unix.RT_TABLE_MAIN,
+				Family:    netlink.FAMILY_V4,
+				Protocol:  unix.RTPROT_DHCP,
 			},
 		},
 	}
@@ -377,12 +380,14 @@ var (
 			IfIndex: 6,
 			Dst:     ipAddressWithPrefix("::/0"),
 			Gw:      ipAddress("2001::1"),
-			Table:   syscall.RT_TABLE_MAIN,
+			Table:   unix.RT_TABLE_MAIN,
 			Data: netlink.Route{
 				LinkIndex: 6,
 				Dst:       ipAddressWithPrefix("::/0"),
 				Gw:        ipAddress("2001::1"),
-				Table:     syscall.RT_TABLE_MAIN,
+				Table:     unix.RT_TABLE_MAIN,
+				Family:    netlink.FAMILY_V4,
+				Protocol:  unix.RTPROT_DHCP,
 			},
 		},
 	}
@@ -928,8 +933,13 @@ func TestSingleLocalNI(test *testing.T) {
 	t := initTest(test)
 	networkMonitor.AddOrUpdateInterface(eth0)
 	networkMonitor.UpdateRoutes(eth0Routes)
-	ctx := reconciler.MockRun(context.Background())
+
+	// Test initial reconciliation.
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	ctx := reconciler.MockRun(context.Background())
+	niReconciler.RunInitialReconcile(ctx)
+	var recUpdate nirec.ReconcilerUpdate
+	t.Consistently(updatesCh).ShouldNot(Receive(&recUpdate))
 
 	// Create local network instance.
 	niStatus, err := niReconciler.AddNI(ctx, ni1Config, ni1Bridge)
@@ -940,7 +950,6 @@ func TestSingleLocalNI(test *testing.T) {
 	t.Expect(niStatus.BrIfName).To(Equal("bn1"))
 	t.Expect(niStatus.FailedItems).To(BeEmpty())
 
-	var recUpdate nirec.ReconcilerUpdate
 	t.Eventually(updatesCh).Should(Receive(&recUpdate))
 	t.Expect(recUpdate.UpdateType).To(Equal(nirec.NIReconcileStatusChanged))
 	t.Expect(recUpdate.NIStatus.Equal(niStatus)).To(BeTrue())
@@ -953,7 +962,7 @@ func TestSingleLocalNI(test *testing.T) {
 	t.Expect(itemIsCreated(dg.Reference(
 		linuxitems.VLANBridge{BridgeIfName: "bn1"}))).To(BeFalse())
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni1UUID.UUID)},
 	))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(
@@ -965,6 +974,8 @@ func TestSingleLocalNI(test *testing.T) {
 		Dst:       nil,
 		Table:     801,
 		Gw:        ipAddress("192.168.10.1"),
+		Family:    netlink.FAMILY_V4,
+		Protocol:  unix.RTPROT_STATIC,
 	}
 	netmonitorDefRoute := netmonitor.Route{
 		IfIndex: 1,
@@ -984,6 +995,8 @@ func TestSingleLocalNI(test *testing.T) {
 		Table:    801,
 		Priority: int(^uint32(0)),
 		Type:     unix.RTN_UNREACHABLE,
+		Family:   netlink.FAMILY_V4,
+		Protocol: unix.RTPROT_STATIC,
 	}
 	netmonitorUnreachV4Route := netmonitor.Route{
 		Dst:   ipSubnet("0.0.0.0/0"),
@@ -997,6 +1010,8 @@ func TestSingleLocalNI(test *testing.T) {
 		Table:    801,
 		Priority: int(^uint32(0)),
 		Type:     unix.RTN_UNREACHABLE,
+		Family:   netlink.FAMILY_V4,
+		Protocol: unix.RTPROT_STATIC,
 	}
 	netmonitorUnreachV6Route := netmonitor.Route{
 		Dst:   ipSubnet("::/0"),
@@ -1030,12 +1045,12 @@ func TestSingleLocalNI(test *testing.T) {
 	intendedPortMapRule1 := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 192.168.10.5 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	intendedPortMapRule2 := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 192.168.10.5 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	t.Expect(itemIsCreated(dg.Reference(intendedPortMapRule1))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(intendedPortMapRule2))).To(BeTrue())
@@ -1059,7 +1074,7 @@ func TestSingleLocalNI(test *testing.T) {
 		t.Expect(appSG).ToNot(BeNil())
 	}
 
-	// Simulate uplink loosing IP address.
+	// Simulate uplink losing IP address.
 	ips := eth0.IPAddrs
 	eth0.IPAddrs = nil
 	networkMonitor.AddOrUpdateInterface(eth0)
@@ -1167,6 +1182,7 @@ func TestIPv4LocalAndSwitchNIs(test *testing.T) {
 	networkMonitor.UpdateRoutes(eth0Routes)
 	ctx := reconciler.MockRun(context.Background())
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	niReconciler.RunInitialReconcile(ctx)
 
 	// Create local network instance.
 	niStatus, err := niReconciler.AddNI(ctx, ni1Config, ni1Bridge)
@@ -1193,8 +1209,10 @@ func TestIPv4LocalAndSwitchNIs(test *testing.T) {
 		"-o eth0 -s 10.10.10.0/24 -j MASQUERADE"))
 	eth0Route := linuxitems.Route{
 		Route: netlink.Route{
-			Table: 801,
-			Dst:   &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Table:    801,
+			Dst:      &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Family:   netlink.FAMILY_V4,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linuxitems.RouteOutIf{
 			UplinkIfName: "eth0",
@@ -1218,7 +1236,7 @@ func TestIPv4LocalAndSwitchNIs(test *testing.T) {
 	t.Expect(itemIsCreated(dg.Reference(
 		linuxitems.VLANBridge{BridgeIfName: "eth1"}))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni2UUID.UUID),
 		}))).To(BeFalse())
 
@@ -1234,7 +1252,7 @@ func TestIPv4LocalAndSwitchNIs(test *testing.T) {
 	niReconciler.ResumeReconcile(ctx)
 
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni2UUID.UUID),
 		}))).To(BeTrue())
 
@@ -1292,12 +1310,12 @@ func TestIPv4LocalAndSwitchNIs(test *testing.T) {
 	ni1PortMapRule1 := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 1 for uplink IP 192.168.10.5 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x2",
+		ChainName: "PREROUTING-nbu1x2",
 	}
 	ni1PortMapRule2 := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 1 for uplink IP 192.168.10.5 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x2",
+		ChainName: "PREROUTING-nbu1x2",
 	}
 	t.Expect(itemIsCreated(dg.Reference(ni1PortMapRule1))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(ni1PortMapRule2))).To(BeTrue())
@@ -1395,6 +1413,7 @@ func TestDisableAllOnesMask(test *testing.T) {
 	networkMonitor.UpdateRoutes(eth0Routes)
 	ctx := reconciler.MockRun(context.Background())
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	niReconciler.RunInitialReconcile(ctx)
 
 	// Create local network instance.
 	_, err := niReconciler.AddNI(ctx, ni1Config, ni1Bridge)
@@ -1432,6 +1451,7 @@ func TestUplinkFailover(test *testing.T) {
 	networkMonitor.UpdateRoutes(routes)
 	ctx := reconciler.MockRun(context.Background())
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	niReconciler.RunInitialReconcile(ctx)
 
 	// Create local network instance.
 	_, err := niReconciler.AddNI(ctx, ni1Config, ni1Bridge)
@@ -1459,22 +1479,22 @@ func TestUplinkFailover(test *testing.T) {
 	eth0PortMapRuleIn := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 192.168.10.5 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	eth0PortMapRuleOut := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 192.168.10.5 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	eth1PortMapRuleIn := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 172.20.0.40 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	eth1PortMapRuleOut := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 4 for uplink IP 172.20.0.40 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x1",
+		ChainName: "PREROUTING-nbu1x1",
 	}
 	t.Expect(itemIsCreated(dg.Reference(eth0PortMapRuleIn))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(eth0PortMapRuleOut))).To(BeTrue())
@@ -1495,8 +1515,10 @@ func TestUplinkFailover(test *testing.T) {
 		"upstreamServers: [8.8.8.8]"))
 	eth0Route := linuxitems.Route{
 		Route: netlink.Route{
-			Table: 801,
-			Dst:   &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Table:    801,
+			Dst:      &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Family:   netlink.FAMILY_V4,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linuxitems.RouteOutIf{
 			UplinkIfName: "eth0",
@@ -1504,8 +1526,10 @@ func TestUplinkFailover(test *testing.T) {
 	}
 	eth1Route := linuxitems.Route{
 		Route: netlink.Route{
-			Table: 801,
-			Dst:   &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Table:    801,
+			Dst:      &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Family:   netlink.FAMILY_V4,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linuxitems.RouteOutIf{
 			UplinkIfName: "eth1",
@@ -1514,7 +1538,7 @@ func TestUplinkFailover(test *testing.T) {
 	t.Expect(itemIsCreated(dg.Reference(eth0Route))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(eth1Route))).To(BeFalse())
 
-	// Simulate the scenario of uplink eth0 loosing connectivity.
+	// Simulate the scenario of uplink eth0 losing connectivity.
 	eth0Uplink := ni1Bridge.Uplink
 	ni1Bridge.Uplink = nirec.Uplink{
 		LogicalLabel: "ethernet1",
@@ -1579,6 +1603,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	networkMonitor.UpdateRoutes(eth2Routes)
 	ctx := reconciler.MockRun(context.Background())
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	niReconciler.RunInitialReconcile(ctx)
 
 	// Create local network instance.
 	niStatus, err := niReconciler.AddNI(ctx, ni3Config, ni3Bridge)
@@ -1610,11 +1635,11 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	t.Expect(recUpdate.NIStatus.Equal(niStatus)).To(BeTrue())
 
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni3UUID.UUID),
 		}))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni4UUID.UUID),
 		}))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(
@@ -1676,6 +1701,8 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 		Dst:       ipAddressWithPrefix("::/0"),
 		Table:     803,
 		Gw:        ipAddress("2001::1"),
+		Family:    netlink.FAMILY_V4,
+		Protocol:  unix.RTPROT_STATIC,
 	}
 	ni3DefRoute := linuxitems.Route{
 		Route: ni3NetlinkDefRoute,
@@ -1696,7 +1723,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 		"ntpServers: [2610:20:6f15:15::27]"))
 	t.Expect(itemDescription(dg.Reference(dnsmasq))).To(ContainSubstring(
 		"staticEntries: [{test-hostname 2001:db8::1} {router 2001::1111:1} {app3 2001::1111:2}]"))
-	httpSrvN3 := genericitems.HttpServer{
+	httpSrvN3 := genericitems.HTTPServer{
 		ServerName: fmt.Sprintf("Metadata-NI-%v", ni3UUID.UUID)}
 	t.Expect(itemDescription(dg.Reference(httpSrvN3))).To(ContainSubstring(
 		"listenIP: 2001::1111:1"))
@@ -1706,7 +1733,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	vif1IPRule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 3",
 		Table:     "mangle",
-		ChainName: "PREROUTING-VIF-nbu1x3-EGRESS",
+		ChainName: "PREROUTING-nbu1x3-OUT",
 		ForIPv6:   true,
 	}
 	t.Expect(itemDescription(dg.Reference(vif1IPRule))).To(ContainSubstring(
@@ -1714,20 +1741,20 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	ni3PortMapRuleIn := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 5 for uplink IP 2001::20 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x3",
+		ChainName: "PREROUTING-nbu1x3",
 		ForIPv6:   true,
 	}
 	ni3PortMapRuleOut := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 5 for uplink IP 2001::20 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-VIF-nbu1x3",
+		ChainName: "PREROUTING-nbu1x3",
 		ForIPv6:   true,
 	}
 	t.Expect(itemIsCreated(dg.Reference(ni3PortMapRuleIn))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(ni3PortMapRuleOut))).To(BeTrue())
 
 	// Check items created in the scope of NI4.
-	httpSrvN4 := genericitems.HttpServer{
+	httpSrvN4 := genericitems.HTTPServer{
 		ServerName: fmt.Sprintf("Metadata-NI-%v", ni4UUID.UUID)}
 	t.Expect(itemDescription(dg.Reference(httpSrvN4))).To(ContainSubstring(
 		"listenIP: 2001::20"))
@@ -1737,7 +1764,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	vif2IPv6Rule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 1",
 		Table:     "mangle",
-		ChainName: "PREROUTING-VIF-nbu2x3-EGRESS",
+		ChainName: "PREROUTING-nbu2x3-OUT",
 		ForIPv6:   true,
 	}
 	t.Expect(itemDescription(dg.Reference(vif2IPv6Rule))).To(ContainSubstring(
@@ -1745,7 +1772,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	vif2IPv4Rule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 2",
 		Table:     "mangle",
-		ChainName: "PREROUTING-VIF-nbu2x3-EGRESS",
+		ChainName: "PREROUTING-nbu2x3-OUT",
 		ForIPv6:   false,
 	}
 	t.Expect(itemDescription(dg.Reference(vif2IPv4Rule))).To(ContainSubstring(
@@ -1779,6 +1806,7 @@ func TestAirGappedLocalAndSwitchNIs(test *testing.T) {
 	networkMonitor.UpdateRoutes(routes)
 	ctx := reconciler.MockRun(context.Background())
 	updatesCh := niReconciler.WatchReconcilerUpdates()
+	niReconciler.RunInitialReconcile(ctx)
 
 	// Create local network instance but make it air-gapped.
 	ni1Uplink := ni1Bridge.Uplink
@@ -1807,8 +1835,10 @@ func TestAirGappedLocalAndSwitchNIs(test *testing.T) {
 	t.Expect(itemIsCreated(dg.Reference(snatRule))).To(BeFalse())
 	eth0Route := linuxitems.Route{
 		Route: netlink.Route{
-			Table: 801,
-			Dst:   &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Table:    801,
+			Dst:      &net.IPNet{IP: net.IP{0x0, 0x0, 0x0, 0x0}, Mask: net.IPMask{0x0, 0x0, 0x0, 0x0}},
+			Family:   netlink.FAMILY_V4,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linuxitems.RouteOutIf{
 			UplinkIfName: "eth0",
@@ -1818,7 +1848,7 @@ func TestAirGappedLocalAndSwitchNIs(test *testing.T) {
 
 	// Metadata server is run even in the air-gapped mode, however.
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni1UUID.UUID),
 		}))).To(BeTrue())
 
@@ -1853,7 +1883,7 @@ func TestAirGappedLocalAndSwitchNIs(test *testing.T) {
 	t.Expect(itemIsCreated(dg.Reference(
 		linuxitems.VLANBridge{BridgeIfName: "bn2"}))).To(BeTrue())
 	t.Expect(itemIsCreated(dg.Reference(
-		genericitems.HttpServer{
+		genericitems.HTTPServer{
 			ServerName: fmt.Sprintf("Metadata-NI-%v", ni2UUID.UUID),
 		}))).To(BeFalse())
 

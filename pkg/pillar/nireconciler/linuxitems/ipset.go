@@ -7,12 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"syscall"
+	"strings"
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	generic "github.com/lf-edge/eve/pkg/pillar/nireconciler/genericitems"
 	"github.com/lf-edge/eve/pkg/pillar/utils"
+	"github.com/vishvananda/netlink"
 )
 
 // IPSet : Linux ipset (https://ipset.netfilter.org/index.html).
@@ -91,24 +92,27 @@ func (c *IPSetConfigurator) Create(ctx context.Context, item dg.Item) error {
 	}
 	var family string
 	switch ipset.AddrFamily {
-	case syscall.AF_INET:
+	case netlink.FAMILY_V4:
 		family = "inet"
-	case syscall.AF_INET6:
+	case netlink.FAMILY_V6:
 		family = "inet6"
 	default:
 		return fmt.Errorf("unsupported ipset address type: %d", ipset.AddrFamily)
 	}
 	args := []string{"create", ipset.SetName, ipset.TypeName, "family", family}
-	if _, err := base.Exec(c.Log, ipsetCmd, args...).CombinedOutput(); err != nil {
-		err = fmt.Errorf("failed to create ipset %+v: %w", ipset, err)
+	if output, err := base.Exec(c.Log, ipsetCmd, args...).CombinedOutput(); err != nil {
+		outputStr := strings.TrimSpace(string(output))
+		err = fmt.Errorf("failed to create ipset %+v: %s (err: %w)",
+			ipset, outputStr, err)
 		c.Log.Error(err)
 		return err
 	}
 	for _, entry := range ipset.Entries {
 		args = []string{"add", ipset.SetName, entry}
-		if _, err := base.Exec(c.Log, ipsetCmd, args...).CombinedOutput(); err != nil {
-			err = fmt.Errorf("failed to add entry %s into ipset %s: %w",
-				entry, ipset.SetName, err)
+		if output, err := base.Exec(c.Log, ipsetCmd, args...).CombinedOutput(); err != nil {
+			outputStr := strings.TrimSpace(string(output))
+			err = fmt.Errorf("failed to add entry %s into ipset %s: %s (err: %w)",
+				entry, ipset.SetName, outputStr, err)
 			c.Log.Error(err)
 			return err
 		}

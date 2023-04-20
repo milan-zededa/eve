@@ -4,9 +4,12 @@
 package genericitems
 
 const (
-	// RouteTypename : typename for network route.
+	// IPv4RouteTypename : typename for IPv4 route.
 	// Not implemented in genericitems (implementation specific to network stack).
-	RouteTypename = "Route"
+	IPv4RouteTypename = "IPv4Route"
+	// IPv6RouteTypename : typename for IPv6 route.
+	// Not implemented in genericitems (implementation specific to network stack).
+	IPv6RouteTypename = "IPv6Route"
 	// VIFTypename : typename for VIF.
 	VIFTypename = "VIF"
 	// UplinkTypename : typename for uplink interface.

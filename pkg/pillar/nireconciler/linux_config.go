@@ -235,11 +235,6 @@ const (
 	metadataSrvIP = "169.254.169.254"
 )
 
-var (
-	_, ipv4Any, _ = net.ParseCIDR("0.0.0.0/0")
-	_, ipv6Any, _ = net.ParseCIDR("::/0")
-)
-
 // NIToSGName returns the name of the subgraph encapsulating the entire configuration
 // of the given network instance.
 // There is one such subgraph for every network instance.
@@ -344,13 +339,13 @@ func (r *LinuxNIReconciler) getIntendedGlobalIPSets() dg.Graph {
 		SetName:    localIPv4Ipset,
 		TypeName:   "hash:net",
 		Entries:    []string{"224.0.0.0/4", "0.0.0.0", "255.255.255.255"},
-		AddrFamily: syscall.AF_INET,
+		AddrFamily: netlink.FAMILY_V4,
 	}, nil)
 	intendedIPSets.PutItem(linux.IPSet{
 		SetName:    localIPv6Ipset,
 		TypeName:   "hash:net",
-		Entries:    []string{"fe80::/10, ff02::/16"},
-		AddrFamily: syscall.AF_INET6,
+		Entries:    []string{"fe80::/10", "ff02::/16"},
+		AddrFamily: netlink.FAMILY_V6,
 	}, nil)
 	// Collect all hostnames referenced by any ACLs across all VIFs.
 	// A given hostname will have one ipset used by all dnsmasq instances,
@@ -376,12 +371,12 @@ func (r *LinuxNIReconciler) getIntendedGlobalIPSets() dg.Graph {
 		intendedIPSets.PutItem(linux.IPSet{
 			SetName:    ipsetNamePrefixV4 + ipsetBasename,
 			TypeName:   "hash:ip",
-			AddrFamily: syscall.AF_INET,
+			AddrFamily: netlink.FAMILY_V4,
 		}, nil)
 		intendedIPSets.PutItem(linux.IPSet{
 			SetName:    ipsetNamePrefixV6 + ipsetBasename,
 			TypeName:   "hash:ip",
-			AddrFamily: syscall.AF_INET6,
+			AddrFamily: netlink.FAMILY_V6,
 		}, nil)
 	}
 	return intendedIPSets
@@ -400,9 +395,10 @@ func (r *LinuxNIReconciler) getIntendedBlackholeCfg() dg.Graph {
 	intendedBlackholeCfg.PutItem(linux.Route{
 		// ip route add default dev blackhole scope global table 400
 		Route: netlink.Route{
-			Dst:   ipv4Any,
-			Table: blackholeRT,
-			Scope: netlink.SCOPE_UNIVERSE,
+			Table:    blackholeRT,
+			Family:   netlink.FAMILY_V4,
+			Scope:    netlink.SCOPE_UNIVERSE,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linux.RouteOutIf{
 			DummyIfName: blackholeIfName,
@@ -411,9 +407,10 @@ func (r *LinuxNIReconciler) getIntendedBlackholeCfg() dg.Graph {
 	intendedBlackholeCfg.PutItem(linux.Route{
 		// ip -6 route add default dev blackhole scope global table 400
 		Route: netlink.Route{
-			Dst:   ipv6Any,
-			Table: blackholeRT,
-			Scope: netlink.SCOPE_UNIVERSE,
+			Table:    blackholeRT,
+			Family:   netlink.FAMILY_V6,
+			Scope:    netlink.SCOPE_UNIVERSE,
+			Protocol: unix.RTPROT_STATIC,
 		},
 		OutputIf: linux.RouteOutIf{
 			DummyIfName: blackholeIfName,
@@ -451,7 +448,7 @@ func (r *LinuxNIReconciler) getIntendedNICfg(niID uuid.UUID) dg.Graph {
 		Description: "Network Instance configuration",
 	}
 	intendedCfg := dg.New(graphArgs)
-	if r.nis[niID].deleted {
+	if r.nis[niID] == nil || r.nis[niID].deleted {
 		return intendedCfg
 	}
 	intendedCfg.PutSubGraph(r.getIntendedNIL2Cfg(niID))
@@ -567,7 +564,7 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		return intendedL3Cfg
 	}
 	// Copy routes relevant for this NI from the main routing table into per-NI RT.
-	srcTable := syscall.RT_TABLE_MAIN
+	srcTable := unix.RT_TABLE_MAIN
 	dstTable := devicenetwork.NIBaseRTIndex + ni.bridge.BrNum
 	outIfs := make(map[int]linux.RouteOutIf) // key: ifIndex
 	ifIndex, found, err := r.netMonitor.GetInterfaceIndex(ni.brIfName)
@@ -616,6 +613,7 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 			if rtCopy.Flags != 0 {
 				rtCopy.Flags = 0
 			}
+			rtCopy.Protocol = unix.RTPROT_STATIC
 			intendedL3Cfg.PutItem(linux.Route{
 				Route:    rtCopy,
 				OutputIf: rtOutIf,
@@ -626,18 +624,20 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 	// Add unreachable route with the lowest possible priority.
 	intendedL3Cfg.PutItem(linux.Route{
 		Route: netlink.Route{
-			Dst:      ipv4Any,
 			Priority: int(^uint32(0)),
 			Table:    dstTable,
+			Family:   netlink.FAMILY_V4,
 			Type:     unix.RTN_UNREACHABLE,
+			Protocol: unix.RTPROT_STATIC,
 		},
 	}, nil)
 	intendedL3Cfg.PutItem(linux.Route{
 		Route: netlink.Route{
-			Dst:      ipv6Any,
 			Priority: int(^uint32(0)),
 			Table:    dstTable,
+			Family:   netlink.FAMILY_V6,
 			Type:     unix.RTN_UNREACHABLE,
+			Protocol: unix.RTPROT_STATIC,
 		},
 	}, nil)
 	// Add IPRules to select routing table for traffic coming in or out to/from
@@ -739,7 +739,7 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 				ni.config.DisplayName),
 		})
 	}
-	items = append(items, generic.HttpServer{
+	items = append(items, generic.HTTPServer{
 		ServerName: fmt.Sprintf("Metadata-NI-%v", niID),
 		ListenIP:   bridgeIP.IP,
 		ListenIf: generic.NetworkIf{
@@ -989,12 +989,12 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 	ipv4Eids := linux.IPSet{
 		SetName:    eidsIpsetName(vif, false),
 		TypeName:   "hash:ip",
-		AddrFamily: syscall.AF_INET,
+		AddrFamily: netlink.FAMILY_V4,
 	}
 	ipv6Eids := linux.IPSet{
 		SetName:    eidsIpsetName(vif, true),
 		TypeName:   "hash:ip",
-		AddrFamily: syscall.AF_INET6,
+		AddrFamily: netlink.FAMILY_V6,
 	}
 	for _, ip := range ips {
 		if ip.To4() == nil {

@@ -125,7 +125,7 @@ dhcp-option=option:ntp-server,94.130.35.4,94.16.114.254
 dhcp-option=option:netmask,255.255.255.255
 dhcp-option=option:router,192.168.1.1
 dhcp-option=option:classless-static-route,192.168.1.1/32,0.0.0.0,0.0.0.0/0,192.168.1.1,10.0.0.0/24,192.168.1.1
-dhcp-range=10.0.0.2,10.0.0.123,255.255.255.255,60m
+dhcp-range=10.0.0.2,10.0.0.123,255.255.255.0,60m
 `
 	if configExpected != config {
 		t.Fatalf("expected '%s', but got '%s'", configExpected, config)
@@ -139,7 +139,7 @@ func TestCreateDnsmasqConfigWithoutDhcpRangeEnd(t *testing.T) {
 	dnsmasq.DHCPServer.IPRange.ToIP = nil
 	config := createDnsmasqConfig(dnsmasq)
 
-	dhcpRangeRex := "(?m)^dhcp-range=10.0.0.2,static,255.255.255.255,60m$"
+	dhcpRangeRex := "(?m)^dhcp-range=10.0.0.2,static,255.255.255.0,60m$"
 	ok, err := regexp.MatchString(dhcpRangeRex, config)
 	if err != nil {
 		panic(err)

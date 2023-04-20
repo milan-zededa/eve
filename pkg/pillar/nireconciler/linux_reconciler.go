@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
@@ -26,6 +25,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -258,7 +258,7 @@ func (r *LinuxNIReconciler) runWatcher(netEvents <-chan netmonitor.Event) {
 			var needReconcile bool
 			switch ev := event.(type) {
 			case netmonitor.RouteChange:
-				if ev.Table == syscall.RT_TABLE_MAIN {
+				if ev.Table == unix.RT_TABLE_MAIN {
 					attrs, err := r.netMonitor.GetInterfaceAttrs(ev.IfIndex)
 					if err != nil {
 						r.log.Warnf("%s: failed to get attributes for ifindex %d "+
@@ -673,9 +673,9 @@ func (r *LinuxNIReconciler) clearUDPFlows(ACLs []types.ACE, ipv6 bool) {
 			if action.PortMap != true {
 				continue
 			}
-			var family netlink.InetFamily = syscall.AF_INET
+			var family netlink.InetFamily = netlink.FAMILY_V4
 			if ipv6 {
-				family = syscall.AF_INET6
+				family = netlink.FAMILY_V6
 			}
 			dport, err := strconv.ParseInt(port, 10, 32)
 			if err != nil {
@@ -727,6 +727,18 @@ func (r *LinuxNIReconciler) addPendingReconcile(
 		pReconcile.reasons = append(pReconcile.reasons, reason)
 	}
 	r.pendingReconcile[sgName] = pReconcile
+}
+
+// RunInitialReconcile is called once by zedrouter at startup before any NI
+// or Application connection is created.
+// It is expected to apply the initial configuration of the network stack.
+func (r *LinuxNIReconciler) RunInitialReconcile(ctx context.Context) {
+	contWatcher := r.pauseWatcher()
+	defer contWatcher()
+	// Just reconcile the global configuration (primarily for BlackHole config).
+	r.addPendingReconcile(true, emptyUUID, "initial reconciliation")
+	updates := r.reconcile(ctx)
+	r.publishReconcilerUpdates(updates...)
 }
 
 // ResumeReconcile : resume reconciliation to follow-up on completed async operations

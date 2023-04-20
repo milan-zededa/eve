@@ -73,17 +73,19 @@ func appChain(chain string) string {
 }
 
 func vifChain(chain string, vif vifInfo) string {
-	return chain + "-VIF-" + vif.hostIfName
+	return chain + "-" + vif.hostIfName
 }
 
 // Ingress = traffic entering application.
+// Note that chain name is limited to 28 characters.
 func ingressVifChain(chain string, vif vifInfo) string {
-	return chain + "-VIF-" + vif.hostIfName + "-INGRESS"
+	return chain + "-" + vif.hostIfName + "-IN"
 }
 
 // Egress = traffic exiting application.
+// Note that chain name is limited to 28 characters.
 func egressVifChain(chain string, vif vifInfo) string {
-	return chain + "-VIF-" + vif.hostIfName + "-EGRESS"
+	return chain + "-" + vif.hostIfName + "-OUT"
 }
 
 func matchVifIfName(vif vifInfo) string {
@@ -1192,7 +1194,7 @@ func getMarkingChainCfg(chainName string, ipv6 bool, markStr string) (items []dg
 		{
 			RuleLabel:  "Apply mark",
 			Target:     "MARK",
-			TargetOpts: []string{"--set-mark"},
+			TargetOpts: []string{"--set-mark", markStr},
 		},
 		{
 			RuleLabel:  "Restore new mark",

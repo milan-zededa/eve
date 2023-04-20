@@ -100,6 +100,11 @@ func (z *zedrouter) handleDNSImpl(ctxArg interface{}, key string,
 		cmp.Diff(z.deviceNetworkStatus, status))
 	z.deviceNetworkStatus = &status
 
+	if !z.initReconcileDone {
+		z.niReconciler.RunInitialReconcile(z.runCtx)
+		z.initReconcileDone = true
+	}
+
 	// Update uplink config for network instances.
 	// Also handle (dis)appearance of uplink interfaces.
 	// Note that even if uplink interface disappears, we do not revert activated NI.
@@ -141,6 +146,11 @@ func (z *zedrouter) handleNetworkInstanceCreate(ctxArg interface{}, key string,
 	config := configArg.(types.NetworkInstanceConfig)
 	z.log.Functionf("handleNetworkInstanceCreate: (UUID: %s, name:%s)",
 		key, config.DisplayName)
+
+	if !z.initReconcileDone {
+		z.niReconciler.RunInitialReconcile(z.runCtx)
+		z.initReconcileDone = true
+	}
 
 	status := types.NetworkInstanceStatus{
 		NetworkInstanceConfig: config,
@@ -405,6 +415,11 @@ func (z *zedrouter) handleAppNetworkCreate(ctxArg interface{}, key string,
 	z.log.Functionf("handleAppNetworkCreate(%v) for %s",
 		config.UUIDandVersion, config.DisplayName)
 
+	if !z.initReconcileDone {
+		z.niReconciler.RunInitialReconcile(z.runCtx)
+		z.initReconcileDone = true
+	}
+
 	// If this is the first time, update the timer for GC of allocated
 	// app and bridge numbers.
 	if z.receivedConfigTime.IsZero() {
@@ -543,7 +558,7 @@ func (z *zedrouter) handleAppNetworkDelete(ctxArg interface{}, key string,
 		return
 	}
 
-	// Inactivate app network if it is currently activated.
+	// Deactivate app network if it is currently activated.
 	if status.Activated {
 		status.PendingDelete = true
 		z.publishAppNetworkStatus(status)

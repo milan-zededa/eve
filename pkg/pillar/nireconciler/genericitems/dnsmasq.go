@@ -564,13 +564,14 @@ func (c *DnsmasqConfigurator) CreateDnsmasqConfig(buffer io.Writer, dnsmasq Dnsm
 	subnet := dnsmasq.DHCPServer.Subnet
 	if subnet != nil {
 		ipv4Netmask = net.IP(subnet.Mask).String()
+		altIPv4Netmask := ipv4Netmask
 		if router != "" && dnsmasq.DHCPServer.AllOnesNetmask {
 			// Network prefix "255.255.255.255" will force packets to go through
 			// dom0 virtual router that makes the packets pass through ACLs and flow log.
-			ipv4Netmask = "255.255.255.255"
+			altIPv4Netmask = "255.255.255.255"
 		}
 		if _, err := io.WriteString(buffer,
-			fmt.Sprintf("dhcp-option=option:netmask,%s\n", ipv4Netmask)); err != nil {
+			fmt.Sprintf("dhcp-option=option:netmask,%s\n", altIPv4Netmask)); err != nil {
 			return writeErr(err)
 		}
 	}

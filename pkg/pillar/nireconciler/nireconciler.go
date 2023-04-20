@@ -29,6 +29,11 @@ const LogAndErrPrefix = "NI Reconciler"
 // and application interfaces into the corresponding low-level network configuration
 // of the target network stack and applies it using the Reconciler (see libs/reconciler).
 type NIReconciler interface {
+	// RunInitialReconcile is called once by zedrouter at startup before any NI
+	// or Application connection is created.
+	// It is expected to apply the initial configuration of the network stack.
+	RunInitialReconcile(ctx context.Context)
+
 	// ResumeReconcile should be called whenever ReconcilerUpdate of UpdateType
 	// AsyncOpDone or CurrentStateChanged is received from the reconciler
 	// (via channel returned by WatchReconcilerUpdates).

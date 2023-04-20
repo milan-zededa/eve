@@ -38,6 +38,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/cipher"
+	"github.com/lf-edge/eve/pkg/pillar/devicenetwork"
 	"github.com/lf-edge/eve/pkg/pillar/flextimer"
 	"github.com/lf-edge/eve/pkg/pillar/netmonitor"
 	"github.com/lf-edge/eve/pkg/pillar/nireconciler"
@@ -87,6 +88,7 @@ type zedrouter struct {
 	deviceNetworkStatus *types.DeviceNetworkStatus
 	subGlobalConfig     pubsub.Subscription
 	gcInitialized       bool
+	initReconcileDone   bool
 
 	// Replaceable components
 	// (different implementations for different network stacks)
@@ -202,16 +204,12 @@ func (z *zedrouter) init() (err error) {
 	gcp := *types.DefaultConfigItemValueMap()
 	z.appContainerStatsInterval = gcp.GlobalValueInt(types.AppContainerStatsInterval)
 
-	if _, err = os.Stat(runDirname); err != nil {
-		z.log.Functionf("Create directory %s", runDirname)
-		if err := os.Mkdir(runDirname, 0755); err != nil {
-			return err
-		}
-	} else {
-		// dnsmasq needs to read as nobody
-		if err := os.Chmod(runDirname, 0755); err != nil {
-			return err
-		}
+	if err = z.ensureDir(runDirname); err != nil {
+		return err
+	}
+	// Must be done before calling nistate.NewLinuxCollector.
+	if err = z.ensureDir(devicenetwork.DnsmasqLeaseDir); err != nil {
+		return err
 	}
 
 	if err = z.initPublications(); err != nil {
@@ -858,12 +856,13 @@ func (z *zedrouter) processAppConnReconcileStatus(
 		for itemRef, itemErr := range vif.FailedItems {
 			failedItems = append(failedItems, fmt.Sprintf("%v (%v)", itemRef, itemErr))
 		}
-		for _, vifStatus := range appNetStatus.UnderlayNetworkList {
-			if vifStatus.Name != vif.NetAdapterName {
+		for i := range appNetStatus.UnderlayNetworkList {
+			ulStatus := &appNetStatus.UnderlayNetworkList[i]
+			if ulStatus.Name != vif.NetAdapterName {
 				continue
 			}
-			if vifStatus.Vif != vif.HostIfName {
-				vifStatus.Vif = vif.HostIfName
+			if ulStatus.Vif != vif.HostIfName {
+				ulStatus.Vif = vif.HostIfName
 				changed = true
 			}
 		}
@@ -889,6 +888,21 @@ func (z *zedrouter) processAppConnReconcileStatus(
 		}
 	}
 	return changed
+}
+
+func (z *zedrouter) ensureDir(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		z.log.Functionf("Create directory %s", runDirname)
+		if err := os.Mkdir(path, 0755); err != nil {
+			return err
+		}
+	} else {
+		// dnsmasq needs to read as nobody
+		if err := os.Chmod(path, 0755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // If we have an NetworkInstanceConfig process it first

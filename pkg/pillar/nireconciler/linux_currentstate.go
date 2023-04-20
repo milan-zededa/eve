@@ -218,7 +218,8 @@ func (r *LinuxNIReconciler) updateCurrentNIRoutes(niID uuid.UUID) (changed bool)
 	iter := l3SG.Items(false)
 	for iter.Next() {
 		item, _ := iter.Item()
-		if item.Type() == generic.RouteTypename {
+		if item.Type() == generic.IPv4RouteTypename ||
+			item.Type() == generic.IPv6RouteTypename {
 			prevRoutes[dg.Reference(item)] = item
 		}
 	}

@@ -23,8 +23,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// HttpServer : HTTP server.
-type HttpServer struct {
+// HTTPServer : HTTP server.
+type HTTPServer struct {
 	// ServerName : logical name for the HTTP server.
 	ServerName string
 	// ListenIP : IP address on which the server should listen.
@@ -38,28 +38,28 @@ type HttpServer struct {
 }
 
 // Name returns the logical label assigned to the HTTP server.
-func (s HttpServer) Name() string {
+func (s HTTPServer) Name() string {
 	return s.ServerName
 }
 
 // Label for the HTTP server.
-func (s HttpServer) Label() string {
+func (s HTTPServer) Label() string {
 	return s.ServerName + " (HTTP server)"
 }
 
 // Type of the item.
-func (s HttpServer) Type() string {
+func (s HTTPServer) Type() string {
 	return HTTPServerTypename
 }
 
-// Equal compares two HttpServer instances
+// Equal compares two HTTPServer instances
 // However, only HTTP server addresses are compared, skipping Handler attributes
 // This is because:
 //   - not possible to compare (interface)
-//   - HttpServerConfigurator only cares about starting/stopping the HTTP server
+//   - HTTPServerConfigurator only cares about starting/stopping the HTTP server
 //     and the handlers can freely change without having to restart the server.
-func (s HttpServer) Equal(other dg.Item) bool {
-	s2 := other.(HttpServer)
+func (s HTTPServer) Equal(other dg.Item) bool {
+	s2 := other.(HTTPServer)
 	return s.ServerName == s2.ServerName &&
 		utils.EqualIPs(s.ListenIP, s2.ListenIP) &&
 		s.ListenIf == s2.ListenIf &&
@@ -67,20 +67,20 @@ func (s HttpServer) Equal(other dg.Item) bool {
 }
 
 // External returns false.
-func (s HttpServer) External() bool {
+func (s HTTPServer) External() bool {
 	return false
 }
 
 // String describes the HTTP server.
-func (s HttpServer) String() string {
-	return fmt.Sprintf("HttpServer: {serverName: %s, listenIP: %s, "+
+func (s HTTPServer) String() string {
+	return fmt.Sprintf("HTTPServer: {serverName: %s, listenIP: %s, "+
 		"listenIf: %s, port: %d}", s.ServerName, s.ListenIP, s.ListenIf.IfName, s.Port)
 }
 
 // Dependencies returns the interface on which the HTTP server listens
 // as the only dependency. It is assumed that if the interface is created,
 // it has ListenIP assigned.
-func (s HttpServer) Dependencies() (deps []dg.Dependency) {
+func (s HTTPServer) Dependencies() (deps []dg.Dependency) {
 	deps = append(deps, dg.Dependency{
 		RequiredItem: s.ListenIf.ItemRef,
 		Description:  "interface on which the HTTP server listens must exist",
@@ -88,9 +88,9 @@ func (s HttpServer) Dependencies() (deps []dg.Dependency) {
 	return deps
 }
 
-// HttpServerConfigurator implements Configurator interface (libs/reconciler)
-// for HttpServer.
-type HttpServerConfigurator struct {
+// HTTPServerConfigurator implements Configurator interface (libs/reconciler)
+// for HTTPServer.
+type HTTPServerConfigurator struct {
 	Log         *base.LogObject
 	Logger      *logrus.Logger
 	httpServers map[string]httpSrvGoRoutine // key: ServerName
@@ -106,10 +106,10 @@ type httpSrvGoRoutine struct {
 // Create executes in the background and is done (from the Reconciler point of view)
 // once net.Listen succeeds - however the same Go routine is used to run the HTTP server
 // (and is stopped only later by Delete()).
-func (c *HttpServerConfigurator) Create(ctx context.Context, item dg.Item) error {
-	httpServer, isHttpServer := item.(HttpServer)
-	if !isHttpServer {
-		return fmt.Errorf("invalid item type %T, expected HttpServer", item)
+func (c *HTTPServerConfigurator) Create(ctx context.Context, item dg.Item) error {
+	httpServer, isHTTPServer := item.(HTTPServer)
+	if !isHTTPServer {
+		return fmt.Errorf("invalid item type %T, expected HTTPServer", item)
 	}
 	listenDoneFn := reconciler.ContinueInBackground(ctx)
 	serveDoneCh := make(chan error, 1)
@@ -132,15 +132,15 @@ func (c *HttpServerConfigurator) Create(ctx context.Context, item dg.Item) error
 }
 
 // Modify is not implemented.
-func (c *HttpServerConfigurator) Modify(ctx context.Context, oldItem, newItem dg.Item) (err error) {
+func (c *HTTPServerConfigurator) Modify(ctx context.Context, oldItem, newItem dg.Item) (err error) {
 	return errors.New("not implemented")
 }
 
 // Delete stops HTTP server.
-func (c *HttpServerConfigurator) Delete(ctx context.Context, item dg.Item) error {
-	httpServer, isHttpServer := item.(HttpServer)
-	if !isHttpServer {
-		return fmt.Errorf("invalid item type %T, expected HttpServer", item)
+func (c *HTTPServerConfigurator) Delete(ctx context.Context, item dg.Item) error {
+	httpServer, isHTTPServer := item.(HTTPServer)
+	if !isHTTPServer {
+		return fmt.Errorf("invalid item type %T, expected HTTPServer", item)
 	}
 	goRoutine, isRunning := c.httpServers[httpServer.ServerName]
 	if !isRunning {
@@ -160,11 +160,11 @@ func (c *HttpServerConfigurator) Delete(ctx context.Context, item dg.Item) error
 }
 
 // NeedsRecreate always returns true - Modify is not implemented.
-func (c *HttpServerConfigurator) NeedsRecreate(oldItem, newItem dg.Item) (recreate bool) {
+func (c *HTTPServerConfigurator) NeedsRecreate(oldItem, newItem dg.Item) (recreate bool) {
 	return true
 }
 
-func (c *HttpServerConfigurator) runServer(ctx context.Context, srvName string,
+func (c *HTTPServerConfigurator) runServer(ctx context.Context, srvName string,
 	handler http.Handler, listenIP net.IP, listenDoneFn, serveDoneFn func(error)) {
 	w := c.Logger.Writer()
 	defer w.Close()
@@ -179,7 +179,7 @@ func (c *HttpServerConfigurator) runServer(ctx context.Context, srvName string,
 	srv.SetKeepAlivesEnabled(false)
 
 	var listener net.Listener
-	logPrefix := fmt.Sprintf("HttpServerConfigurator (%s)", srvName)
+	logPrefix := fmt.Sprintf("HTTPServerConfigurator (%s)", srvName)
 
 	// Try with sleep in case the listener isn't yet gone from the kernel
 	// (the golang net/http on Linux seems to sometimes have it remain
@@ -228,7 +228,7 @@ func (c *HttpServerConfigurator) runServer(ctx context.Context, srvName string,
 	}
 	c.Log.Noticef("%s: Got listener for %s after %v",
 		logPrefix, srv.Addr, time.Since(startListen))
-	// Create(HttpServer) is done.
+	// Create(HTTPServer) is done.
 	listenDoneFn(nil)
 
 	// Use a separate Go routine to shut down the server when requested
@@ -295,7 +295,7 @@ func (c *HttpServerConfigurator) runServer(ctx context.Context, srvName string,
 // the Accept call
 // Normally when this is called we get a "connection refused" since the
 // listener should have closed.
-func (c *HttpServerConfigurator) unblockAccept(addr string, where string) {
+func (c *HTTPServerConfigurator) unblockAccept(addr string, where string) {
 	// Just want to send the SYN to unblock
 	d := net.Dialer{Timeout: 100 * time.Millisecond}
 	conn, err := d.Dial("tcp", addr)
@@ -319,7 +319,7 @@ func (c *HttpServerConfigurator) unblockAccept(addr string, where string) {
 }
 
 // getConnStats is used to collect some debug output from netstat.
-func (c *HttpServerConfigurator) getConnStats(match string) string {
+func (c *HTTPServerConfigurator) getConnStats(match string) string {
 	cmd := "netstat -antwp | grep " + match
 	output, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {

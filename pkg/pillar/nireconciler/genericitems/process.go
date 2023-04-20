@@ -28,8 +28,10 @@ func startProcess(ctx context.Context, log *base.LogObject, cmd string, args []s
 		// We can therefore start the command as a foreground process.
 		out, err := execCmd.CombinedOutput()
 		if err != nil {
+			outStr := strings.TrimSpace(string(out))
+			outStr = strings.ReplaceAll(outStr, "\n", "; ")
 			err = fmt.Errorf("failed to start command %s (args: %v): %w, output: %s",
-				cmd, args, err, out)
+				cmd, args, err, outStr)
 			log.Error(err)
 			return err
 		}

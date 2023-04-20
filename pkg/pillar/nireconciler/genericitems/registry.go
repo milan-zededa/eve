@@ -18,7 +18,7 @@ func RegisterItems(log *base.LogObject, logger *logrus.Logger,
 	}
 	configurators := []configurator{
 		{c: &DnsmasqConfigurator{Log: log, Logger: logger}, t: DnsmasqTypename},
-		{c: &HttpServerConfigurator{Log: log, Logger: logger}, t: HTTPServerTypename},
+		{c: &HTTPServerConfigurator{Log: log, Logger: logger}, t: HTTPServerTypename},
 		{c: &RadvdConfigurator{Log: log}, t: RadvdTypename},
 	}
 	for _, configurator := range configurators {
