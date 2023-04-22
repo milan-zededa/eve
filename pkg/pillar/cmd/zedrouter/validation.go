@@ -10,7 +10,6 @@ import (
 
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	uuid "github.com/satori/go.uuid"
-	log "github.com/sirupsen/logrus"
 )
 
 func (z *zedrouter) doNetworkInstanceSanityCheck(
@@ -132,8 +131,7 @@ func (z *zedrouter) doNetworkInstanceGatewaySanityCheck(
 	return nil
 }
 
-func (z *zedrouter) validateAppNetworkConfig(appNetConfig types.AppNetworkConfig,
-	appNetStatus *types.AppNetworkStatus) error {
+func (z *zedrouter) validateAppNetworkConfig(appNetConfig types.AppNetworkConfig) error {
 	z.log.Functionf("AppNetwork(%s), check for duplicate port map acls",
 		appNetConfig.DisplayName)
 	// For App Networks, check for common port map rules
@@ -142,10 +140,7 @@ func (z *zedrouter) validateAppNetworkConfig(appNetConfig types.AppNetworkConfig
 		return nil
 	}
 	if z.containsHangingACLPortMapRule(ulCfgList1) {
-		err := fmt.Errorf("network with no uplink, has portmap")
-		z.log.Error(err)
-		z.addAppNetworkError(appNetStatus, "underlayACL", err)
-		return err
+		return fmt.Errorf("network with no uplink, has portmap")
 	}
 	sub := z.subAppNetworkConfig
 	items := sub.GetAll()
@@ -165,67 +160,27 @@ func (z *zedrouter) validateAppNetworkConfig(appNetConfig types.AppNetworkConfig
 		if appNetStatus2.HasError() || !appNetStatus2.Activated {
 			continue
 		}
-		if z.checkForPortMapOverlap(appNetStatus, ulCfgList1, ulCfgList2) {
-			err := fmt.Errorf("app %s and %s have duplicate portmaps",
-				appNetStatus.DisplayName, appNetStatus2.DisplayName)
-			z.log.Error(err.Error())
-			z.addAppNetworkError(appNetStatus, "underlayACL", err)
-			return err
+		if z.checkForPortMapOverlap(ulCfgList1, ulCfgList2) {
+			return fmt.Errorf("app %s and %s have duplicate portmaps",
+				appNetConfig.DisplayName, appNetStatus2.DisplayName)
 		}
 	}
 	return nil
 }
 
 func (z *zedrouter) validateAppNetworkConfigForModify(
-	config types.AppNetworkConfig, oldConfig types.AppNetworkConfig,
-	status *types.AppNetworkStatus) error {
+	newConfig types.AppNetworkConfig, oldConfig types.AppNetworkConfig) error {
 	// XXX What about changing the number of interfaces as part of an inactive/active
 	// transition?
 	// XXX We could allow the addition of interfaces if the domU would find out through
 	// some hotplug event.
 	// But deletion is hard.
 	// For now don't allow any adds or deletes.
-	if len(config.UnderlayNetworkList) != len(oldConfig.UnderlayNetworkList) {
-		err := fmt.Errorf("changing number of underlays (for %s) is unsupported",
-			config.UUIDandVersion)
-		log.Error(err)
-		z.addAppNetworkError(status, "handleModify", err)
-		return err
+	if len(newConfig.UnderlayNetworkList) != len(oldConfig.UnderlayNetworkList) {
+		return fmt.Errorf("changing number of underlays (for %s) is unsupported",
+			newConfig.UUIDandVersion)
 	}
-	// Wait for all network instances to arrive if they have not already.
-	if status.AwaitNetworkInstance {
-		err := fmt.Errorf("still waiting for all network instances to arrive for %s",
-			config.UUIDandVersion)
-		log.Error(err)
-		// We intentionally do not addAppNetworkError here, but we return the error.
-		return err
-	}
-	for i := range config.UnderlayNetworkList {
-		ulConfig := &config.UnderlayNetworkList[i]
-		netconfig := z.lookupNetworkInstanceConfig(ulConfig.Network.String())
-		if netconfig == nil {
-			err := fmt.Errorf("no Network Instance config for %s",
-				ulConfig.Network.String())
-			z.addAppNetworkError(status, "lookupNetworkInstanceConfig", err)
-			return err
-		}
-		netstatus := z.lookupNetworkInstanceStatus(ulConfig.Network.String())
-		if netstatus == nil {
-			// We had a netconfig but no status!
-			err := fmt.Errorf("no Network Instance status for %s",
-				ulConfig.Network.String())
-			z.addAppNetworkError(status, "lookupNetworkInstanceStatus", err)
-			return err
-		}
-	}
-	if err := z.validateAppNetworkConfig(config, status); err != nil {
-		z.publishAppNetworkStatus(status)
-		log.Errorf("validation of modified AppNetworkConfig failed for %s: %v",
-			config.DisplayName, err)
-		// addAppNetworkError has already been done
-		return err
-	}
-	return nil
+	return z.validateAppNetworkConfig(newConfig)
 }
 
 func (z *zedrouter) checkNetworkReferencesFromApp(config types.AppNetworkConfig) (
@@ -288,26 +243,18 @@ func (z *zedrouter) containsHangingACLPortMapRule(
 	return false
 }
 
-func (z *zedrouter) checkForPortMapOverlap(appNetStatus *types.AppNetworkStatus,
-	ulCfgList1 []types.UnderlayNetworkConfig,
+func (z *zedrouter) checkForPortMapOverlap(ulCfgList1 []types.UnderlayNetworkConfig,
 	ulCfgList2 []types.UnderlayNetworkConfig) bool {
 	for _, ulCfg1 := range ulCfgList1 {
 		network1 := ulCfg1.Network
 		// Validate whether there are duplicate portmap rules within itself.
 		if z.detectPortMapConflictWithinUL(ulCfg1.ACLs) {
-			z.log.Errorf("app Network(%s) has duplicate portmaps", network1)
-			err := fmt.Errorf("duplicate portmap rules")
-			z.addAppNetworkError(appNetStatus, "underlayACL", err)
-			return false
+			return true
 		}
 		for _, ulCfg2 := range ulCfgList2 {
 			network2 := ulCfg2.Network
 			if network1 == network2 || z.checkUplinkPortOverlap(network1, network2) {
 				if z.detectPortMapConflictAcrossULs(ulCfg1.ACLs, ulCfg2.ACLs) {
-					z.log.Errorf("app Network(%s) have overlapping portmap rule in %s",
-						network1, network2)
-					err := fmt.Errorf("duplicate portmap in %s", network2)
-					z.addAppNetworkError(appNetStatus, "underlayACL", err)
 					return true
 				}
 			}

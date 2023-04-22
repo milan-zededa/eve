@@ -132,7 +132,6 @@ type AppVIF struct {
 	// This number is only unique in the scope of the app (AppVIF.App).
 	// Can be used by Reconciler to for example generate a unique VIF interface name
 	// (when combined with appNum).
-	// TODO: or just use UnderlayNetworkConfig.IfIdx ?
 	VIFNum int
 	// GuestIfMAC : MAC address assigned to VIF on the guest side (inside the app).
 	GuestIfMAC net.HardwareAddr
@@ -269,6 +268,7 @@ func (s AppVIFReconcileStatus) Equal(s2 AppVIFReconcileStatus) bool {
 			return false
 		}
 	}
-	return s.NetAdapterName == s2.NetAdapterName && s.HostIfName == s2.HostIfName &&
-		s.Ready == s2.Ready && s.AsyncInProgress == s2.AsyncInProgress
+	return s.NetAdapterName == s2.NetAdapterName && s.VIFNum == s2.VIFNum &&
+		s.HostIfName == s2.HostIfName && s.Ready == s2.Ready &&
+		s.AsyncInProgress == s2.AsyncInProgress
 }

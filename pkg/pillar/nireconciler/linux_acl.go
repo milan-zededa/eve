@@ -1047,7 +1047,7 @@ mangleEgress:
 			items = append(items, getMarkingChainCfg(markChain, ipv6, proto.mark)...)
 			addedMarkChains[markChain] = struct{}{}
 		}
-		ingressRules = append(ingressRules, iptables.Rule{
+		egressRules = append(egressRules, iptables.Rule{
 			RuleLabel: "Mark " + proto.label,
 			MatchOpts: proto.egressMatch,
 			Target:    markChain,
@@ -1193,7 +1193,7 @@ func getMarkingChainCfg(chainName string, ipv6 bool, markStr string) (items []dg
 		},
 		{
 			RuleLabel:  "Apply mark",
-			Target:     "MARK",
+			Target:     "CONNMARK",
 			TargetOpts: []string{"--set-mark", markStr},
 		},
 		{

@@ -117,7 +117,8 @@ func (lc *LinuxCollector) UpdateCollectingForNI(
 	ni.vifs = nil
 	for _, vif := range vifs {
 		vifWithAddrs := VIFAddrs{VIF: vif}
-		if prevVIF := prevVIFs.LookupByGuestMAC(vif.GuestIfMAC); prevVIF != nil {
+		prevVIF := prevVIFs.LookupByGuestMAC(vif.GuestIfMAC)
+		if prevVIF != nil && prevVIF.VIF.App == vif.App {
 			vifWithAddrs.IPv4Addr = prevVIF.IPv4Addr
 			vifWithAddrs.IPv6Addrs = prevVIF.IPv6Addrs
 		}
@@ -297,6 +298,8 @@ func (lc *LinuxCollector) runStateCollecting() {
 				}
 				var addrChanges []VIFAddrsUpdate
 				if changed := lc.reloadIPLeases(br); changed {
+					lc.log.Noticef("%s: Reloaded IP leases for %s: %v",
+						LogAndErrPrefix, brIfName, lc.nis[br.NI].ipLeases)
 					addrChanges = lc.processIPLeases(lc.nis[br.NI])
 				}
 				watchers := lc.ipAssignWatchers

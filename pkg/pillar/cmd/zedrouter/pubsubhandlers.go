@@ -436,10 +436,11 @@ func (z *zedrouter) handleAppNetworkCreate(ctxArg interface{}, key string,
 	}
 	z.doCopyAppNetworkConfigToStatus(config, &status)
 
-	if err := z.validateAppNetworkConfig(config, &status); err != nil {
+	if err := z.validateAppNetworkConfig(config); err != nil {
 		z.log.Errorf("handleAppNetworkCreate(%v): validation failed: %v",
 			config.UUIDandVersion.UUID, err)
-		// addAppNetworkError has already been done
+		status.PendingAdd = false
+		z.addAppNetworkError(&status, "handleAppNetworkCreate", err)
 		return
 	}
 
@@ -512,16 +513,31 @@ func (z *zedrouter) handleAppNetworkModify(ctxArg interface{}, key string,
 	z.publishAppNetworkStatus(status)
 
 	// Check for unsupported/invalid changes.
-	if err := z.validateAppNetworkConfigForModify(newConfig, oldConfig, status); err != nil {
+	if err := z.validateAppNetworkConfigForModify(newConfig, oldConfig); err != nil {
+		z.log.Errorf("handleAppNetworkModify(%v): validation failed: %v",
+			newConfig.UUIDandVersion.UUID, err)
 		status.PendingModify = false
-		z.publishAppNetworkStatus(status)
-		z.log.Errorf("handleAppNetworkModify: newConfig check failed for %s: %v",
-			newConfig.DisplayName, err)
+		z.addAppNetworkError(status, "handleAppNetworkModify", err)
 		return
 	}
 
 	// Update numbers allocated for application interfaces.
 	z.checkAppNetworkModifyAppIntfNums(newConfig, status)
+
+	// Check that Network exists for all new underlays.
+	// We look for apps with raised AwaitNetworkInstance when a NetworkInstance is added.
+	netInErrState, err := z.checkNetworkReferencesFromApp(newConfig)
+	if err != nil {
+		z.log.Errorf("handleAppNetworkModify(%v): %v", newConfig.UUIDandVersion.UUID, err)
+		status.AwaitNetworkInstance = true
+		status.PendingModify = false
+		if netInErrState {
+			z.addAppNetworkError(status, "handleAppNetworkModify", err)
+		} else {
+			z.publishAppNetworkStatus(status)
+		}
+		return
+	}
 
 	if !newConfig.Activate && status.Activated {
 		z.doInactivateAppNetwork(newConfig, status)

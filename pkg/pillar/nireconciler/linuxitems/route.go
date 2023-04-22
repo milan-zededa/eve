@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
@@ -125,6 +126,9 @@ func (r Route) normalizedNetlinkRoute() netlink.Route {
 			route.Dst = ipv6Any
 		}
 	}
+	// Also clear flags like RTNH_F_LINKDOWN - in the scope of state reconciliation
+	// we do not care about them.
+	route.Flags = 0
 	return route
 }
 
@@ -216,7 +220,7 @@ func (c *RouteConfigurator) Create(ctx context.Context, item dg.Item) error {
 	}
 	err = netlink.RouteAdd(netlinkRoute)
 	if err != nil {
-		if err.Error() == "file exists" {
+		if errors.Is(err, syscall.EEXIST) {
 			// Ignore duplicate route.
 			return nil
 		}
@@ -268,6 +272,10 @@ func (c *RouteConfigurator) Delete(ctx context.Context, item dg.Item) error {
 	}
 	err = netlink.RouteDel(netlinkRoute)
 	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			// Route already removed by kernel, ignore the error.
+			return nil
+		}
 		err = fmt.Errorf("failed to delete route %+v: %w", route, err)
 		c.Log.Error(err)
 		return err

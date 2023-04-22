@@ -127,6 +127,8 @@ func (lc *LinuxCollector) processIPLeases(niInfo *niInfo) (
 		vifAddrs := &niInfo.vifs[i]
 		vif := vifAddrs.VIF
 		ipLease := niInfo.ipLeases.findLease(vif.App.String(), vif.GuestIfMAC, true)
+		lc.log.Noticef("%s: processIPLeases %s: vif %v found ipLease %v",
+			LogAndErrPrefix, niInfo.bridge.BrIfName, vifAddrs, ipLease)
 		if ipLease == nil && vifAddrs.IPv4Addr != nil {
 			prevAddrs := *vifAddrs
 			vifAddrs.IPv4Addr = nil
@@ -163,6 +165,8 @@ func (lc *LinuxCollector) gcIPLeases(niInfo *niInfo) (purgedAny bool) {
 	}
 	if purgedAny {
 		var newLeases dnsmasqIPLeases
+		lc.log.Noticef("%s: IP leases before purge for %s: %v",
+			LogAndErrPrefix, niInfo.bridge.BrIfName, niInfo.ipLeases)
 		for _, l := range niInfo.ipLeases {
 			if !l.purge {
 				newLeases = append(newLeases, l)
@@ -170,6 +174,8 @@ func (lc *LinuxCollector) gcIPLeases(niInfo *niInfo) (purgedAny bool) {
 			lc.log.Noticef("%s: purged lease: %+v", LogAndErrPrefix, l)
 		}
 		niInfo.ipLeases = newLeases
+		lc.log.Noticef("%s: IP leases after purge for %s: %v",
+			LogAndErrPrefix, niInfo.bridge.BrIfName, niInfo.ipLeases)
 	}
 	return purgedAny
 }

@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   packages:
-    runs-on: ${{ matrix.os }}
+    runs-on: buildjet-4vcpu-ubuntu-2204
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +71,7 @@ jobs:
 
   eve:
     needs: packages  # all packages for all platforms must be built first
-    runs-on: ubuntu-20.04
+    runs-on: buildjet-4vcpu-ubuntu-2204
     strategy:
       fail-fast: false
       matrix:

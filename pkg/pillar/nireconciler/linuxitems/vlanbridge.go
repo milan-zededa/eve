@@ -57,7 +57,7 @@ func (v VLANBridge) External() bool {
 
 // String describes VLANBridge.
 func (v VLANBridge) String() string {
-	return fmt.Sprintf("VLANBridge: {bridgeIfName: %s, enableVlanFiltering: %t}"+
+	return fmt.Sprintf("VLANBridge: {bridgeIfName: %s, enableVlanFiltering: %t}",
 		v.BridgeIfName, v.EnableVLANFiltering)
 }
 
@@ -97,38 +97,7 @@ func (c *VLANBridgeConfigurator) Create(ctx context.Context, item dg.Item) error
 		return err
 	}
 	if brIsBusy {
-		// In the past we have seen that for some strange reason netlink
-		// throws back error stating that the device is busy if enabling the VLAN
-		// filtering is tried immediately after bridge creation.
-		// In such case we will keep retrying for up to 1 minute in the background.
-		done := reconciler.ContinueInBackground(ctx)
-		deadline := time.Now().Add(time.Minute)
-		const delay = time.Second
-		go func() {
-			for {
-				c.Log.Warnf("bridge %s is busy, will retry in %s",
-					brIfName, delay)
-				time.Sleep(delay)
-				// Check if it was canceled in the meantime (Delete is going to be called).
-				select {
-				case <-ctx.Done():
-					done(err)
-					return
-				default:
-				}
-				// Try to set VLAN filtering again.
-				brIsBusy, err = c.setVlanFiltering(brIfName, enableVlanFiltering)
-				if err == nil {
-					done(nil)
-					return
-				}
-				if brIsBusy && time.Now().Before(deadline) {
-					continue
-				}
-				done(err)
-				return
-			}
-		}()
+		c.retryInBackground(ctx, brIfName, enableVlanFiltering, err)
 	}
 	return nil
 }
@@ -147,6 +116,8 @@ func (c *VLANBridgeConfigurator) setVlanFiltering(
 	isEnabled := bridgeLink.VlanFiltering != nil && *bridgeLink.VlanFiltering == true
 	if isEnabled == enable {
 		// Nothing to change.
+		c.Log.Noticef("Bridge %s already has VLAN filtering set to %t",
+			brIfName, enable)
 		return false, nil
 	}
 	err = netlink.BridgeSetVlanFiltering(link, enable)
@@ -156,6 +127,44 @@ func (c *VLANBridgeConfigurator) setVlanFiltering(
 			enable, brIfName, err)
 	}
 	return false, nil
+}
+
+// In the past we have seen that for some strange reason enabling/disabling VLAN filtering
+// may throw back error stating that the device is busy.
+// In such case we will keep retrying for up to 1 minute in the background.
+func (c *VLANBridgeConfigurator) retryInBackground(ctx context.Context, brIfName string,
+	enableVlanFiltering bool, err error) {
+	done := reconciler.ContinueInBackground(ctx)
+	deadline := time.Now().Add(time.Minute)
+	const delay = time.Second
+	go func() {
+		for {
+			c.Log.Warnf("Getting error '%v' for bridge %s, "+
+				"will retry setting VLAN filtering in %v", err, brIfName, delay)
+			time.Sleep(delay)
+			// Check if it was canceled in the meantime.
+			select {
+			case <-ctx.Done():
+				c.Log.Warnf("Canceling retries to set VLAN filtering for bridge %s, "+
+					"context is done", brIfName)
+				done(err)
+				return
+			default:
+			}
+			// Try to set VLAN filtering again.
+			var brIsBusy bool
+			brIsBusy, err = c.setVlanFiltering(brIfName, enableVlanFiltering)
+			if err == nil {
+				done(nil)
+				return
+			}
+			if brIsBusy && time.Now().Before(deadline) {
+				continue
+			}
+			done(err)
+			return
+		}
+	}()
 }
 
 // Modify is not implemented.
@@ -170,10 +179,14 @@ func (c *VLANBridgeConfigurator) Delete(ctx context.Context, item dg.Item) error
 		return fmt.Errorf("invalid item type %T, expected VLANBridge", item)
 	}
 	const enableVlanFiltering = false // default value
-	_, err := c.setVlanFiltering(vlanBridge.BridgeIfName, enableVlanFiltering)
-	if err != nil {
+	brIfName := vlanBridge.BridgeIfName
+	brIsBusy, err := c.setVlanFiltering(brIfName, enableVlanFiltering)
+	if err != nil && !brIsBusy {
 		c.Log.Error(err)
 		return err
+	}
+	if brIsBusy {
+		c.retryInBackground(ctx, brIfName, enableVlanFiltering, err)
 	}
 	return nil
 }

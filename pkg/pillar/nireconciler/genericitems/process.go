@@ -5,6 +5,7 @@ package genericitems
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,7 +112,9 @@ func isProcessRunning(log *base.LogObject, pidFile string) bool {
 	}
 	err := process.Signal(syscall.Signal(0))
 	if err != nil {
-		log.Errorf("isProcessRunning(%s): signal failed with error: %v", pidFile, err)
+		if !errors.Is(err, os.ErrProcessDone) {
+			log.Errorf("isProcessRunning(%s): signal failed with error: %v", pidFile, err)
+		}
 		return false
 	}
 	return true

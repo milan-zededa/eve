@@ -25,11 +25,15 @@ func (z *zedrouter) getArgsForNIStateCollecting(niID uuid.UUID) (
 	br.BrNum = niStatus.BridgeNum
 	br.BrIfName = niStatus.BridgeName
 	br.BrIfMAC = niStatus.BridgeMac
-	// Find all app instances that use this network.
+	// Find all app instances that (actively) use this network.
 	apps := z.pubAppNetworkStatus.GetAll()
 	for _, app := range apps {
 		appNetStatus := app.(types.AppNetworkStatus)
 		if !appNetStatus.Activated {
+			continue
+		}
+		appNetConfig := z.lookupAppNetworkConfig(appNetStatus.Key())
+		if appNetConfig == nil || !appNetConfig.Activate {
 			continue
 		}
 		for _, ulStatus := range appNetStatus.GetULStatusForNI(niID) {
@@ -49,15 +53,19 @@ func (z *zedrouter) getArgsForNIStateCollecting(niID uuid.UUID) (
 // Return arguments describing network instance bridge config as required by NIReconciler.
 func (z *zedrouter) getNIBridgeConfig(
 	status *types.NetworkInstanceStatus) nireconciler.NIBridge {
+	var ipAddr *net.IPNet
+	if status.BridgeIPAddr != nil {
+		ipAddr = &net.IPNet{
+			IP:   status.BridgeIPAddr,
+			Mask: status.Subnet.Mask,
+		}
+	}
 	return nireconciler.NIBridge{
 		NI:         status.UUID,
 		BrNum:      status.BridgeNum,
 		MACAddress: status.BridgeMac,
-		IPAddress: &net.IPNet{
-			IP:   status.BridgeIPAddr,
-			Mask: status.Subnet.Mask,
-		},
-		Uplink: z.getNIUplinkConfig(status),
+		IPAddress:  ipAddr,
+		Uplink:     z.getNIUplinkConfig(status),
 	}
 }
 
