@@ -23,9 +23,12 @@ const (
 	PhysIfTypename = "Physical-Interface"
 	// ResolvConfTypename : typename for singleton item representing resolv.conf.
 	ResolvConfTypename = "Resolv-Conf"
-	// RouteTypename : typename for network route.
+	// IPv4RouteTypename : typename for IPv4 route.
 	// Not implemented in genericitems (implementation specific to network stack).
-	RouteTypename = "Route"
+	IPv4RouteTypename = "IPv4-Route"
+	// IPv6RouteTypename : typename for IPv6 route.
+	// Not implemented in genericitems (implementation specific to network stack).
+	IPv6RouteTypename = "IPv6-Route"
 	// SSHAuthKeysTypename : typename for singleton item representing file authorized_keys.
 	SSHAuthKeysTypename = "SSH-Authorized-Keys"
 	// VlanTypename : typename for VLAN sub-interface.

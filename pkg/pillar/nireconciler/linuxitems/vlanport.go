@@ -133,6 +133,9 @@ func (v VLANPort) Dependencies() (deps []dg.Dependency) {
 			ItemName: v.BridgeIfName,
 		},
 		Description: "Bridge must exist and have VLANs enabled",
+		Attributes: dg.DependencyAttributes{
+			AutoDeletedByExternal: true,
+		},
 	})
 	if v.BridgePort.VIFIfName != "" {
 		deps = append(deps, dg.Dependency{
@@ -149,6 +152,9 @@ func (v VLANPort) Dependencies() (deps []dg.Dependency) {
 				return vif.MasterIfName == v.BridgeIfName
 			},
 			Description: "VIF must exist and it must be bridged",
+			Attributes: dg.DependencyAttributes{
+				AutoDeletedByExternal: true,
+			},
 		})
 	} else if v.BridgePort.UplinkIfName != "" {
 		deps = append(deps, dg.Dependency{
@@ -165,6 +171,9 @@ func (v VLANPort) Dependencies() (deps []dg.Dependency) {
 				return uplink.MasterIfName == v.BridgeIfName
 			},
 			Description: "Uplink must exist and it must be bridged",
+			Attributes: dg.DependencyAttributes{
+				AutoDeletedByExternal: true,
+			},
 		})
 	}
 	return deps
@@ -234,15 +243,15 @@ func (c *VLANPortConfigurator) createOrDelete(item dg.Item, del bool) error {
 }
 
 func (c *VLANPortConfigurator) setVIDForPort(link netlink.Link,
-	vid uint16, trunk, enable bool) (err error) {
+	vid uint16, trunk, del bool) (err error) {
 	pvid := !trunk
 	untagged := !trunk
 	const self = false
 	const master = false
-	if enable {
-		err = netlink.BridgeVlanAdd(link, vid, pvid, untagged, self, master)
-	} else {
+	if del {
 		err = netlink.BridgeVlanDel(link, vid, pvid, untagged, self, master)
+	} else {
+		err = netlink.BridgeVlanAdd(link, vid, pvid, untagged, self, master)
 	}
 	if err != nil {
 		portType := "access"
@@ -250,7 +259,7 @@ func (c *VLANPortConfigurator) setVIDForPort(link netlink.Link,
 			portType = "trunk"
 		}
 		op := "enable"
-		if !enable {
+		if del {
 			op = "disable"
 		}
 		err = fmt.Errorf("failed to %s VLAN ID %d for %s port '%s': %w",

@@ -12,9 +12,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// generateAppMac picks a fixed address for Local and Cloud and uses a fixed
-// hash for Switch which still produces a stable MAC address
-// for a given app instance
+// generateAppMac picks a fixed address for Local and uses a fixed hash for Switch
+// which still produces a stable MAC address for a given app instance.
 func (z *zedrouter) generateAppMac(appUUID uuid.UUID, ulNum int, appNum int,
 	netInstStatus *types.NetworkInstanceStatus) net.HardwareAddr {
 	switch netInstStatus.Type {

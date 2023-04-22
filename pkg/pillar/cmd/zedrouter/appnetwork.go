@@ -87,8 +87,14 @@ func (z *zedrouter) prepareConfigForVIFs(config types.AppNetworkConfig,
 		}
 		ulStatus.Bridge = netInstStatus.BridgeName
 		ulStatus.BridgeMac = netInstStatus.BridgeMac
-		ulStatus.Mac = z.generateAppMac(config.UUIDandVersion.UUID, ulNum,
-			status.AppNum, netInstStatus)
+		ulStatus.BridgeIPAddr = netInstStatus.BridgeIPAddr
+		if ulStatus.AppMacAddr != nil {
+			// User-configured static MAC address.
+			ulStatus.Mac = ulStatus.AppMacAddr
+		} else {
+			ulStatus.Mac = z.generateAppMac(config.UUIDandVersion.UUID, ulNum,
+				status.AppNum, netInstStatus)
+		}
 		ulStatus.HostName = config.Key()
 		guestIP, err := z.lookupOrAllocateIPv4ForVIF(
 			netInstStatus, *ulStatus, status.UUIDandVersion.UUID)
@@ -333,14 +339,9 @@ func (z *zedrouter) doInactivateAppNetwork(config types.AppNetworkConfig,
 
 // Check if any references to network instances have changed and potentially update
 // allocated application interface numbers.
-// Requires that the AppNetworkStatus is not Activated.
 // Adds errors to status if there is a failure.
 func (z *zedrouter) checkAppNetworkModifyAppIntfNums(config types.AppNetworkConfig,
 	status *types.AppNetworkStatus) {
-
-	if status.Activated {
-		log.Fatalf("Called for Activated status %s", status.DisplayName)
-	}
 
 	// Check if any underlays have changes to the Networks
 	for i := range config.UnderlayNetworkList {

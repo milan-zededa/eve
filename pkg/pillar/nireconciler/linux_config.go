@@ -609,10 +609,6 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 				// Hack to make the kernel routes not appear identical.
 				rtCopy.Priority = rtCopy.LinkIndex
 			}
-			// Clear any RTNH_F_LINKDOWN etc flags since add doesn't like them.
-			if rtCopy.Flags != 0 {
-				rtCopy.Flags = 0
-			}
 			rtCopy.Protocol = unix.RTPROT_STATIC
 			intendedL3Cfg.PutItem(linux.Route{
 				Route:    rtCopy,
