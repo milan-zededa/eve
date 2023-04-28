@@ -5,6 +5,7 @@ package types
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -375,9 +376,7 @@ type VlanInfo struct {
 type VifConfig struct {
 	Bridge string
 	Vif    string
-	Mac    string
-
-	Vlan VlanInfo
+	Mac    net.HardwareAddr
 }
 
 // VifInfo store info about vif
