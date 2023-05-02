@@ -731,7 +731,7 @@ func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (ch
 		if !found {
 			continue
 		}
-		table := devicenetwork.BaseRTIndex + ifIndex
+		table := devicenetwork.DPCBaseRTIndex + ifIndex
 		routes, err := r.NetworkMonitor.ListRoutes(netmonitor.RouteFilters{
 			FilterByTable: true,
 			Table:         table,
@@ -1015,7 +1015,7 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 		}
 		// Routes copied from the main table.
 		srcTable := syscall.RT_TABLE_MAIN
-		dstTable := devicenetwork.BaseRTIndex + ifIndex
+		dstTable := devicenetwork.DPCBaseRTIndex + ifIndex
 		routes, err := r.NetworkMonitor.ListRoutes(netmonitor.RouteFilters{
 			FilterByTable: true,
 			Table:         srcTable,
@@ -1039,10 +1039,6 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 				}
 				// Hack to make the kernel routes not appear identical.
 				rtCopy.Priority = rtCopy.LinkIndex
-			}
-			// Clear any RTNH_F_LINKDOWN etc flags since add doesn't like them.
-			if rtCopy.Flags != 0 {
-				rtCopy.Flags = 0
 			}
 			intendedRoutes.PutItem(linux.Route{
 				Route:         rtCopy,
