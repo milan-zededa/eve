@@ -1145,10 +1145,8 @@ func (r *LinuxDpcReconciler) getIntendedWirelessCfg(dpc types.DevicePortConfig,
 	rsImposed := radioSilence.Imposed
 	intendedWirelessCfg.PutItem(
 		r.getIntendedWlanConfig(dpc, rsImposed), nil)
-	/*
-		intendedWirelessCfg.PutItem(
-			r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
-	*/
+	intendedWirelessCfg.PutItem(
+		r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
 	return intendedWirelessCfg
 }
 
