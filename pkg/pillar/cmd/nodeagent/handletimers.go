@@ -347,7 +347,7 @@ func handleNodeOperation(ctxPtr *nodeagentContext, op types.DeviceOperation) {
 	// Wait for MinRebootDelay time
 	duration := time.Second * time.Duration(minRebootDelay)
 	rebootTimer := time.NewTimer(duration)
-	log.Functionf("handleNodeOperation: minRebootDelay timer %d seconds",
+	log.Noticef("HEY! handleNodeOperation: minRebootDelay timer %d seconds",
 		duration/time.Second)
 	<-rebootTimer.C
 
@@ -374,14 +374,14 @@ func handleNodeOperation(ctxPtr *nodeagentContext, op types.DeviceOperation) {
 	case types.DeviceOperationReboot:
 		opStr = "Rebooting"
 	}
-	log.Functionf("%s... Starting timer for Duration(secs): %d",
+	log.Noticef("HEY! %s... Starting timer for Duration(secs): %d",
 		opStr, duration/time.Second)
 
 	rebootTimer = time.NewTimer(duration)
 	log.Functionf("Timer started. Wait to expire")
 	<-rebootTimer.C
 	rebootTimer = time.NewTimer(1)
-	log.Functionf("Timer Expired.. %s", opStr)
+	log.Noticef("HEY! Timer Expired.. %s", opStr)
 	syscall.Sync()
 	<-rebootTimer.C
 	go func() {
@@ -395,8 +395,10 @@ func handleNodeOperation(ctxPtr *nodeagentContext, op types.DeviceOperation) {
 		os.Exit(0)
 	}()
 	if op == types.DeviceOperationPoweroff {
+		log.Noticef("HEY! handleNodeOperation: Poweroff")
 		zboot.Poweroff(log)
 	} else {
+		log.Noticef("HEY! handleNodeOperation: Reboot")
 		zboot.Reset(log)
 	}
 }
