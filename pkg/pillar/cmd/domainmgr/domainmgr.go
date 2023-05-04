@@ -166,7 +166,8 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		fmt.Printf("%s: %s\n", agentName, Version)
 		return 0
 	}
-	hyper, err = hypervisor.GetHypervisor(*domainCtx.hypervisorPtr)
+	// Here maybe we should wait for containerd to be ready
+	hyper, err = hypervisor.GetHypervisor(*domainCtx.hypervisorPtr) // Here we connect to containerd
 	if err != nil {
 		log.Fatal(err)
 	}
