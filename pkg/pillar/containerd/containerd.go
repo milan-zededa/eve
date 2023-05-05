@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/shirou/gopsutil/process"
 	"io"
 	"math/rand"
 	"os"
@@ -111,8 +112,21 @@ func NewContainerdClient(user bool) (*Client, error) {
 	}
 
 	ctrdClient, err = containerd.New(socket,
-		containerd.WithDefaultRuntime(containerdRunTime),
-		containerd.WithTimeout(30*time.Second))
+		containerd.WithDefaultRuntime(containerdRunTime))
+	if err != nil {
+		logrus.Errorf("HEY!!! NewContainerdClient: could not create containerd client. %v, "+
+			"trying again with 30 sec timeout", err.Error())
+		processes, _ := process.Processes()
+		for _, proc := range processes {
+			name, _ := proc.Name()
+			cmdline, _ := proc.Cmdline()
+			logrus.Infof("HEY!!! Running process %d: %s; %s\n", proc.Pid, name, cmdline)
+		}
+		ctrdClient, err = containerd.New(socket,
+			containerd.WithDefaultRuntime(containerdRunTime),
+			containerd.WithTimeout(30*time.Second))
+	}
+
 	if err != nil {
 		logrus.Errorf("NewContainerdClient: could not create containerd client. %v", err.Error())
 		return nil, fmt.Errorf("initContainerdClient: could not create containerd client. %v", err.Error())
