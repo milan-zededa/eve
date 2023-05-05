@@ -1145,8 +1145,17 @@ func (r *LinuxDpcReconciler) getIntendedWirelessCfg(dpc types.DevicePortConfig,
 	rsImposed := radioSilence.Imposed
 	intendedWirelessCfg.PutItem(
 		r.getIntendedWlanConfig(dpc, rsImposed), nil)
-	intendedWirelessCfg.PutItem(
-		r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
+	if dpc.Key != "" {
+		// Do not send config to wwan microservice until we receive DPC.
+		// The default behaviour of wwan microservice (i.e. without config) is to disable
+		// radios of all cellular modems, which is the same effect we would get with empty
+		// config anyway. However, without config the wwan microservice does just that
+		// and does not waste time collecting e.g. modem state data. This is important
+		// because when the DPC arrives, wwan microservice won't be blocked on retrieving
+		// some state data but will be ready to apply the config immediately.
+		intendedWirelessCfg.PutItem(
+			r.getIntendedWwanConfig(dpc, aa, rsImposed), nil)
+	}
 	return intendedWirelessCfg
 }
 
@@ -1241,27 +1250,43 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 		if port.WirelessCfg.WType != types.WirelessTypeCellular || len(port.WirelessCfg.Cellular) == 0 {
 			continue
 		}
-		ioBundle := aa.LookupIoBundleLogicallabel(port.Logicallabel)
-		if ioBundle == nil {
-			r.Log.Warnf("Failed to find adapter with logical label '%s'", port.Logicallabel)
-			continue
-		}
-		if ioBundle.IsPCIBack {
-			r.Log.Warnf("wwan adapter with the logical label '%s' is assigned to pciback, skipping",
-				port.Logicallabel)
-			continue
+		var physAddrs types.WwanPhysAddrs
+		if !aa.Initialized {
+			if port.IfName == "" {
+				r.Log.Warnf("getIntendedWwanConfig: AA is not yet initialized "+
+					"and interface name for port with LL %s is not available either, "+
+					"skipping", port.Logicallabel)
+				continue
+			}
+			r.Log.Warnf("getIntendedWwanConfig: AA is not yet initialized, "+
+				"will use interface name %s to reference port with LL %s",
+				port.IfName, port.Logicallabel)
+			physAddrs.Interface = port.IfName
+		} else {
+			ioBundle := aa.LookupIoBundleLogicallabel(port.Logicallabel)
+			if ioBundle == nil {
+				r.Log.Warnf("Failed to find adapter with logical label '%s'",
+					port.Logicallabel)
+				continue
+			}
+			if ioBundle.IsPCIBack {
+				r.Log.Warnf("wwan adapter with the logical label '%s' is assigned "+
+					"to pciback, skipping", port.Logicallabel)
+				continue
+			}
+			physAddrs = types.WwanPhysAddrs{
+				Interface: ioBundle.Ifname,
+				USB:       ioBundle.UsbAddr,
+				PCI:       ioBundle.PciLong,
+			}
 		}
 		// XXX Limited to a single APN for now
 		cellCfg := port.WirelessCfg.Cellular[0]
 		network := types.WwanNetworkConfig{
 			LogicalLabel: port.Logicallabel,
-			PhysAddrs: types.WwanPhysAddrs{
-				Interface: ioBundle.Ifname,
-				USB:       ioBundle.UsbAddr,
-				PCI:       ioBundle.PciLong,
-			},
-			Apns:    []types.WwanAPN{{APN: cellCfg.APN}},
-			Proxies: port.Proxies,
+			PhysAddrs:    physAddrs,
+			Apns:         []types.WwanAPN{{APN: cellCfg.APN}},
+			Proxies:      port.Proxies,
 			Probe: types.WwanProbe{
 				Disable: cellCfg.DisableProbe,
 				Address: cellCfg.ProbeAddr,

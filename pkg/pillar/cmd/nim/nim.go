@@ -487,6 +487,9 @@ func (n *nim) initPublications() (err error) {
 		return err
 	}
 
+	// TODO: make this persisted.
+	// Reload wwanStatus in DPCManager on init.
+	// Use to get physical addresses if AA is not initialized.
 	n.pubWwanStatus, err = n.PubSub.NewPublication(
 		pubsub.PublicationOptions{
 			AgentName: agentName,

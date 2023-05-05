@@ -264,10 +264,8 @@ func (m *DpcManager) run(ctx context.Context) {
 			case commandUndefined:
 				m.Log.Warn("DpcManager: Received undefined command")
 			case commandAddDPC:
-				m.setDiscoveredWwanIfNames(&inputCmd.dpc)
 				m.doAddDPC(ctx, inputCmd.dpc)
 			case commandDelDPC:
-				m.setDiscoveredWwanIfNames(&inputCmd.dpc)
 				m.doDelDPC(ctx, inputCmd.dpc)
 			case commandUpdateGCP:
 				m.doUpdateGCP(ctx, inputCmd.gcp)
