@@ -103,24 +103,41 @@ func (c *WwanConfigurator) NeedsRecreate(oldItem, newItem depgraph.Item) (recrea
 
 // Write cellular config into /run/wwan/config.json
 func (c *WwanConfigurator) installWwanConfig(config types.WwanConfig) (err error) {
-	c.Log.Noticef("installWwanConfig: write file %s with config %+v",
-		devicenetwork.WwanConfigPath, config)
-	file, err := os.Create(devicenetwork.WwanConfigPath)
-	if err != nil {
-		err = fmt.Errorf("failed to create file %s: %w",
-			devicenetwork.WwanConfigPath, err)
-		c.Log.Error(err)
-		return err
-	}
-	defer file.Close()
 	bytes, hash, err := MarshalWwanConfig(config)
 	if err != nil {
 		c.Log.Error(err)
 		return err
 	}
-	if r, err := file.Write(bytes); err != nil || r != len(bytes) {
+	tmpfile, err := os.CreateTemp(devicenetwork.RunWwanDir, devicenetwork.WwanConfigTempname)
+	if err != nil {
+		err = fmt.Errorf("failed to create temporary file %s/%s: %v",
+			devicenetwork.RunWwanDir, devicenetwork.WwanConfigTempname, err)
+		c.Log.Error(err)
+		return err
+	}
+	defer os.Remove(tmpfile.Name())
+	defer tmpfile.Close()
+	if r, err := tmpfile.Write(bytes); err != nil || r != len(bytes) {
 		err = fmt.Errorf("failed to write %d bytes to file %s: %w",
-			len(bytes), file.Name(), err)
+			len(bytes), tmpfile.Name(), err)
+		c.Log.Error(err)
+		return err
+	}
+	if err = tmpfile.Sync(); err != nil {
+		err = fmt.Errorf("failed to sync temporary file %s: %v\n",
+			tmpfile.Name(), err)
+		c.Log.Error(err)
+		return err
+	}
+	if err = tmpfile.Close(); err != nil {
+		err = fmt.Errorf("failed to close temporary file %s: %v\n",
+			tmpfile.Name(), err)
+		c.Log.Error(err)
+		return err
+	}
+	if err := os.Rename(tmpfile.Name(), devicenetwork.WwanConfigPath); err != nil {
+		err = fmt.Errorf("failed to rename file %s to %s: %v\n",
+			tmpfile.Name(), devicenetwork.WwanConfigPath, err)
 		c.Log.Error(err)
 		return err
 	}

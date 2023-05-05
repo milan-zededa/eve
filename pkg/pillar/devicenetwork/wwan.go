@@ -9,6 +9,8 @@ const (
 	RunWwanDir = "/run/wwan/"
 	// WwanConfigPath : LTE configuration submitted by NIM to wwan microservice.
 	WwanConfigPath = RunWwanDir + "config.json"
+	// WwanConfigTempname : name used for a temporary wwan config file.
+	WwanConfigTempname = "config.temp"
 	// WwanStatusPath : LTE status data published by wwan microservice.
 	WwanStatusPath = RunWwanDir + "status.json"
 	// WwanMetricsPath : LTE metrics published by wwan microservice.
