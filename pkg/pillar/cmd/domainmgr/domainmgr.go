@@ -2875,6 +2875,9 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle) (chang
 	// since they need to be treated as part of the same bundle even if the
 	// EVE controller doesn't know it
 	list = aa.ExpandControllers(log, list, hyper.PCISameController)
+
+	log.Noticef("HEY!! updatePortAndPciBackIoBundle for ib: %+v; list: %v; DNS: %+v",
+		ib, list, ctx.deviceNetworkStatus)
 	for _, ib := range list {
 		if types.IsPort(ctx.deviceNetworkStatus, ib.Ifname) {
 			isPort = true
@@ -2896,6 +2899,7 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle) (chang
 			// it allows us to debug issues with GPUs assigned to applications
 			if keep, err := types.PCIIsBootVga(log, ib.PciLong); err == nil {
 				keepInHost = keep
+				log.Noticef("HEY!! PCIIsBootVga keep is %v", keep)
 			} else {
 				log.Errorf("Couldn't get boot_vga statues for VGA device %s", ib.PciLong)
 				log.Error(err)
@@ -2909,7 +2913,7 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle) (chang
 		}
 	}
 
-	log.Functionf("updatePortAndPciBackIoBundle(%d %s %s) isPort %t keepInHost %t members %d",
+	log.Noticef("HEY!!! updatePortAndPciBackIoBundle(%d %s %s) isPort %t keepInHost %t members %d",
 		ib.Type, ib.Phylabel, ib.AssignmentGroup, isPort, keepInHost, len(list))
 	anyChanged := false
 	for _, ib := range list {
@@ -2932,7 +2936,7 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle) (chang
 // XXX move all members and once and fall back on failure?
 func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort, keepInHost bool) (changed bool, err error) {
 
-	log.Functionf("updatePortAndPciBackIoMember(%d %s %s) isPort %t keepInHost %t",
+	log.Noticef("HEY! updatePortAndPciBackIoMember(%d %s %s) isPort %t keepInHost %t",
 		ib.Type, ib.Phylabel, ib.AssignmentGroup, isPort, keepInHost)
 	if ib.KeepInHost != keepInHost {
 		ib.KeepInHost = keepInHost
@@ -2941,7 +2945,7 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 	if ib.IsPort != isPort {
 		ib.IsPort = isPort
 		changed = true
-		log.Warnf("updatePortAndPciBackIoMember(%d, %s, %s): EVE port",
+		log.Warnf("HEY! updatePortAndPciBackIoMember(%d, %s, %s): EVE port",
 			ib.Type, ib.Phylabel, ib.AssignmentGroup)
 		if ib.UsedByUUID != nilUUID {
 			err = fmt.Errorf("adapter %s (group %s, type %d) is used by %s; can not be used as EVE port",
@@ -2951,10 +2955,10 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 		}
 	}
 	if changed && ib.KeepInHost && ib.UsedByUUID == nilUUID && ib.IsPCIBack {
-		log.Functionf("updatePortAndPciBackIoMember(%d, %s, %s) take back from pciback",
+		log.Noticef("HEY! updatePortAndPciBackIoMember(%d, %s, %s) take back from pciback",
 			ib.Type, ib.Phylabel, ib.AssignmentGroup)
 		if ib.PciLong != "" {
-			log.Functionf("updatePortAndPciBackIoMember: Removing %s (%s) from pciback",
+			log.Noticef("HEY! updatePortAndPciBackIoMember: Removing %s (%s) from pciback",
 				ib.Phylabel, ib.PciLong)
 			err = hyper.PCIRelease(ib.PciLong)
 			if err != nil {
@@ -2995,13 +2999,13 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 
 	if !ib.KeepInHost && !ib.IsPCIBack {
 		if ib.Error != "" {
-			log.Warningf("Not assigning %s (%s) to pciback due to error: %s at %s",
+			log.Warningf("HEY! Not assigning %s (%s) to pciback due to error: %s at %s",
 				ib.Phylabel, ib.PciLong, ib.Error, ib.ErrorTime)
 		} else if ctx.deviceNetworkStatus.Testing && ib.Type.IsNet() {
-			log.Noticef("Not assigning %s (%s) to pciback due to Testing",
+			log.Noticef("HEY! Not assigning %s (%s) to pciback due to Testing",
 				ib.Phylabel, ib.PciLong)
 		} else if ib.PciLong != "" {
-			log.Noticef("Assigning %s (%s) to pciback",
+			log.Noticef("HEY! Assigning %s (%s) to pciback",
 				ib.Phylabel, ib.PciLong)
 			err := hyper.PCIReserve(ib.PciLong)
 			if err != nil {
