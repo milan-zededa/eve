@@ -82,10 +82,10 @@ mod_reload() {
 wait_for() {
   local EXPECT="$1"
   shift
-  for i in $(seq 1 10); do
+  for i in $(seq 1 20); do
      eval RES='"$('"$*"')"'
      [ "$RES" = "$EXPECT" ] && return 0
-     sleep 6
+     sleep 3
   done
   return 1
 }
