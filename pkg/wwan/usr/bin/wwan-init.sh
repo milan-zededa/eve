@@ -182,28 +182,27 @@ sys_get_modem_atport() {
   return 1
 }
 
-# If successful, sets CDC_DEV, PROTOCOL, IFACE, USB_ADDR, PCI_ADDR and AT_PORT variables.
+# If successful, sets CDC_DEV, PROTOCOL, IFACE, USB_ADDR and PCI_ADDR variables.
 lookup_modem() {
   local ARG_IF="$1"
   local ARG_USB="$2"
   local ARG_PCI="$3"
 
   for DEV in /sys/class/usbmisc/*; do
-    DEV_PROT=$(sys_get_modem_protocol "$DEV") || continue
+    echo "lookup_modem: $DEV"
+    local DEV_PROT=$(sys_get_modem_protocol "$DEV") || continue
 
     # check interface name
-    DEV_IF="$(sys_get_modem_interface "$DEV")"
+    local DEV_IF="$(sys_get_modem_interface "$DEV")"
     [ -n "$ARG_IF" ] && [ "$ARG_IF" != "$DEV_IF" ] && continue
 
     # check USB address
-    DEV_USB="$(sys_get_modem_usbaddr "$DEV")"
+    local DEV_USB="$(sys_get_modem_usbaddr "$DEV")"
     [ -n "$ARG_USB" ] && [ "$ARG_USB" != "$DEV_USB" ] && continue
 
     # check PCI address
-    DEV_PCI="$(sys_get_modem_pciaddr "$DEV")"
+    local DEV_PCI="$(sys_get_modem_pciaddr "$DEV")"
     [ -n "$ARG_PCI" ] && [ "$ARG_PCI" != "$DEV_PCI" ] && continue
-
-    AT_PORT="$(sys_get_modem_atport "$DEV_USB")"
 
     PROTOCOL="$DEV_PROT"
     IFACE="$DEV_IF"
@@ -419,6 +418,7 @@ switch_to_preferred_proto() {
      # attempts. Therefore we prefer to use MBIM with this modem until we find
      # a better solution.
      if [ "$PROTOCOL" != "mbim" ]; then
+       AT_PORT="$(sys_get_modem_atport "$USB_ADDR")"
        if [ -z "$AT_PORT" ]; then
          echo "Cannot switch modem $LOGICAL_LABEL to MBIM: AT port is not available"
          return 1
@@ -439,7 +439,7 @@ switch_to_preferred_proto() {
 }
 
 event_stream() {
-  inotifywait -qm "${BBS}" -e create -e modify -e delete -e moved_to &
+  inotifywait -qm "${BBS}" --exclude location -e create -e modify -e delete -e moved_to &
   while true; do
     echo "PROBE"
     sleep "$PROBE_INTERVAL"
