@@ -443,6 +443,9 @@ event_stream() {
     echo "PROBE"
     sleep "$PROBE_INTERVAL"
   done &
+  # Do not ask for metrics immediately after boot (may delay applying initial config),
+  # instead wait 2 minutes.
+  sleep 120
   while true; do
     echo "METRICS"
     sleep "$METRICS_INTERVAL"
@@ -481,13 +484,14 @@ event_stream | while read -r EVENT; do
     # Quick probe only checks the status as reported by the modem,
     # without generating any traffic.
     EVENT="QUICK-PROBE"
-    if [ "$((PROBE_ITER % 10))" = "0" ] || [ ! -f "${STATUS_PATH}" ]; then
+    if [ "$((PROBE_ITER % 10))" = "0" ]; then
       # Every 5 minutes update status.json.
-      # Also enforce standard probing if status.json is missing.
+      # First update is not done immediately but after 5 minutes (PROBE_ITER starts with 1).
       EVENT="STANDARD-PROBE"
     fi
-    if [ "$((PROBE_ITER % 100))" = "0" ] || [ "$ENFORCE_LONG_PROBE" = "y" ]; then
+    if [ "$((PROBE_ITER % 100))" = "21" ] || [ "$ENFORCE_LONG_PROBE" = "y" ]; then
       # Every 50 minutes additionally query the set of visible providers.
+      # First long probe is done after 10 minutes (modulo equals 21; PROBE_ITER starts with 1).
       EVENT="LONG-PROBE"
     fi
     ENFORCE_LONG_PROBE=n
