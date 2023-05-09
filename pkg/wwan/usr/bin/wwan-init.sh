@@ -361,6 +361,7 @@ icmp_probe() {
 }
 
 collect_network_status() {
+  echo "Collect network status: $1"
   local EVENT="$1"
   local PROVIDERS="[]"
   if [ "$EVENT" = "LONG-PROBE" ]; then
@@ -468,6 +469,8 @@ rfkill unblock wwan
 PROBE_ITER=0
 ENFORCE_LONG_PROBE=n
 event_stream | while read -r EVENT; do
+  echo "Received event: $EVENT"
+
   if ! echo "$EVENT" | grep -q "PROBE\|METRICS\|config.json"; then
     continue
   fi
@@ -524,6 +527,8 @@ event_stream | while read -r EVENT; do
 
     # parse network configuration
     LOGICAL_LABEL="$(parse_json_attr "$NETWORK" "\"logical-label\"")"
+    echo "Processing network: $LOGICAL_LABEL"
+
     ADDRS="$(parse_json_attr "$NETWORK" "\"physical-addrs\"")"
     IFACE="$(parse_json_attr "$ADDRS" "interface")"
     USB_ADDR="$(parse_json_attr "$ADDRS" "usb")"
@@ -554,6 +559,7 @@ event_stream | while read -r EVENT; do
 
     if switch_to_preferred_proto; then
       # Modem is being restarted, return back to it later.
+      echo "Modem is being restarted, return back to it later: $LOGICAL_LABEL"
       continue
     fi
 
@@ -633,6 +639,8 @@ event_stream | while read -r EVENT; do
 __EOT__
 
   # Start/stop location tracking.
+  echo "Start/stop location tracking"
+
   if [ "$EVENT" = "CONFIG-CHANGE" ]; then
     if [ -n "$LOC_TRACKING_DEV" ]; then
       if [ -z "$LOC_TRACKER" ]; then
@@ -649,8 +657,11 @@ __EOT__
     fi
   fi
 
+  echo "Start/stop location tracking - done"
+
   # manage RF state also for modems not configured by the controller
   for DEV in /sys/class/usbmisc/*; do
+    echo "Unmanaged modem $DEV"
     unset CONFIG_ERROR
     unset PROBE_ERROR
     unset LOGICAL_LABEL # unmanaged modems do not have logical name
@@ -696,6 +707,7 @@ __EOT__
 
   # Do not update status.json during a quick probe, continue with the next event..
   if [ "$EVENT" = "QUICK-PROBE" ]; then
+    echo "Quick probe done"
     continue
   fi
 
@@ -713,4 +725,6 @@ __EOT__
     # update status atomically
     mv "${STATUS_PATH}.tmp" "${STATUS_PATH}"
   fi
+
+  echo "Full even processing done"
 done
