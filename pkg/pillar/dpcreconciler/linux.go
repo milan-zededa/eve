@@ -1250,18 +1250,9 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 		if port.WirelessCfg.WType != types.WirelessTypeCellular || len(port.WirelessCfg.Cellular) == 0 {
 			continue
 		}
-		var physAddrs types.WwanPhysAddrs
 		if !aa.Initialized {
-			if port.IfName == "" {
-				r.Log.Warnf("getIntendedWwanConfig: AA is not yet initialized "+
-					"and interface name for port with LL %s is not available either, "+
-					"skipping", port.Logicallabel)
-				continue
-			}
 			r.Log.Warnf("getIntendedWwanConfig: AA is not yet initialized, "+
-				"will use interface name %s to reference port with LL %s",
-				port.IfName, port.Logicallabel)
-			physAddrs.Interface = port.IfName
+				"skipping IsPCIBack check for port %s", port.Logicallabel)
 		} else {
 			ioBundle := aa.LookupIoBundleLogicallabel(port.Logicallabel)
 			if ioBundle == nil {
@@ -1270,23 +1261,25 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				continue
 			}
 			if ioBundle.IsPCIBack {
-				r.Log.Warnf("wwan adapter with the logical label '%s' is assigned "+
-					"to pciback, skipping", port.Logicallabel)
+				r.Log.Warnf("getIntendedWwanConfig: wwan adapter with the logical label "+
+					"'%s' is assigned to pciback, skipping", port.Logicallabel)
 				continue
 			}
-			physAddrs = types.WwanPhysAddrs{
-				Interface: ioBundle.Ifname,
-				USB:       ioBundle.UsbAddr,
-				PCI:       ioBundle.PciLong,
-			}
+		}
+		if port.IfName == "" {
+			r.Log.Warnf("getIntendedWwanConfig: missing interface name for port %s, "+
+				"skipping", port.Logicallabel)
+			continue
 		}
 		// XXX Limited to a single APN for now
 		cellCfg := port.WirelessCfg.Cellular[0]
 		network := types.WwanNetworkConfig{
 			LogicalLabel: port.Logicallabel,
-			PhysAddrs:    physAddrs,
-			Apns:         []types.WwanAPN{{APN: cellCfg.APN}},
-			Proxies:      port.Proxies,
+			PhysAddrs: types.WwanPhysAddrs{
+				Interface: port.IfName,
+			},
+			Apns:    []types.WwanAPN{{APN: cellCfg.APN}},
+			Proxies: port.Proxies,
 			Probe: types.WwanProbe{
 				Disable: cellCfg.DisableProbe,
 				Address: cellCfg.ProbeAddr,
