@@ -22,7 +22,7 @@ METRICS_PATH="${BBS}/metrics.json"
 LOCINFO_PATH="${BBS}/location.json"
 
 LTESTAT_TIMEOUT=120
-PROBE_INTERVAL=30  # how often to probe the connectivity status (in seconds)
+PROBE_INTERVAL=20  # how often to probe the connectivity status (in seconds)
 METRICS_INTERVAL=60 # how often to obtain and publish metrics (in seconds)
 UNAVAIL_SIGNAL_METRIC=$(printf "%d" 0x7FFFFFFF) # max int32
 
@@ -468,6 +468,7 @@ rfkill unblock wwan
 # Main event loop
 PROBE_ITER=0
 ENFORCE_LONG_PROBE=n
+STATUS_OUTDATED=n
 event_stream | while read -r EVENT; do
   echo "Received event: $EVENT"
 
@@ -487,14 +488,17 @@ event_stream | while read -r EVENT; do
     # Quick probe only checks the status as reported by the modem,
     # without generating any traffic.
     EVENT="QUICK-PROBE"
-    if [ "$((PROBE_ITER % 10))" = "0" ]; then
+    if [ "$((PROBE_ITER % 15))" = "0" ] || [ "$STATUS_OUTDATED" = "y" ]; then
       # Every 5 minutes update status.json.
+      # Also when QUICK-PROBE changes modem status (e.g. reconnects), next PROBE
+      # will be elevated to at least STANDARD-PROBE level.
       # First update is not done immediately but after 5 minutes (PROBE_ITER starts with 1).
       EVENT="STANDARD-PROBE"
     fi
-    if [ "$((PROBE_ITER % 100))" = "21" ] || [ "$ENFORCE_LONG_PROBE" = "y" ]; then
-      # Every 50 minutes additionally query the set of visible providers.
-      # First long probe is done after 10 minutes (modulo equals 21; PROBE_ITER starts with 1).
+    if [ "$((PROBE_ITER % 180))" = "31" ] || [ "$ENFORCE_LONG_PROBE" = "y" ]; then
+      # Every 1 hour additionally query the set of visible providers.
+      # Also after processing config change, next PROBE will be elevated to LONG-PROBE level.
+      # First LONG-PROBE is done after 10 minutes (modulo equals 31; PROBE_ITER starts with 1).
       EVENT="LONG-PROBE"
     fi
     ENFORCE_LONG_PROBE=n
@@ -585,6 +589,7 @@ event_stream | while read -r EVENT; do
     # reflect updated config or just probe the current status
     if [ "$RADIO_SILENCE" != "true" ]; then
       if [ "$EVENT" = "CONFIG-CHANGE" ] || ! check_connectivity "$EVENT"; then
+        STATUS_OUTDATED=y
         if [ -n "$APN_USERNAME" ]; then
           PASSWORD="$(printf "%s" "$APN_PASSWORD" | tr -c '' '*')"
           echo "[$CDC_DEV] Restarting connection (APN=${APN}, " \
@@ -619,6 +624,7 @@ event_stream | while read -r EVENT; do
     else # Radio-silence is ON
       if [ "$("${PROTOCOL}_get_op_mode")" != "radio-off" ]; then
         echo "[$CDC_DEV] Trying to disable radio (APN=${APN}, interface=${IFACE})"
+        STATUS_OUTDATED=y
         if ! "${PROTOCOL}_toggle_rf" off 2>/tmp/wwan.stderr; then
           CONFIG_ERROR="$(join_lines_with_semicolon </tmp/wwan.stderr)"
         else
@@ -689,6 +695,7 @@ __EOT__
 
     if [ "$("${PROTOCOL}_get_op_mode")" != "radio-off" ]; then
       echo "[$CDC_DEV] Trying to disable radio (interface=${IFACE})"
+      STATUS_OUTDATED=y
       if ! "${PROTOCOL}_toggle_rf" off 2>/tmp/wwan.stderr; then
         CONFIG_ERROR="$(join_lines_with_semicolon </tmp/wwan.stderr)"
       else
@@ -724,6 +731,7 @@ __EOT__
         | jq > "${STATUS_PATH}.tmp"
     # update status atomically
     mv "${STATUS_PATH}.tmp" "${STATUS_PATH}"
+    STATUS_OUTDATED=n
   fi
 
   echo "Full even processing done"
