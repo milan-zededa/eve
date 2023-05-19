@@ -67,12 +67,23 @@ func (m *DpcManager) updateDNS() {
 		m.deviceNetStatus.Ports[ix].DNSServers = port.DnsServers
 		m.deviceNetStatus.Ports[ix].NtpServer = port.NtpServer
 		m.deviceNetStatus.Ports[ix].TestResults = port.TestResults
+		// If this is a cellular network connectivity, add status information
+		// obtained from the wwan service.
+		if port.WirelessCfg.WType == types.WirelessTypeCellular {
+			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
+			if found {
+				m.deviceNetStatus.Ports[ix].WirelessStatus = types.WirelessStatus{
+					WType:    types.WirelessTypeCellular,
+					Cellular: wwanNetStatus,
+				}
+			}
+		}
 		// Do not try to get state data for interface which is in PCIback.
 		ioBundle := m.adapters.LookupIoBundleIfName(port.IfName)
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			err := fmt.Errorf("port %s is in PCIBack - ignored", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
 		// Get interface state data from the network stack.
@@ -80,7 +91,7 @@ func (m *DpcManager) updateDNS() {
 		if !exists || err != nil {
 			err = fmt.Errorf("port %s does not exist - ignored", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
 		var isUp bool
@@ -140,18 +151,6 @@ func (m *DpcManager) updateDNS() {
 			// XXX where can we return this failure?
 			// Already have TestResults set from above
 			m.Log.Error(err)
-		}
-
-		// If this is a cellular network connectivity, add status information
-		// obtained from the wwan service.
-		if port.WirelessCfg.WType == types.WirelessTypeCellular {
-			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
-			if found {
-				m.deviceNetStatus.Ports[ix].WirelessStatus = types.WirelessStatus{
-					WType:    types.WirelessTypeCellular,
-					Cellular: wwanNetStatus,
-				}
-			}
 		}
 	}
 
