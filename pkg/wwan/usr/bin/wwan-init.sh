@@ -546,7 +546,7 @@ event_stream | while read -r EVENT; do
     LOC_TRACKING="$(parse_json_attr "$NETWORK" "\"location-tracking\"")"
 
     if ! lookup_modem "${IFACE}" "${USB_ADDR}" "${PCI_ADDR}" 2>/tmp/wwan.stderr; then
-      CONFIG_ERROR="$(cat /tmp/wwan.stderr)"
+      CONFIG_ERROR="$(join_lines_with_semicolon </tmp/wwan.stderr)"
       NETWORK_STATUS="$(json_struct \
         "$(json_str_attr logical-label  "$LOGICAL_LABEL")" \
         "$(json_attr     physical-addrs "$ADDRS")" \
@@ -690,7 +690,7 @@ __EOT__
     if [ "$("${PROTOCOL}_get_op_mode")" != "radio-off" ]; then
       echo "[$CDC_DEV] Trying to disable radio (interface=${IFACE})"
       if ! "${PROTOCOL}_toggle_rf" off 2>/tmp/wwan.stderr; then
-        CONFIG_ERROR="$(cat /tmp/wwan.stderr)"
+        CONFIG_ERROR="$(join_lines_with_semicolon </tmp/wwan.stderr)"
       else
         if ! wait_for radio-off "${PROTOCOL}_get_op_mode"; then
           CONFIG_ERROR="Timeout waiting for radio to turn off"

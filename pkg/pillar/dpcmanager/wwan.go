@@ -142,7 +142,7 @@ func (w *wwanWatcher) createWwanDir() error {
 }
 
 // reloadWwanStatus loads the latest state data published by the wwan service.
-func (m *DpcManager) reloadWwanStatus() {
+func (m *DpcManager) reloadWwanStatus(ctx context.Context) {
 	status, err := m.WwanWatcher.LoadStatus()
 	if err != nil {
 		// Already logged.
@@ -207,6 +207,7 @@ func (m *DpcManager) reloadWwanStatus() {
 				m.publishDPCL()
 			}
 		}
+		m.restartVerify(ctx, "wwan status changed")
 		m.updateDNS()
 	}
 	if changed && m.PubWwanStatus != nil {
