@@ -83,6 +83,7 @@ func (m *DpcManager) updateDNS() {
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			err := fmt.Errorf("port %s is in PCIBack - ignored", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
+			// TODO Or record error if there is none yet (but remove "- ignored" - can be part of the log message)
 			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
@@ -91,6 +92,7 @@ func (m *DpcManager) updateDNS() {
 		if !exists || err != nil {
 			err = fmt.Errorf("port %s does not exist - ignored", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
+			// TODO Or record error if there is none yet (but remove "- ignored" - can be part of the log message)
 			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}

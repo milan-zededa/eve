@@ -16,6 +16,7 @@ import (
 	"github.com/eriknordmark/ipinfo"
 	"github.com/google/go-cmp/cmp"
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/utils/generics"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
@@ -1001,20 +1002,49 @@ type WifiConfig struct {
 	CipherBlockStatus
 }
 
-// CellConfig - Cellular part of the configure
-type CellConfig struct {
-	APN          string // LTE APN
-	ProbeAddr    string
+// CellularConfig - configuration for cellular network port (part of DPC).
+type CellularConfig struct {
+	// Parameters to apply for connecting to cellular networks.
+	// Configured separately for every SIM card inserted into the modem.
+	AccessPoints []CellularAccessPoint
+	// IP/FQDN to periodically probe to determine connectivity status.
+	ProbeAddr string
+	// If true, then probing is disabled.
 	DisableProbe bool
-	// Enable to get location info from the GNSS receiver of the LTE modem.
+	// Enable to get location info from the GNSS receiver of the cellular modem.
 	LocationTracking bool
+}
+
+// CellularAccessPoint contains config parameters for connecting to a cellular network.
+type CellularAccessPoint struct {
+	// SIM card slot to which this configuration applies.
+	// 0 - unspecified (apply to currently activated or the only available)
+	// 1 - config for SIM card in the first slot
+	// 2 - config for SIM card in the second slot
+	// etc.
+	SIMSlot uint8
+	// Access Point Network
+	APN string
+	// Authentication protocol used by the network.
+	AuthProtocol WwanAuthProtocol
+	// CipherBlockStatus with encrypted credentials.
+	CipherBlockStatus
+	// The set of cellular network operators that modem should preferably try to register
+	// and connect into.
+	// Network operator should be referenced by PLMN (Public Land Mobile Network) code.
+	PreferredPLMNs []WwanProvider
+	// The list of preferred Radio Access Technologies (RATs) to use for connecting
+	// to the network.
+	PreferredRATs []WwanRAT
+	// If true, then modem will avoid connecting to networks with roaming.
+	ForbidRoaming bool
 }
 
 // WirelessConfig - wireless structure
 type WirelessConfig struct {
-	WType    WirelessType // Wireless Type
-	Cellular []CellConfig // LTE APN
-	Wifi     []WifiConfig // Wifi Config params
+	WType    WirelessType     // Wireless Type
+	Cellular []CellularConfig // Cellular connectivity config params
+	Wifi     []WifiConfig     // Wifi Config params
 }
 
 // WirelessStatus : state information for a single wireless device
@@ -3045,31 +3075,50 @@ func (wc WwanConfig) Equal(wc2 WwanConfig) bool {
 	if wc.RadioSilence != wc2.RadioSilence {
 		return false
 	}
-	if len(wc.Networks) != len(wc2.Networks) {
-		return false
-	}
-	for _, m1 := range wc.Networks {
-		var found bool
-		for _, m2 := range wc2.Networks {
-			if m1.Equal(m2) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
+	return generics.EqualSetsFn(wc.Networks, wc2.Networks,
+		func(wnc1, wnc2 WwanNetworkConfig) bool {
+			return wnc1.Equal(wnc2)
+		})
 }
 
 // WwanNetworkConfig contains configuration for a single cellular network.
+// In case there are multiple SIM cards/slots in the modem, WwanNetworkConfig
+// contains config only for the activated one.
 type WwanNetworkConfig struct {
 	// Logical label in PhysicalIO.
 	LogicalLabel string        `json:"logical-label"`
 	PhysAddrs    WwanPhysAddrs `json:"physical-addrs"`
-	// XXX Multiple APNs are not yet supported.
-	Apns []WwanAPN `json:"apns"`
+	// Index of the SIM slot to activate and use for the connection.
+	SIMSlot uint8 `json:"sim-slot"`
+	// Access Point Network to connect into.
+	// By default, it is "internet".
+	APN string `json:"apn"`
+	// Some cellular networks require authentication.
+	AuthProtocol WwanAuthProtocol `json:"auth-protocol"`
+	Username     string           `json:"username"`
+	// User password (if provided) is encrypted using AES-256-CBC with key derived
+	// by the PBKDF2 method from /proc/sys/kernel/random/boot_id.
+	// Note that even though the config with the password is passed from NIM to the wwan
+	// microservice using the *in-memory only* /run filesystem, we still encrypt the password
+	// to avoid accidental exposure when the content of /run/wwan is dumped as part
+	// of a customer issue report.
+	EncryptedPassword string `json:"encrypted-password"`
+	// The set of cellular network operators that modem should preferably try to register
+	// and connect into.
+	// Network operator should be referenced by PLMN (Public Land Mobile Network) code,
+	// consisting of 3-digits MCC (Mobile Country Code) and 2 or 3-digits MNC
+	// (Mobile Network Code), separated by a dash, e.g. "310-260".
+	// If empty, then modem will select the network automatically based on the SIM
+	// card config.
+	PreferredPLMNs []string `json:"preferred-plmns"`
+	// The list of preferred Radio Access Technologies (RATs) to use for connecting
+	// to the network.
+	// Order matters, first is the most preferred, second is tried next, etc.
+	// Not listed technologies will not be tried.
+	// If empty, then modem will select RAT automatically.
+	PreferredRATs []WwanRAT `json:"preferred-rats"`
+	// Enable or disable data roaming.
+	ForbidRoaming bool `json:"forbid-roaming"`
 	// Proxies configured for the cellular network.
 	Proxies []ProxyEntry `json:"proxies"`
 	// Probe used to detect broken connection.
@@ -3083,15 +3132,35 @@ type WwanNetworkConfig struct {
 	LocationTracking bool `json:"location-tracking"`
 }
 
-// WwanAPN : Access Point configuration for cellular connectivity.
-type WwanAPN struct {
-	APN      string `json:"apn"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	// AuthProto is one of: PAP, CHAP, BOTH (only with QMI modems),
-	// MSCHAPV2 (only with MBIM modems)
-	AuthProto string `json:"auth-proto"`
-}
+// WwanAuthProtocol : authentication protocol used by cellular network.
+type WwanAuthProtocol string
+
+const (
+	// WwanAuthProtocolNone : no authentication.
+	WwanAuthProtocolNone WwanAuthProtocol = ""
+	// WwanAuthProtocolPAP : Password Authentication Protocol.
+	WwanAuthProtocolPAP WwanAuthProtocol = "pap"
+	// WwanAuthProtocolCHAP : Challenge-Handshake Authentication Protocol.
+	WwanAuthProtocolCHAP WwanAuthProtocol = "chap"
+	// WwanAuthProtocolPAPAndCHAP : Both PAP and CHAP.
+	WwanAuthProtocolPAPAndCHAP WwanAuthProtocol = "pap-and-chap"
+)
+
+// WwanRAT : Radio Access Technology.
+type WwanRAT string
+
+const (
+	// WwanRATUnspecified : select RAT automatically.
+	WwanRATUnspecified WwanRAT = ""
+	// WwanRATGSM : Global System for Mobile Communications (2G).
+	WwanRATGSM WwanRAT = "gsm"
+	// WwanRATUMTS : Universal Mobile Telecommunications System (3G).
+	WwanRATUMTS WwanRAT = "umts"
+	// WwanRATLTE : Long-Term Evolution (4G).
+	WwanRATLTE WwanRAT = "lte"
+	// WwanRAT5GNR : 5th Generation New Radio (5G).
+	WwanRAT5GNR WwanRAT = "5gnr"
+)
 
 // WwanProbe : cellular connectivity verification probe.
 type WwanProbe struct {
@@ -3103,40 +3172,31 @@ type WwanProbe struct {
 // Equal compares two instances of WwanNetworkConfig for equality.
 func (wnc WwanNetworkConfig) Equal(wnc2 WwanNetworkConfig) bool {
 	if wnc.LogicalLabel != wnc2.LogicalLabel ||
-		wnc.PhysAddrs.PCI != wnc2.PhysAddrs.PCI ||
-		wnc.PhysAddrs.USB != wnc2.PhysAddrs.USB ||
-		wnc.PhysAddrs.Interface != wnc2.PhysAddrs.Interface {
+		wnc.PhysAddrs != wnc2.PhysAddrs {
 		return false
 	}
-	if wnc.Probe.Address != wnc2.Probe.Address ||
-		wnc.Probe.Disable != wnc2.Probe.Disable {
+	if wnc.SIMSlot != wnc2.SIMSlot ||
+		wnc.APN != wnc2.APN {
 		return false
 	}
-	if len(wnc.Proxies) != len(wnc2.Proxies) {
+	if wnc.AuthProtocol != wnc2.AuthProtocol ||
+		wnc.Username != wnc2.Username ||
+		wnc.EncryptedPassword != wnc2.EncryptedPassword {
 		return false
 	}
-	for i := range wnc.Proxies {
-		if wnc.Proxies[i] != wnc2.Proxies[i] {
-			return false
-		}
+	if !generics.EqualLists(wnc.PreferredPLMNs, wnc2.PreferredPLMNs) ||
+		!generics.EqualLists(wnc.PreferredRATs, wnc2.PreferredRATs) ||
+		wnc.ForbidRoaming != wnc2.ForbidRoaming {
+		return false
+	}
+	if !generics.EqualLists(wnc.Proxies, wnc2.Proxies) {
+		return false
+	}
+	if wnc.Probe != wnc2.Probe {
+		return false
 	}
 	if wnc.LocationTracking != wnc2.LocationTracking {
 		return false
-	}
-	if len(wnc.Apns) != len(wnc2.Apns) {
-		return false
-	}
-	for _, apn1 := range wnc.Apns {
-		var found bool
-		for _, apn2 := range wnc2.Apns {
-			if apn1 == apn2 {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return false
-		}
 	}
 	return true
 }
@@ -3161,8 +3221,19 @@ type WwanPhysAddrs struct {
 // WwanStatus is published by the wwan service and consumed by nim.
 type WwanStatus struct {
 	Networks []WwanNetworkStatus `json:"networks"`
-	// MD5 checksum of the corresponding WwanConfig (as config.json).
+	// SHA256 hash of the corresponding WwanConfig (as config.json).
 	ConfigChecksum string `json:"config-checksum,omitempty"`
+}
+
+// Equal compares two instances of WwanStatus for equality.
+func (ws WwanStatus) Equal(ws2 WwanStatus) bool {
+	if ws.ConfigChecksum != ws2.ConfigChecksum {
+		return false
+	}
+	return generics.EqualSetsFn(ws.Networks, ws2.Networks,
+		func(wns1, wns2 WwanNetworkStatus) bool {
+			return wns1.Equal(wns2)
+		})
 }
 
 // LookupNetworkStatus returns status corresponding to the given cellular network.
@@ -3203,14 +3274,16 @@ func (ws WwanStatus) DoSanitize() {
 				if simCard.ICCID != "" {
 					simCard.Name = simCard.ICCID
 				} else {
-					simCard.Name = fmt.Sprintf("%s - SIM%d", network.Module.Name, j)
+					simCard.Name = fmt.Sprintf("%s-SIM%d",
+						network.Module.Name, simCard.SlotNumber)
 				}
 			}
 		}
 	}
 }
 
-// WwanNetworkStatus contains status information for a single cellular network.
+// WwanNetworkStatus contains status information for a single cellular network
+// (i.e. one modem but possibly multiple SIM slots/cards).
 type WwanNetworkStatus struct {
 	// Logical label of the cellular modem in PhysicalIO.
 	// Can be empty if this device is not configured by the controller
@@ -3218,36 +3291,77 @@ type WwanNetworkStatus struct {
 	LogicalLabel string         `json:"logical-label"`
 	PhysAddrs    WwanPhysAddrs  `json:"physical-addrs"`
 	Module       WwanCellModule `json:"cellular-module"`
-	SimCards     []WwanSimCard  `json:"sim-cards"`
-	ConfigError  string         `json:"config-error"`
-	ProbeError   string         `json:"probe-error"`
-	Providers    []WwanProvider `json:"providers"`
+	// One entry for every SIM slot (incl. those without SIM card).
+	SimCards []WwanSimCard `json:"sim-cards"`
+	// Non-empty if the wwan microservice failed to apply config submitted by NIM.
+	ConfigError string `json:"config-error"`
+	// Error message from the last connectivity probing.
+	ProbeError string `json:"probe-error"`
+	// Network where the modem is currently registered.
+	CurrentProvider WwanProvider `json:"current-provider"`
+	// All networks that the modem is able to detect.
+	// This will include the currently used provider as well as other visible networks.
+	VisibleProviders []WwanProvider `json:"visible-providers"`
+	// The list of Radio Access Technologies (RATs) currently used for registering/connecting
+	// to the network (typically just one).
+	CurrentRATs []WwanRAT `json:"current-rats"`
+	// Unix timestamp in seconds made when the current connection was established.
+	// Zero value if the modem is not connected.
+	ConnectedAt uint64 `json:"connected-at"`
 }
 
 // WwanCellModule contains cellular module specs.
 type WwanCellModule struct {
-	Name            string       `json:"name,omitempty"`
-	IMEI            string       `json:"imei"`
-	Model           string       `json:"model"`
-	Revision        string       `json:"revision"`
+	// Name is a module identifier. For example IMEI if available.
+	// Guaranteed to be unique among all modems attached to the edge node.
+	Name string `json:"name,omitempty"`
+	// International Mobile Equipment Identity.
+	IMEI         string `json:"imei"`
+	Model        string `json:"model"`
+	Manufacturer string `json:"manufacturer"`
+	// Firmware version identifier.
+	Revision string `json:"revision"`
+	// QMI or MBIM.
 	ControlProtocol WwanCtrlProt `json:"control-protocol"`
 	OpMode          WwanOpMode   `json:"operating-mode"`
 }
 
-// WwanSimCard contains SIM card information.
+// WwanSimCard describes either empty SIM slot or a slot with a SIM card inserted.
 type WwanSimCard struct {
-	Name   string `json:"name,omitempty"`
-	ICCID  string `json:"iccid"`
-	IMSI   string `json:"imsi"`
+	// Name is a SIM card/slot identifier.
+	// Guaranteed to be unique across all modems and their SIM slots attached
+	// to the edge node.
+	Name string `json:"name"`
+	// SIM slot number which this WwanSimCard instance describes.
+	SlotNumber uint8 `json:"slot-number"`
+	// True if this SIM slot is activated, i.e. the inserted SIM card (if any) can be used
+	// to connect to a cellular network.
+	SlotActivated bool `json:"slot-activated"`
+	// Integrated Circuit Card Identifier.
+	// Empty if no SIM card is inserted into the slot or if the SIM card is not recognized.
+	ICCID string `json:"iccid,omitempty"`
+	// International Mobile Subscriber Identity.
+	// Empty if no SIM card is inserted into the slot or if the SIM card is not recognized.
+	IMSI string `json:"imsi,omitempty"`
+	// The current state of the SIM card (absent, initialized, not recognized, etc.).
+	// This state is not modeled using enum because the set of possible values differs
+	// between QMI and MBIM protocols (used to control cellular modules) and there is
+	// no 1:1 mapping between them.
 	Status string `json:"status"`
 }
 
 // WwanProvider contains information about a cellular connectivity provider.
 type WwanProvider struct {
-	PLMN           string `json:"plmn"`
-	Description    string `json:"description"`
-	CurrentServing bool   `json:"current-serving"`
-	Roaming        bool   `json:"roaming"`
+	// Public Land Mobile Network identifier.
+	PLMN string `json:"plmn"`
+	// Human-readable label identifying the provider.
+	Description string `json:"description"`
+	// True if this is the provider currently being used.
+	CurrentServing bool `json:"current-serving"`
+	// True if data romaing is ON.
+	Roaming bool `json:"roaming"`
+	// True if this provider is forbidden by SIM card config.
+	Forbidden bool `json:"forbidden"`
 }
 
 // WwanOpMode : wwan operating mode
@@ -3280,9 +3394,43 @@ const (
 	WwanCtrlProtMBIM WwanCtrlProt = "mbim"
 )
 
+// Equal compares two instances of WwanNetworkStatus for equality.
+func (wns WwanNetworkStatus) Equal(wns2 WwanNetworkStatus) bool {
+	if wns.LogicalLabel != wns2.LogicalLabel ||
+		wns.PhysAddrs != wns2.PhysAddrs {
+		return false
+	}
+	if wns.Module != wns2.Module {
+		return false
+	}
+	if !generics.EqualSets(wns.SimCards, wns2.SimCards) {
+		return false
+	}
+	if wns.ConfigError != wns2.ConfigError ||
+		wns.ProbeError != wns2.ProbeError {
+		return false
+	}
+	if wns.CurrentProvider != wns2.CurrentProvider ||
+		!generics.EqualSets(wns.VisibleProviders, wns2.VisibleProviders) {
+		return false
+	}
+	if !generics.EqualSets(wns.CurrentRATs, wns2.CurrentRATs) {
+		return false
+	}
+	if wns.ConnectedAt != wns2.ConnectedAt {
+		return false
+	}
+	return true
+}
+
 // WwanMetrics is published by the wwan service.
 type WwanMetrics struct {
 	Networks []WwanNetworkMetrics `json:"networks"`
+}
+
+// Equal compares two instances of WwanMetrics for equality.
+func (wm WwanMetrics) Equal(wm2 WwanMetrics) bool {
+	return generics.EqualSets(wm.Networks, wm2.Networks)
 }
 
 // LookupNetworkMetrics returns metrics corresponding to the given cellular network.

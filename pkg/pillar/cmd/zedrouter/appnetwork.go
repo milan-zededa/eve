@@ -5,9 +5,10 @@ package zedrouter
 
 import (
 	"fmt"
+
 	"github.com/lf-edge/eve/pkg/pillar/nireconciler"
 	"github.com/lf-edge/eve/pkg/pillar/types"
-	"github.com/lf-edge/eve/pkg/pillar/utils"
+	"github.com/lf-edge/eve/pkg/pillar/utils/generics"
 	uuid "github.com/satori/go.uuid"
 	log "github.com/sirupsen/logrus"
 )
@@ -51,7 +52,7 @@ func (z *zedrouter) updateVIFsForStateCollecting(
 			networks = append(networks, ul.Network)
 		}
 	}
-	networks = utils.FilterDuplicates(networks)
+	networks = generics.FilterDuplicates(networks)
 	// Update state collecting for NIs that the app is or was connected to.
 	for _, network := range networks {
 		netConfig := z.lookupNetworkInstanceConfig(network.String())

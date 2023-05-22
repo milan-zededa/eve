@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 
@@ -163,7 +162,7 @@ func (m *DpcManager) reloadWwanStatus(ctx context.Context) {
 	}
 
 	status.DoSanitize()
-	changed := !reflect.DeepEqual(m.wwanStatus, status)
+	changed := !m.wwanStatus.Equal(status)
 	if changed {
 		m.Log.Functionf("Have new wwan status: %v", m.wwanStatus)
 	}
@@ -227,7 +226,7 @@ func (m *DpcManager) reloadWwanMetrics() {
 		// Already logged.
 		return
 	}
-	if reflect.DeepEqual(metrics, m.wwanMetrics) {
+	if m.wwanMetrics.Equal(metrics) {
 		// nothing really changed
 		return
 	}

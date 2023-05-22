@@ -556,6 +556,7 @@ event_stream | while read -r EVENT; do
         "$(json_attr     physical-addrs "$ADDRS")" \
         "$(json_str_attr config-error   "$CONFIG_ERROR")")"
       STATUS="${STATUS}${NETWORK_STATUS}\n"
+      # TODO: detect that status.json is out-of-date when modem goes away (currently we have to wait until STANDARD-PROBE)
       continue
     fi
     MODEMS="${MODEMS}${CDC_DEV}\n"

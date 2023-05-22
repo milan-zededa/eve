@@ -19,7 +19,8 @@ import (
 	generic "github.com/lf-edge/eve/pkg/pillar/nireconciler/genericitems"
 	linux "github.com/lf-edge/eve/pkg/pillar/nireconciler/linuxitems"
 	"github.com/lf-edge/eve/pkg/pillar/types"
-	"github.com/lf-edge/eve/pkg/pillar/utils"
+	"github.com/lf-edge/eve/pkg/pillar/utils/generics"
+	"github.com/lf-edge/eve/pkg/pillar/utils/netutils"
 	uuid "github.com/satori/go.uuid"
 	"github.com/vishvananda/netlink"
 )
@@ -794,7 +795,7 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 	if ni.config.NtpServer != nil {
 		ntpServers = append(ntpServers, ni.config.NtpServer)
 	}
-	ntpServers = utils.FilterDuplicatesFn(ntpServers, utils.EqualIPs)
+	ntpServers = generics.FilterDuplicatesFn(ntpServers, netutils.EqualIPs)
 	dhcpCfg := generic.DHCPServer{
 		Subnet:         subnet,
 		AllOnesNetmask: !r.disableAllOnesNetmask,
@@ -981,7 +982,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 	if vif.GuestIP != nil {
 		ips = append(ips, vif.GuestIP)
 	}
-	ips = utils.FilterDuplicatesFn(ips, utils.EqualIPs)
+	ips = generics.FilterDuplicatesFn(ips, netutils.EqualIPs)
 	ipv4Eids := linux.IPSet{
 		SetName:    eidsIpsetName(vif, false),
 		TypeName:   "hash:ip",
