@@ -488,11 +488,21 @@ func mockWwan0Status() types.WwanStatus {
 						IMSI:  "310180933695713",
 					},
 				},
-				Providers: []types.WwanProvider{
+				CurrentProvider: types.WwanProvider{
+					PLMN:           "310-410",
+					Description:    "AT&T",
+					CurrentServing: true,
+				},
+				VisibleProviders: []types.WwanProvider{
 					{
 						PLMN:           "310-410",
 						Description:    "AT&T",
 						CurrentServing: true,
+					},
+					{
+						PLMN:           "231-02",
+						Description:    "Telekom",
+						CurrentServing: false,
 					},
 				},
 			},
@@ -616,11 +626,13 @@ func makeDPC(key string, timePrio time.Time, intfs selectedIntfs) types.DevicePo
 			},
 			WirelessCfg: types.WirelessConfig{
 				WType: types.WirelessTypeCellular,
-				Cellular: []types.CellConfig{
-					{
-						APN:              "apn",
-						LocationTracking: true,
+				Cellular: types.CellNetPortConfig{
+					AccessPoints: []types.CellularAccessPoint{
+						{
+							APN: "apn",
+						},
 					},
+					LocationTracking: true,
 				},
 			},
 		})
@@ -1128,7 +1140,7 @@ func TestWireless(test *testing.T) {
 				PhysAddrs: types.WwanPhysAddrs{
 					Interface: "wwan0",
 				},
-				Apns:             []types.WwanAPN{{APN: "apn"}},
+				APN:              "apn",
 				LocationTracking: true,
 			},
 		},
@@ -1152,10 +1164,16 @@ func TestWireless(test *testing.T) {
 	t.Expect(wwanDNS.Cellular.Module.Revision).To(Equal("SWI9X50C_01.08.04.00"))
 	t.Expect(wwanDNS.Cellular.ConfigError).To(BeEmpty())
 	t.Expect(wwanDNS.Cellular.ProbeError).To(BeEmpty())
-	t.Expect(wwanDNS.Cellular.Providers).To(HaveLen(1))
-	t.Expect(wwanDNS.Cellular.Providers[0].Description).To(Equal("AT&T"))
-	t.Expect(wwanDNS.Cellular.Providers[0].CurrentServing).To(BeTrue())
-	t.Expect(wwanDNS.Cellular.Providers[0].PLMN).To(Equal("310-410"))
+	t.Expect(wwanDNS.Cellular.CurrentProvider.Description).To(Equal("AT&T"))
+	t.Expect(wwanDNS.Cellular.CurrentProvider.CurrentServing).To(BeTrue())
+	t.Expect(wwanDNS.Cellular.CurrentProvider.PLMN).To(Equal("310-410"))
+	t.Expect(wwanDNS.Cellular.VisibleProviders).To(HaveLen(2))
+	t.Expect(wwanDNS.Cellular.VisibleProviders[0].Description).To(Equal("AT&T"))
+	t.Expect(wwanDNS.Cellular.VisibleProviders[0].CurrentServing).To(BeTrue())
+	t.Expect(wwanDNS.Cellular.VisibleProviders[0].PLMN).To(Equal("310-410"))
+	t.Expect(wwanDNS.Cellular.VisibleProviders[1].Description).To(Equal("Telekom"))
+	t.Expect(wwanDNS.Cellular.VisibleProviders[1].CurrentServing).To(BeFalse())
+	t.Expect(wwanDNS.Cellular.VisibleProviders[1].PLMN).To(Equal("231-02"))
 	t.Expect(wwanDNS.Cellular.SimCards).To(HaveLen(1))
 	t.Expect(wwanDNS.Cellular.SimCards[0].Name).To(Equal("89012703578345957137")) // ICCID put by DoSanitize()
 	t.Expect(wwanDNS.Cellular.SimCards[0].ICCID).To(Equal("89012703578345957137"))

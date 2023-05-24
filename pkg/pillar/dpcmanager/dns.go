@@ -67,15 +67,13 @@ func (m *DpcManager) updateDNS() {
 		m.deviceNetStatus.Ports[ix].DNSServers = port.DnsServers
 		m.deviceNetStatus.Ports[ix].NtpServer = port.NtpServer
 		m.deviceNetStatus.Ports[ix].TestResults = port.TestResults
+		m.deviceNetStatus.Ports[ix].WirelessStatus.WType = port.WirelessCfg.WType
 		// If this is a cellular network connectivity, add status information
 		// obtained from the wwan service.
 		if port.WirelessCfg.WType == types.WirelessTypeCellular {
 			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
 			if found {
-				m.deviceNetStatus.Ports[ix].WirelessStatus = types.WirelessStatus{
-					WType:    types.WirelessTypeCellular,
-					Cellular: wwanNetStatus,
-				}
+				m.deviceNetStatus.Ports[ix].WirelessStatus.Cellular = wwanNetStatus
 			}
 		}
 		// Do not try to get state data for interface which is in PCIback.
@@ -113,7 +111,7 @@ func (m *DpcManager) updateDNS() {
 				port.IfName, ifindex, err)
 			ipAddrs = nil
 		}
-		m.deviceNetStatus.Ports[ix].MacAddr = macAddr.String()
+		m.deviceNetStatus.Ports[ix].MacAddr = macAddr
 		m.deviceNetStatus.Ports[ix].AddrInfoList = make([]types.AddrInfo, len(ipAddrs))
 		if len(ipAddrs) == 0 {
 			m.Log.Functionf("updateDNS: interface %s has NO IP addresses", port.IfName)

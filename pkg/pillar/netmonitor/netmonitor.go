@@ -128,6 +128,7 @@ func (e DNSInfoChange) isNetworkEvent() {}
 
 // IfAttrs : interface attributes.
 type IfAttrs struct {
+	// TODO: add MTU
 	// Index of the interface
 	IfIndex int
 	// Name of the interface.

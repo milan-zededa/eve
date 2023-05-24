@@ -1002,15 +1002,13 @@ type WifiConfig struct {
 	CipherBlockStatus
 }
 
-// CellularConfig - configuration for cellular network port (part of DPC).
-type CellularConfig struct {
+// CellNetPortConfig - configuration for cellular network port (part of DPC).
+type CellNetPortConfig struct {
 	// Parameters to apply for connecting to cellular networks.
 	// Configured separately for every SIM card inserted into the modem.
 	AccessPoints []CellularAccessPoint
-	// IP/FQDN to periodically probe to determine connectivity status.
-	ProbeAddr string
-	// If true, then probing is disabled.
-	DisableProbe bool
+	// Probe used to detect broken connection.
+	Probe WwanProbe
 	// Enable to get location info from the GNSS receiver of the cellular modem.
 	LocationTracking bool
 }
@@ -1032,7 +1030,7 @@ type CellularAccessPoint struct {
 	// The set of cellular network operators that modem should preferably try to register
 	// and connect into.
 	// Network operator should be referenced by PLMN (Public Land Mobile Network) code.
-	PreferredPLMNs []WwanProvider
+	PreferredPLMNs []string
 	// The list of preferred Radio Access Technologies (RATs) to use for connecting
 	// to the network.
 	PreferredRATs []WwanRAT
@@ -1042,9 +1040,9 @@ type CellularAccessPoint struct {
 
 // WirelessConfig - wireless structure
 type WirelessConfig struct {
-	WType    WirelessType     // Wireless Type
-	Cellular []CellularConfig // Cellular connectivity config params
-	Wifi     []WifiConfig     // Wifi Config params
+	WType    WirelessType      // Wireless Type
+	Cellular CellNetPortConfig // Cellular connectivity config params
+	Wifi     []WifiConfig      // Wifi Config params
 }
 
 // WirelessStatus : state information for a single wireless device
@@ -1198,8 +1196,9 @@ type NetworkPortStatus struct {
 	NtpServers     []net.IP // This comes from DHCP done on uplink port
 	AddrInfoList   []AddrInfo
 	Up             bool
-	MacAddr        string
+	MacAddr        net.HardwareAddr
 	DefaultRouters []net.IP
+	MTU            uint16 // TODO: get this via networkMonitor
 	WirelessCfg    WirelessConfig
 	WirelessStatus WirelessStatus
 	ProxyConfig
@@ -1398,7 +1397,7 @@ func (status DeviceNetworkStatus) MostlyEqual(status2 DeviceNetworkStatus) bool 
 			}
 		}
 		if p1.Up != p2.Up ||
-			p1.MacAddr != p2.MacAddr {
+			!bytes.Equal(p1.MacAddr, p2.MacAddr) {
 			return false
 		}
 		if len(p1.DefaultRouters) != len(p2.DefaultRouters) {
@@ -3331,7 +3330,7 @@ type WwanSimCard struct {
 	// Name is a SIM card/slot identifier.
 	// Guaranteed to be unique across all modems and their SIM slots attached
 	// to the edge node.
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 	// SIM slot number which this WwanSimCard instance describes.
 	SlotNumber uint8 `json:"slot-number"`
 	// True if this SIM slot is activated, i.e. the inserted SIM card (if any) can be used

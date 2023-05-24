@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	zconfig "github.com/lf-edge/eve/api/go/config"
+	zevecommon "github.com/lf-edge/eve/api/go/evecommon"
 	"github.com/lf-edge/eve/pkg/pillar/objtonum"
 	"github.com/lf-edge/eve/pkg/pillar/sriov"
 	"github.com/lf-edge/eve/pkg/pillar/types"
@@ -1813,37 +1814,85 @@ func parseNetworkWirelessConfig(ctx *getconfigContext, key string, netEnt *zconf
 	wType := netWireless.GetType()
 	switch wType {
 	case zconfig.WirelessType_Cellular:
-		//
 		wconfig.WType = types.WirelessTypeCellular
-		cellulars := netWireless.GetCellularCfg()
-		for _, cellular := range cellulars {
-			var wcell types.CellConfig
-			wcell.APN = cellular.GetAPN()
-			wcell.ProbeAddr = cellular.GetProbe().GetProbeAddress()
-			wcell.DisableProbe = cellular.GetProbe().GetDisable()
-			wcell.LocationTracking = cellular.GetLocationTracking()
-			wconfig.Cellular = append(wconfig.Cellular, wcell)
+		cellNetConfigs := netWireless.GetCellularCfg()
+		if len(cellNetConfigs) == 0 {
+			log.Errorf("parseNetworkWirelessConfig: missing cellular config in: %v",
+				netWireless)
+			return wconfig
 		}
+		// CellularCfg should really have been defined in the EVE API as a single entry
+		// rather than as a list (for multiple SIM cards and APNs there is AccessPoints list
+		// underneath). However, marking this field as deprecated and creating a new non-list
+		// field seems unnecessary - let's instead expect single entry.
+		if len(cellNetConfigs) > 1 {
+			log.Errorf(
+				"parseNetworkWirelessConfig: unexpected multiple cellular configs in: %v",
+				netWireless)
+			return wconfig
+		}
+		cellNetConfig := cellNetConfigs[0]
+		for _, accessPoint := range cellNetConfig.AccessPoints {
+			var ap types.CellularAccessPoint
+			ap.APN = accessPoint.Apn
+			ap.SIMSlot = uint8(accessPoint.SimSlot)
+			switch accessPoint.AuthProtocol {
+			case zconfig.CellularAuthProtocol_CELLULAR_AUTH_PROTOCOL_PAP:
+				ap.AuthProtocol = types.WwanAuthProtocolPAP
+			case zconfig.CellularAuthProtocol_CELLULAR_AUTH_PROTOCOL_CHAP:
+				ap.AuthProtocol = types.WwanAuthProtocolCHAP
+			case zconfig.CellularAuthProtocol_CELLULAR_AUTH_PROTOCOL_PAP_AND_CHAP:
+				ap.AuthProtocol = types.WwanAuthProtocolPAPAndCHAP
+			default:
+				log.Errorf("parseNetworkWirelessConfig: unrecognized AuthProtocol: %+v",
+					accessPoint)
+			}
+			ap.CipherBlockStatus = parseCipherBlock(ctx, key, accessPoint.GetCipherData())
+			for _, plmn := range accessPoint.PreferredPlmns {
+				ap.PreferredPLMNs = append(ap.PreferredPLMNs, plmn)
+			}
+			for _, rat := range accessPoint.PreferredRats {
+				switch rat {
+				case zevecommon.RadioAccessTechnology_RADIO_ACCESS_TECHNOLOGY_GSM:
+					ap.PreferredRATs = append(ap.PreferredRATs, types.WwanRATGSM)
+				case zevecommon.RadioAccessTechnology_RADIO_ACCESS_TECHNOLOGY_UMTS:
+					ap.PreferredRATs = append(ap.PreferredRATs, types.WwanRATUMTS)
+				case zevecommon.RadioAccessTechnology_RADIO_ACCESS_TECHNOLOGY_LTE:
+					ap.PreferredRATs = append(ap.PreferredRATs, types.WwanRATLTE)
+				case zevecommon.RadioAccessTechnology_RADIO_ACCESS_TECHNOLOGY_5GNR:
+					ap.PreferredRATs = append(ap.PreferredRATs, types.WwanRAT5GNR)
+				default:
+					log.Errorf("parseNetworkWirelessConfig: unrecognized RAT: %+v",
+						accessPoint)
+				}
+			}
+			ap.ForbidRoaming = accessPoint.ForbidRoaming
+			wconfig.Cellular.AccessPoints = append(wconfig.Cellular.AccessPoints, ap)
+		}
+		wconfig.Cellular.Probe.Disable = cellNetConfig.Probe.GetDisable()
+		wconfig.Cellular.Probe.Address = cellNetConfig.Probe.GetProbeAddress()
+		wconfig.Cellular.LocationTracking = cellNetConfig.GetLocationTracking()
 		log.Functionf("parseNetworkWirelessConfig: Wireless of network Cellular, %v", wconfig.Cellular)
 	case zconfig.WirelessType_WiFi:
-		//
 		wconfig.WType = types.WirelessTypeWifi
 		wificfgs := netWireless.GetWifiCfg()
-
 		for _, wificfg := range wificfgs {
 			var wifi types.WifiConfig
 			wifi.SSID = wificfg.GetWifiSSID()
-			if wificfg.GetKeyScheme() == zconfig.WiFiKeyScheme_WPAPSK {
+			switch wificfg.GetKeyScheme() {
+			case zconfig.WiFiKeyScheme_WPAPSK:
 				wifi.KeyScheme = types.KeySchemeWpaPsk
-			} else if wificfg.GetKeyScheme() == zconfig.WiFiKeyScheme_WPAEAP {
+			case zconfig.WiFiKeyScheme_WPAEAP:
 				wifi.KeyScheme = types.KeySchemeWpaEap
+			default:
+				log.Errorf("parseNetworkWirelessConfig: unrecognized WiFi Key scheme: %+v",
+					wificfg)
 			}
 			wifi.Identity = wificfg.GetIdentity()
 			wifi.Password = wificfg.GetPassword()
 			wifi.Priority = wificfg.GetPriority()
-			key = fmt.Sprintf("%s-%s", key, wifi.SSID)
-			wifi.CipherBlockStatus = parseCipherBlock(ctx, key, wificfg.GetCipherData())
-
+			wifiKey := fmt.Sprintf("%s-%s", key, wifi.SSID)
+			wifi.CipherBlockStatus = parseCipherBlock(ctx, wifiKey, wificfg.GetCipherData())
 			wconfig.Wifi = append(wconfig.Wifi, wifi)
 		}
 		log.Functionf("parseNetworkWirelessConfig: Wireless of network Wifi, %v", wconfig.Wifi)
