@@ -3,3 +3,4 @@
 write-kubeconfig-mode: "0644"
 cluster-init: true
 log: "/var/log/k3s.log"
+snapshotter: "native"
