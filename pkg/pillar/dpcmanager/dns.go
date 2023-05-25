@@ -79,31 +79,36 @@ func (m *DpcManager) updateDNS() {
 		// Do not try to get state data for interface which is in PCIback.
 		ioBundle := m.adapters.LookupIoBundleIfName(port.IfName)
 		if ioBundle != nil && ioBundle.IsPCIBack {
-			err := fmt.Errorf("port %s is in PCIBack - ignored", port.IfName)
+			err := fmt.Errorf("port %s is in PCIBack", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			// TODO Or record error if there is none yet (but remove "- ignored" - can be part of the log message)
-			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			if !m.deviceNetStatus.Ports[ix].HasError() {
+				// Prefer errors recorded by DPC verification.
+				// Set error from here only when there is none yet.
+				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			}
 			continue
 		}
 		// Get interface state data from the network stack.
 		ifindex, exists, err := m.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if !exists || err != nil {
-			err = fmt.Errorf("port %s does not exist - ignored", port.IfName)
+			err = fmt.Errorf("port %s does not exist", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			// TODO Or record error if there is none yet (but remove "- ignored" - can be part of the log message)
-			//m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			if !m.deviceNetStatus.Ports[ix].HasError() {
+				// Prefer errors recorded by DPC verification.
+				// Set error from here only when there is none yet.
+				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			}
 			continue
 		}
-		var isUp bool
 		ifAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifindex)
 		if err != nil {
 			m.Log.Warnf(
 				"updateDNS: failed to get attrs for interface %s with index %d: %v",
 				port.IfName, ifindex, err)
 		} else {
-			isUp = ifAttrs.AdminUp
+			m.deviceNetStatus.Ports[ix].Up = ifAttrs.AdminUp
+			m.deviceNetStatus.Ports[ix].MTU = ifAttrs.MTU
 		}
-		m.deviceNetStatus.Ports[ix].Up = isUp
 		ipAddrs, macAddr, err := m.NetworkMonitor.GetInterfaceAddrs(ifindex)
 		if err != nil {
 			m.Log.Warnf(

@@ -143,5 +143,7 @@ type EncryptionBlock struct {
 	DsPassword        string
 	WifiUserName      string // If the authentication type is EAP
 	WifiPassword      string
+	CellNetUsername   string
+	CellNetPassword   string
 	ProtectedUserData string
 }

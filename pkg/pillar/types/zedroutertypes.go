@@ -1021,6 +1021,8 @@ type CellularAccessPoint struct {
 	// 2 - config for SIM card in the second slot
 	// etc.
 	SIMSlot uint8
+	// If true, then this configuration is currently activated.
+	Activated bool
 	// Access Point Network
 	APN string
 	// Authentication protocol used by the network.
@@ -3096,7 +3098,8 @@ type WwanNetworkConfig struct {
 	AuthProtocol WwanAuthProtocol `json:"auth-protocol"`
 	Username     string           `json:"username"`
 	// User password (if provided) is encrypted using AES-256-CBC with key derived
-	// by the PBKDF2 method from /proc/sys/kernel/random/boot_id.
+	// by the PBKDF2 method, taking kernel-generated /proc/sys/kernel/random/boot_id
+	// as the input.
 	// Note that even though the config with the password is passed from NIM to the wwan
 	// microservice using the *in-memory only* /run filesystem, we still encrypt the password
 	// to avoid accidental exposure when the content of /run/wwan is dumped as part

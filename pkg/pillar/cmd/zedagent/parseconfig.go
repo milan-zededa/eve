@@ -1836,6 +1836,10 @@ func parseNetworkWirelessConfig(ctx *getconfigContext, key string, netEnt *zconf
 			var ap types.CellularAccessPoint
 			ap.APN = accessPoint.Apn
 			ap.SIMSlot = uint8(accessPoint.SimSlot)
+			// By default (ActivatedSimSlot is not defined), any configured Access Point
+			// should be activated.
+			ap.Activated = cellNetConfig.ActivatedSimSlot == 0 ||
+				cellNetConfig.ActivatedSimSlot == accessPoint.SimSlot
 			switch accessPoint.AuthProtocol {
 			case zconfig.CellularAuthProtocol_CELLULAR_AUTH_PROTOCOL_PAP:
 				ap.AuthProtocol = types.WwanAuthProtocolPAP

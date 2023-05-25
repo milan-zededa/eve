@@ -590,9 +590,11 @@ func TestWireless(test *testing.T) {
 				},
 				WirelessCfg: types.WirelessConfig{
 					WType: types.WirelessTypeCellular,
-					Cellular: []types.CellConfig{
-						{
-							APN: "my-apn",
+					Cellular: types.CellNetPortConfig{
+						AccessPoints: []types.CellularAccessPoint{
+							{
+								APN: "my-apn",
+							},
 						},
 					},
 				},
