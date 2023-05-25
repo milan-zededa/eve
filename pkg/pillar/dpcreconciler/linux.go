@@ -141,6 +141,12 @@ const (
 	intendedStateFile = "/run/nim-intended-state.dot"
 )
 
+const (
+	// Network bridge used by Kubernetes CNI.
+	// Currently, this is hardcoded for the Flannel CNI plugin.
+	kubeClusterCNIBridge = "cni0"
+)
+
 // LinuxDpcReconciler is a DPC-reconciler for Linux network stack,
 // i.e. it configures and uses Linux networking to provide device connectivity.
 type LinuxDpcReconciler struct {
@@ -723,6 +729,17 @@ func (r *LinuxDpcReconciler) updateCurrentAdapterAddrs(
 func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (changed bool) {
 	sgPath := dg.NewSubGraphPath(L3SG, RoutesSG)
 	currentRoutes := dg.New(dg.InitArgs{Name: RoutesSG})
+	cniIfIndex := -1
+	if r.KubeClusterMode {
+		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(kubeClusterCNIBridge)
+		if err != nil {
+			r.Log.Errorf("getIntendedRoutes: failed to get ifIndex for %s: %v",
+				kubeClusterCNIBridge, err)
+		}
+		if err == nil && found {
+			cniIfIndex = ifIndex
+		}
+	}
 	for _, port := range dpc.Ports {
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
@@ -743,7 +760,6 @@ func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (ch
 		if err != nil {
 			r.Log.Errorf("updateCurrentRoutes: ListRoutes failed for ifIndex %d: %v",
 				ifIndex, err)
-			continue
 		}
 		for _, rt := range routes {
 			currentRoutes.PutItem(linux.Route{
@@ -754,6 +770,29 @@ func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (ch
 				State:         reconciler.ItemStateCreated,
 				LastOperation: reconciler.OperationCreate,
 			})
+		}
+
+		if cniIfIndex != -1 {
+			cniRoutes, err := r.NetworkMonitor.ListRoutes(netmonitor.RouteFilters{
+				FilterByTable: true,
+				Table:         table,
+				FilterByIf:    true,
+				IfIndex:       cniIfIndex,
+			})
+			if err != nil {
+				r.Log.Errorf("updateCurrentRoutes: ListRoutes failed for ifIndex %d: %v",
+					cniIfIndex, err)
+			}
+			for _, rt := range cniRoutes {
+				currentRoutes.PutItem(linux.Route{
+					Route:         rt.Data.(netlink.Route),
+					UnmanagedLink: true,
+				}, &reconciler.ItemStateData{
+					State:         reconciler.ItemStateCreated,
+					LastOperation: reconciler.OperationCreate,
+				})
+			}
+
 		}
 	}
 	prevSG := dg.GetSubGraph(r.currentState, sgPath)
@@ -905,12 +944,7 @@ func (r *LinuxDpcReconciler) getIntendedL3Cfg(dpc types.DevicePortConfig) dg.Gra
 	}
 	intendedL3 := dg.New(graphArgs)
 	intendedL3.PutSubGraph(r.getIntendedAdapters(dpc))
-	// XXX comment out this ip rule, this prevents kubernetes pods communicate
-	// tried other approaches and not finding the right solutions
-	if !r.KubeClusterMode {
-		intendedL3.PutSubGraph(r.getIntendedSrcIPRules(dpc))
-	}
-
+	intendedL3.PutSubGraph(r.getIntendedSrcIPRules(dpc))
 	intendedL3.PutSubGraph(r.getIntendedRoutes(dpc))
 	intendedL3.PutSubGraph(r.getIntendedArps(dpc))
 	return intendedL3
@@ -1010,6 +1044,28 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 		Description: "IP routes",
 	}
 	intendedRoutes := dg.New(graphArgs)
+	// Routes are copied from the main table.
+	srcTable := syscall.RT_TABLE_MAIN
+	var cniRoutes []netmonitor.Route
+	if r.KubeClusterMode {
+		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(kubeClusterCNIBridge)
+		if err != nil {
+			r.Log.Errorf("getIntendedRoutes: failed to get ifIndex for %s: %v",
+				kubeClusterCNIBridge, err)
+		}
+		if err == nil && found {
+			cniRoutes, err = r.NetworkMonitor.ListRoutes(netmonitor.RouteFilters{
+				FilterByTable: true,
+				Table:         srcTable,
+				FilterByIf:    true,
+				IfIndex:       ifIndex,
+			})
+			if err != nil {
+				r.Log.Errorf("getIntendedRoutes: ListRoutes failed for ifIndex %d: %v",
+					ifIndex, err)
+			}
+		}
+	}
 	for _, port := range dpc.Ports {
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
@@ -1020,8 +1076,6 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 		if !found {
 			continue
 		}
-		// Routes copied from the main table.
-		srcTable := syscall.RT_TABLE_MAIN
 		dstTable := devicenetwork.BaseRTIndex + ifIndex
 		routes, err := r.NetworkMonitor.ListRoutes(netmonitor.RouteFilters{
 			FilterByTable: true,
@@ -1032,29 +1086,41 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 		if err != nil {
 			r.Log.Errorf("getIntendedRoutes: ListRoutes failed for ifIndex %d: %v",
 				ifIndex, err)
-			continue
 		}
 		for _, rt := range routes {
 			rtCopy := rt.Data.(netlink.Route)
 			rtCopy.Table = dstTable
-			// Multiple IPv6 link-locals can't be added to the same
-			// table unless the Priority differs.
-			// Different LinkIndex, Src, Scope doesn't matter.
-			if rt.Dst != nil && rt.Dst.IP.IsLinkLocalUnicast() {
-				if r.Log != nil {
-					r.Log.Tracef("Forcing IPv6 priority to %v", rtCopy.LinkIndex)
-				}
-				// Hack to make the kernel routes not appear identical.
-				rtCopy.Priority = rtCopy.LinkIndex
-			}
+			r.prepareRouteForCopy(&rtCopy)
 			intendedRoutes.PutItem(linux.Route{
 				Route:         rtCopy,
 				AdapterIfName: port.IfName,
 				AdapterLL:     port.Logicallabel,
 			}, nil)
 		}
+		for _, rt := range cniRoutes {
+			rtCopy := rt.Data.(netlink.Route)
+			rtCopy.Table = dstTable
+			r.prepareRouteForCopy(&rtCopy)
+			intendedRoutes.PutItem(linux.Route{
+				Route:         rtCopy,
+				UnmanagedLink: true,
+			}, nil)
+		}
 	}
 	return intendedRoutes
+}
+
+func (r *LinuxDpcReconciler) prepareRouteForCopy(route *netlink.Route) {
+	// Multiple IPv6 link-locals can't be added to the same
+	// table unless the Priority differs.
+	// Different LinkIndex, Src, Scope doesn't matter.
+	if route.Dst != nil && route.Dst.IP.IsLinkLocalUnicast() {
+		if r.Log != nil {
+			r.Log.Tracef("Forcing IPv6 priority to %v", route.LinkIndex)
+		}
+		// Hack to make the kernel routes not appear identical.
+		route.Priority = route.LinkIndex
+	}
 }
 
 type portAddr struct {
