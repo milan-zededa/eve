@@ -443,16 +443,10 @@ func PublishDeviceInfoToZedCloud(ctx *zedagentContext, dest destinationBitset) {
 
 	// We report all the ports in DeviceNetworkStatus
 	// Note that this is deprecated in favour of SystemAdapterInfo.
-	labelList := types.ReportLogicallabels(*deviceNetworkStatus)
-	for _, label := range labelList {
-		ports := deviceNetworkStatus.GetPortsByLogicallabel(label)
-		if len(ports) == 0 {
-			continue
-		}
-		p := ports[0]
-		ReportDeviceNetworkInfo := encodeNetInfo(*p)
+	for _, p := range deviceNetworkStatus.Ports {
+		ReportDeviceNetworkInfo := encodeNetInfo(p)
 		// XXX rename DevName to Logicallabel in proto file
-		ReportDeviceNetworkInfo.DevName = *proto.String(label)
+		ReportDeviceNetworkInfo.DevName = *proto.String(p.Logicallabel)
 		ReportDeviceInfo.Network = append(ReportDeviceInfo.Network,
 			ReportDeviceNetworkInfo)
 	}
@@ -815,9 +809,7 @@ func encodeNetInfo(port types.NetworkPortStatus) *info.ZInfoNetwork {
 	}
 	networkInfo.Ipv4Up = port.Up
 	networkInfo.MacAddr = port.MacAddr.String()
-
-	// In case caller doesn't override
-	networkInfo.DevName = port.IfName
+	networkInfo.DevName = port.Logicallabel
 
 	networkInfo.Alias = port.Alias
 	// Default routers from kernel whether or not we are using DHCP
@@ -974,9 +966,8 @@ func encodeSystemAdapterInfo(ctx *zedagentContext) *info.SystemAdapterInfo {
 			}
 			if i == dpcl.CurrentIndex {
 				// For the currently used DPC we publish the status (DeviceNetworkStatus).
-				ports := deviceNetworkStatus.GetPortsByLogicallabel(p.Logicallabel)
-				if len(ports) != 0 {
-					portStatus := ports[0]
+				portStatus := deviceNetworkStatus.GetPortByLogicallabel(p.Logicallabel)
+				if portStatus != nil {
 					dps.Ports[j] = encodeNetworkPortStatus(ctx, portStatus, p.NetworkUUID)
 					continue
 				}
@@ -1106,7 +1097,7 @@ func encodeNetworkPortConfig(ctx *zedagentContext,
 	// XXX Add Alias in proto file?
 	// dp.Alias = npc.Alias
 
-	ibPtr := aa.LookupIoBundlePhylabel(npc.Phylabel)
+	ibPtr := aa.LookupIoBundleLogicallabel(npc.Logicallabel)
 	if ibPtr != nil {
 		dp.Usage = ibPtr.Usage
 	}

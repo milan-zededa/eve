@@ -420,7 +420,7 @@ func handleDNSImpl(ctxArg interface{}, key string,
 			cmp.Diff(*ctx.DeviceNetworkStatus, status))
 	}
 	*ctx.DeviceNetworkStatus = status
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus)
+	newAddrCount := ctx.DeviceNetworkStatus.CountAddrsExceptLinkLocal()
 	log.Functionf("handleDNSImpl %d usable addresses", newAddrCount)
 	if (ctx.usableAddressCount == 0 && newAddrCount != 0) ||
 		(ctx.usableAddressCount != 0 && newAddrCount == 0) ||
@@ -459,7 +459,7 @@ func handleDNSDelete(ctxArg interface{}, key string,
 		return
 	}
 	*ctx.DeviceNetworkStatus = types.DeviceNetworkStatus{}
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus)
+	newAddrCount := ctx.DeviceNetworkStatus.CountAddrsExceptLinkLocal()
 	log.Functionf("handleDNSDelete %d usable addresses", newAddrCount)
 	if (ctx.usableAddressCount == 0 && newAddrCount != 0) ||
 		(ctx.usableAddressCount != 0 && newAddrCount == 0) ||
@@ -545,6 +545,14 @@ func handleOnboardStatusImpl(ctxArg interface{}, key string,
 	printOutput(ctx)
 }
 
+func getPrintedPortName(port types.NetworkPortStatus) string {
+	portName := port.Logicallabel
+	if port.IfName != "" && port.IfName != port.Logicallabel {
+		portName = fmt.Sprintf("%s (interface %s)", port.Logicallabel, port.IfName)
+	}
+	return portName
+}
+
 // Print output for all interfaces
 // XXX can we limit to interfaces which changed?
 func printOutput(ctx *diagContext) {
@@ -624,27 +632,27 @@ func printOutput(ctx *diagContext) {
 	passPorts := 0
 	passOtherPorts := 0
 
-	numMgmtPorts := len(types.GetMgmtPortsAny(*ctx.DeviceNetworkStatus, 0))
+	numMgmtPorts := len(ctx.DeviceNetworkStatus.GetMgmtPortsAny(0))
 	fmt.Fprintf(outfile, "INFO: Have %d total ports. %d ports should be connected to EV controller\n", numPorts, numMgmtPorts)
 	for _, port := range ctx.DeviceNetworkStatus.Ports {
 		// Print usefully formatted info based on which
 		// fields are set and Dhcp type; proxy info order
-		ifname := port.IfName
-		isMgmt := types.IsMgmtPort(*ctx.DeviceNetworkStatus, ifname)
-		priority := types.GetPortCost(*ctx.DeviceNetworkStatus,
-			ifname)
-		if isMgmt {
+		if port.IsMgmt {
 			mgmtPorts += 1
+		}
+		portName := getPrintedPortName(port)
+		if port.IfName == "" {
+			fmt.Fprintf(outfile, "WARNING: %s: missing interface name\n", portName)
 		}
 
 		typeStr := "for application use"
-		if priority == types.PortCostMin {
+		if port.Cost == types.PortCostMin {
 			typeStr = "for EV Controller without usage-based charging"
-		} else if isMgmt {
+		} else if port.IsMgmt {
 			typeStr = fmt.Sprintf("for EV Controller (cost %d)",
-				priority)
+				port.Cost)
 		}
-		fmt.Fprintf(outfile, "INFO: Port %s: %s\n", ifname, typeStr)
+		fmt.Fprintf(outfile, "INFO: %s: %s\n", portName, typeStr)
 		ipCount := 0
 		for _, ai := range port.AddrInfoList {
 			if ai.Addr.IsLinkLocalUnicast() {
@@ -654,18 +662,18 @@ func printOutput(ctx *diagContext) {
 			noGeo := ipinfo.IPInfo{}
 			if ai.Geo == noGeo {
 				fmt.Fprintf(outfile, "INFO: %s: IP address %s not geolocated\n",
-					ifname, ai.Addr)
+					portName, ai.Addr)
 			} else {
 				fmt.Fprintf(outfile, "INFO: %s: IP address %s geolocated to %+v\n",
-					ifname, ai.Addr, ai.Geo)
+					portName, ai.Addr, ai.Geo)
 			}
 		}
 		if ipCount == 0 {
 			fmt.Fprintf(outfile, "INFO: %s: No IP address\n",
-				ifname)
+				portName)
 		}
 
-		fmt.Fprintf(outfile, "INFO: %s: DNS servers: ", ifname)
+		fmt.Fprintf(outfile, "INFO: %s: DNS servers: ", portName)
 		for _, ds := range port.DNSServers {
 			fmt.Fprintf(outfile, "%s, ", ds.String())
 		}
@@ -673,73 +681,73 @@ func printOutput(ctx *diagContext) {
 		// If static print static config
 		if port.Dhcp == types.DT_STATIC {
 			fmt.Fprintf(outfile, "INFO: %s: Static IP subnet: %s\n",
-				ifname, port.Subnet.String())
+				portName, port.Subnet.String())
 			for _, r := range port.DefaultRouters {
 				fmt.Fprintf(outfile, "INFO: %s: Static IP router: %s\n",
-					ifname, r.String())
+					portName, r.String())
 			}
 			fmt.Fprintf(outfile, "INFO: %s: Static Domain Name: %s\n",
-				ifname, port.DomainName)
+				portName, port.DomainName)
 			fmt.Fprintf(outfile, "INFO: %s: Static NTP server: %s\n",
-				ifname, port.NtpServer.String())
+				portName, port.NtpServer.String())
 		}
-		printProxy(ctx, port, ifname)
+		printProxy(ctx, port)
 
-		if !isMgmt {
+		if !port.IsMgmt {
 			fmt.Fprintf(outfile, "INFO: %s: not intended for EV controller; skipping those tests\n",
-				ifname)
+				portName)
 			continue
 		}
 		if ipCount == 0 {
 			fmt.Fprintf(outfile, "WARNING: %s: No IP address to connect to EV controller\n",
-				ifname)
+				portName)
 			continue
 		}
 		// DNS lookup - skip if an explicit (i.e. not transparent) proxy is configured.
 		// In that case it is the proxy which is responsible for domain name resolution.
 		if !devicenetwork.IsExplicitProxyConfigured(port.ProxyConfig) {
-			if !tryLookupIP(ctx, ifname) {
+			if !tryLookupIP(ctx, port) {
 				continue
 			}
 		}
 		// ping and getUuid calls
-		if !tryPing(ctx, ifname, "") {
+		if !tryPing(ctx, port, "") {
 			fmt.Fprintf(outfile, "ERROR: %s: ping failed to %s; trying google\n",
-				ifname, ctx.serverNameAndPort)
+				portName, ctx.serverNameAndPort)
 			origServerName := ctx.serverName
 			origServerNameAndPort := ctx.serverNameAndPort
 			ctx.serverName = "www.google.com"
 			ctx.serverNameAndPort = ctx.serverName
-			res := tryPing(ctx, ifname, "http://www.google.com")
+			res := tryPing(ctx, port, "http://www.google.com")
 			if res {
 				fmt.Fprintf(outfile, "WARNING: %s: Can reach http://google.com but not https://%s\n",
-					ifname, origServerNameAndPort)
+					portName, origServerNameAndPort)
 			} else {
 				fmt.Fprintf(outfile, "ERROR: %s: Can't reach http://google.com; likely lack of Internet connectivity\n",
-					ifname)
+					portName)
 			}
-			res = tryPing(ctx, ifname, "https://www.google.com")
+			res = tryPing(ctx, port, "https://www.google.com")
 			if res {
 				fmt.Fprintf(outfile, "WARNING: %s: Can reach https://google.com but not https://%s\n",
-					ifname, origServerNameAndPort)
+					portName, origServerNameAndPort)
 			} else {
 				fmt.Fprintf(outfile, "ERROR: %s: Can't reach https://google.com; likely lack of Internet connectivity\n",
-					ifname)
+					portName)
 			}
 			ctx.serverName = origServerName
 			ctx.serverNameAndPort = origServerNameAndPort
 			continue
 		}
-		if !tryPostUUID(ctx, ifname) {
+		if !tryPostUUID(ctx, port) {
 			continue
 		}
-		if isMgmt {
+		if port.IsMgmt {
 			passPorts += 1
 		} else {
 			passOtherPorts += 1
 		}
 		fmt.Fprintf(outfile, "PASS: port %s fully connected to EV controller %s\n",
-			ifname, ctx.serverName)
+			portName, ctx.serverName)
 	}
 	if passOtherPorts > 0 {
 		fmt.Fprintf(outfile, "WARNING: %d non-management ports have connectivity to the EV controller. Is that intentional?\n", passOtherPorts)
@@ -754,39 +762,38 @@ func printOutput(ctx *diagContext) {
 	}
 }
 
-func printProxy(ctx *diagContext, port types.NetworkPortStatus,
-	ifname string) {
-
+func printProxy(ctx *diagContext, port types.NetworkPortStatus) {
+	portName := getPrintedPortName(port)
 	if devicenetwork.IsProxyConfigEmpty(port.ProxyConfig) {
-		fmt.Fprintf(outfile, "INFO: %s: no http(s) proxy\n", ifname)
+		fmt.Fprintf(outfile, "INFO: %s: no http(s) proxy\n", portName)
 		return
 	}
 	if port.ProxyConfig.Exceptions != "" {
 		fmt.Fprintf(outfile, "INFO: %s: proxy exceptions %s\n",
-			ifname, port.ProxyConfig.Exceptions)
+			portName, port.ProxyConfig.Exceptions)
 	}
 	if port.HasError() {
 		fmt.Fprintf(outfile, "ERROR: %s: from WPAD? %s\n",
-			ifname, port.LastError)
+			portName, port.LastError)
 	}
 	if port.ProxyConfig.NetworkProxyEnable {
 		if port.ProxyConfig.NetworkProxyURL == "" {
 			if port.ProxyConfig.WpadURL == "" {
 				fmt.Fprintf(outfile, "WARNING: %s: WPAD enabled but found no URL\n",
-					ifname)
+					portName)
 			} else {
 				fmt.Fprintf(outfile, "INFO: %s: WPAD enabled found URL %s\n",
-					ifname, port.ProxyConfig.WpadURL)
+					portName, port.ProxyConfig.WpadURL)
 			}
 		} else {
 			fmt.Fprintf(outfile, "INFO: %s: WPAD fetched from %s\n",
-				ifname, port.ProxyConfig.NetworkProxyURL)
+				portName, port.ProxyConfig.NetworkProxyURL)
 		}
 	}
 	pacLen := len(port.ProxyConfig.Pacfile)
 	if pacLen > 0 {
 		fmt.Fprintf(outfile, "INFO: %s: Have PAC file len %d\n",
-			ifname, pacLen)
+			portName, pacLen)
 		if ctx.pacContents {
 			pacFile, err := base64.StdEncoding.DecodeString(port.ProxyConfig.Pacfile)
 			if err != nil {
@@ -794,7 +801,7 @@ func printProxy(ctx *diagContext, port types.NetworkPortStatus,
 				log.Errorf(errStr)
 			} else {
 				fmt.Fprintf(outfile, "INFO: %s: PAC file:\n%s\n",
-					ifname, pacFile)
+					portName, pacFile)
 			}
 		}
 	} else {
@@ -808,7 +815,7 @@ func printProxy(ctx *diagContext, port types.NetworkPortStatus,
 					httpProxy = fmt.Sprintf("%s", proxy.Server)
 				}
 				fmt.Fprintf(outfile, "INFO: %s: http proxy %s\n",
-					ifname, httpProxy)
+					portName, httpProxy)
 			case types.NPT_HTTPS:
 				var httpsProxy string
 				if proxy.Port > 0 {
@@ -817,7 +824,7 @@ func printProxy(ctx *diagContext, port types.NetworkPortStatus,
 					httpsProxy = fmt.Sprintf("%s", proxy.Server)
 				}
 				fmt.Fprintf(outfile, "INFO: %s: https proxy %s\n",
-					ifname, httpsProxy)
+					portName, httpsProxy)
 			}
 		}
 
@@ -827,30 +834,29 @@ func printProxy(ctx *diagContext, port types.NetworkPortStatus,
 	}
 }
 
-func tryLookupIP(ctx *diagContext, ifname string) bool {
-
-	addrCount, _ := types.CountLocalAddrAnyNoLinkLocalIf(*ctx.DeviceNetworkStatus, ifname)
+func tryLookupIP(ctx *diagContext, port types.NetworkPortStatus) bool {
+	portName := getPrintedPortName(port)
+	addrCount, _ := port.CountAddrsExceptLinkLocal()
 	if addrCount == 0 {
 		fmt.Fprintf(outfile, "ERROR: %s: DNS lookup of %s not possible since no IP address\n",
-			ifname, ctx.serverName)
+			portName, ctx.serverName)
 		return false
 	}
 	for retryCount := 0; retryCount < addrCount; retryCount++ {
-		localAddr, err := types.GetLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus,
-			retryCount, ifname)
+		localAddr, err := port.PickAddrExceptLinkLocal(retryCount)
 		if err != nil {
 			fmt.Fprintf(outfile, "ERROR: %s: DNS lookup of %s: internal error: %s address\n",
-				ifname, ctx.serverName, err)
+				portName, ctx.serverName, err)
 			return false
 		}
-		dnsServers := types.GetDNSServers(*ctx.DeviceNetworkStatus, ifname)
+		dnsServers := port.DNSServers
 		if len(dnsServers) == 0 {
 			fmt.Fprintf(outfile, "ERROR: %s: DNS lookup of %s not possible: no DNS servers available\n",
-				ifname, ctx.serverName)
+				portName, ctx.serverName)
 			return false
 		}
 		localUDPAddr := net.UDPAddr{IP: localAddr}
-		log.Tracef("tryLookupIP: using intf %s source %v", ifname, localUDPAddr)
+		log.Tracef("tryLookupIP: using port %s source %v", portName, localUDPAddr)
 		resolverDial := func(ctx context.Context, network, address string) (net.Conn, error) {
 			log.Tracef("resolverDial %v %v", network, address)
 			// Try only DNS servers associated with this interface.
@@ -869,21 +875,21 @@ func tryLookupIP(ctx *diagContext, ifname string) bool {
 		ips, err := r.LookupIPAddr(context.Background(), ctx.serverName)
 		if err != nil {
 			fmt.Fprintf(outfile, "ERROR: %s: DNS lookup of %s failed: %s\n",
-				ifname, ctx.serverName, err)
+				portName, ctx.serverName, err)
 			continue
 		}
 		log.Tracef("tryLookupIP: got %d addresses", len(ips))
 		if len(ips) == 0 {
 			fmt.Fprintf(outfile, "ERROR: %s: DNS lookup of %s returned no answers\n",
-				ifname, ctx.serverName)
+				portName, ctx.serverName)
 			return false
 		}
 		for _, ip := range ips {
 			fmt.Fprintf(outfile, "INFO: %s: DNS lookup of %s returned %s\n",
-				ifname, ctx.serverName, ip.String())
+				portName, ctx.serverName, ip.String())
 		}
 		if simulateDnsFailure {
-			fmt.Fprintf(outfile, "INFO: %s: Simulate DNS lookup failure\n", ifname)
+			fmt.Fprintf(outfile, "INFO: %s: Simulate DNS lookup failure\n", portName)
 			return false
 		}
 		return true
@@ -892,8 +898,8 @@ func tryLookupIP(ctx *diagContext, ifname string) bool {
 	return false
 }
 
-func tryPing(ctx *diagContext, ifname string, reqURL string) bool {
-
+func tryPing(ctx *diagContext, port types.NetworkPortStatus, reqURL string) bool {
+	portName := getPrintedPortName(port)
 	zedcloudCtx := ctx.zedcloudCtx
 	if zedcloudCtx.TlsConfig == nil {
 		err := zedcloud.UpdateTLSConfig(zedcloudCtx, ctx.cert)
@@ -920,20 +926,20 @@ func tryPing(ctx *diagContext, ifname string, reqURL string) bool {
 	var delay time.Duration
 	for !done {
 		time.Sleep(delay)
-		done, _, _ = myGet(ctx, reqURL, ifname, retryCount)
+		done, _, _ = myGet(ctx, reqURL, port, retryCount)
 		if done {
 			break
 		}
 		retryCount += 1
 		if maxRetries != 0 && retryCount > maxRetries {
 			fmt.Fprintf(outfile, "ERROR: %s: Exceeded %d retries for ping\n",
-				ifname, maxRetries)
+				portName, maxRetries)
 			return false
 		}
 		delay = time.Second
 	}
 	if simulatePingFailure {
-		fmt.Fprintf(outfile, "INFO: %s: Simulate ping failure\n", ifname)
+		fmt.Fprintf(outfile, "INFO: %s: Simulate ping failure\n", portName)
 		return false
 	}
 	return true
@@ -942,8 +948,8 @@ func tryPing(ctx *diagContext, ifname string, reqURL string) bool {
 // The most recent uuid we received
 var prevUUID string
 
-func tryPostUUID(ctx *diagContext, ifname string) bool {
-
+func tryPostUUID(ctx *diagContext, port types.NetworkPortStatus) bool {
+	portName := getPrintedPortName(port)
 	uuidRequest := &eveuuid.UuidRequest{}
 	b, err := proto.Marshal(uuidRequest)
 	if err != nil {
@@ -962,7 +968,7 @@ func tryPostUUID(ctx *diagContext, ifname string) bool {
 		var buf []byte
 		reqURL := zedcloud.URLPathString(ctx.serverNameAndPort, zedcloudCtx.V2API,
 			nilUUID, "uuid")
-		done, resp, senderStatus, buf = myPost(ctx, reqURL, ifname, retryCount,
+		done, resp, senderStatus, buf = myPost(ctx, reqURL, port, retryCount,
 			int64(len(b)), bytes.NewBuffer(b))
 		if done {
 			parsePrint(reqURL, resp, buf)
@@ -982,7 +988,7 @@ func tryPostUUID(ctx *diagContext, ifname string) bool {
 		retryCount += 1
 		if maxRetries != 0 && retryCount > maxRetries {
 			fmt.Fprintf(outfile, "ERROR: %s: Exceeded %d retries for get config\n",
-				ifname, maxRetries)
+				portName, maxRetries)
 			return false
 		}
 		delay = time.Second
@@ -1028,9 +1034,9 @@ func readUUIDResponseProtoMessage(contents []byte) (*eveuuid.UuidResponse, error
 // Returns true when done; false when retry.
 // Returns the response when done. Caller can not use resp.Body but
 // can use the contents []byte
-func myGet(ctx *diagContext, reqURL string, ifname string,
+func myGet(ctx *diagContext, reqURL string, port types.NetworkPortStatus,
 	retryCount int) (bool, *http.Response, []byte) {
-
+	portName := getPrintedPortName(port)
 	zedcloudCtx := ctx.zedcloudCtx
 	var preqURL string
 	if strings.HasPrefix(reqURL, "http:") {
@@ -1040,62 +1046,62 @@ func myGet(ctx *diagContext, reqURL string, ifname string,
 	} else {
 		preqURL = "https://" + reqURL
 	}
-	proxyURL, err := zedcloud.LookupProxy(log, zedcloudCtx.DeviceNetworkStatus,
-		ifname, preqURL)
+	proxyURL, err := zedcloud.LookupProxy(log, port, preqURL)
 	if err != nil {
-		fmt.Fprintf(outfile, "ERROR: %s: LookupProxy failed: %s\n", ifname, err)
+		fmt.Fprintf(outfile, "ERROR: %s: LookupProxy failed: %s\n", portName, err)
 	} else if proxyURL != nil {
 		fmt.Fprintf(outfile, "INFO: %s: Proxy %s to reach %s\n",
-			ifname, proxyURL.String(), reqURL)
+			portName, proxyURL.String(), reqURL)
 	}
 	const allowProxy = true
 	// No verification of AuthContainer for this GET
-	rv, err := zedcloud.SendOnIntf(context.Background(), zedcloudCtx, reqURL, ifname,
-		0, nil, allowProxy, ctx.usingOnboardCert, withNetTracing, false)
+	rv, err := zedcloud.SendOnIntf(context.Background(), zedcloudCtx, reqURL,
+		port.Logicallabel, 0, nil, allowProxy, ctx.usingOnboardCert,
+		withNetTracing, false)
 	if err != nil {
 		switch rv.Status {
 		case types.SenderStatusUpgrade:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s Controller upgrade in progress\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusRefused:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s Controller returned ECONNREFUSED\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusCertInvalid:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s Controller certificate invalid time\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusCertMiss:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s Controller certificate miss\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusNotFound:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s Did controller delete the device?\n",
-				ifname, reqURL)
+				portName, reqURL)
 		default:
 			fmt.Fprintf(outfile, "ERROR: %s: get %s failed: %s\n",
-				ifname, reqURL, err)
+				portName, reqURL, err)
 		}
 		return false, nil, nil
 	}
 
 	switch rv.HTTPResp.StatusCode {
 	case http.StatusOK:
-		fmt.Fprintf(outfile, "INFO: %s: %s StatusOK\n", ifname, reqURL)
+		fmt.Fprintf(outfile, "INFO: %s: %s StatusOK\n", portName, reqURL)
 		return true, rv.HTTPResp, rv.RespContents
 	case http.StatusNotModified:
-		fmt.Fprintf(outfile, "INFO: %s: %s StatusNotModified\n", ifname, reqURL)
+		fmt.Fprintf(outfile, "INFO: %s: %s StatusNotModified\n", portName, reqURL)
 		return true, rv.HTTPResp, rv.RespContents
 	default:
 		fmt.Fprintf(outfile, "ERROR: %s: %s statuscode %d %s\n",
-			ifname, reqURL, rv.HTTPResp.StatusCode,
+			portName, reqURL, rv.HTTPResp.StatusCode,
 			http.StatusText(rv.HTTPResp.StatusCode))
 		fmt.Fprintf(outfile, "ERROR: %s: Received %s\n",
-			ifname, string(rv.RespContents))
+			portName, string(rv.RespContents))
 		return false, nil, nil
 	}
 }
 
-func myPost(ctx *diagContext, reqURL string, ifname string,
+func myPost(ctx *diagContext, reqURL string, port types.NetworkPortStatus,
 	retryCount int, reqlen int64, b *bytes.Buffer) (bool, *http.Response, types.SenderStatus, []byte) {
-
+	portName := getPrintedPortName(port)
 	zedcloudCtx := ctx.zedcloudCtx
 	var preqURL string
 	if strings.HasPrefix(reqURL, "http:") {
@@ -1105,58 +1111,58 @@ func myPost(ctx *diagContext, reqURL string, ifname string,
 	} else {
 		preqURL = "https://" + reqURL
 	}
-	proxyURL, err := zedcloud.LookupProxy(log, zedcloudCtx.DeviceNetworkStatus,
-		ifname, preqURL)
+	proxyURL, err := zedcloud.LookupProxy(log, port, preqURL)
 	if err != nil {
-		fmt.Fprintf(outfile, "ERROR: %s: LookupProxy failed: %s\n", ifname, err)
+		fmt.Fprintf(outfile, "ERROR: %s: LookupProxy failed: %s\n", portName, err)
 	} else if proxyURL != nil {
 		fmt.Fprintf(outfile, "INFO: %s: Proxy %s to reach %s\n",
-			ifname, proxyURL.String(), reqURL)
+			portName, proxyURL.String(), reqURL)
 	}
 	const allowProxy = true
 	rv, err := zedcloud.SendOnIntf(context.Background(), zedcloudCtx,
-		reqURL, ifname, reqlen, b, allowProxy, ctx.usingOnboardCert, withNetTracing, false)
+		reqURL, port.Logicallabel, reqlen, b, allowProxy, ctx.usingOnboardCert,
+		withNetTracing, false)
 	if err != nil {
 		switch rv.Status {
 		case types.SenderStatusUpgrade:
 			fmt.Fprintf(outfile, "ERROR: %s: post %s Controller upgrade in progress\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusRefused:
 			fmt.Fprintf(outfile, "ERROR: %s: post %s Controller returned ECONNREFUSED\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusCertInvalid:
 			fmt.Fprintf(outfile, "ERROR: %s: post %s Controller certificate invalid time\n",
-				ifname, reqURL)
+				portName, reqURL)
 		case types.SenderStatusCertMiss:
 			fmt.Fprintf(outfile, "ERROR: %s: post %s Controller certificate miss\n",
-				ifname, reqURL)
+				portName, reqURL)
 		default:
 			fmt.Fprintf(outfile, "ERROR: %s: post %s failed: %s\n",
-				ifname, reqURL, err)
+				portName, reqURL, err)
 		}
 		return false, nil, rv.Status, nil
 	}
 
 	switch rv.HTTPResp.StatusCode {
 	case http.StatusOK:
-		fmt.Fprintf(outfile, "INFO: %s: %s StatusOK\n", ifname, reqURL)
+		fmt.Fprintf(outfile, "INFO: %s: %s StatusOK\n", portName, reqURL)
 	case http.StatusCreated:
-		fmt.Fprintf(outfile, "INFO: %s: %s StatusCreated\n", ifname, reqURL)
+		fmt.Fprintf(outfile, "INFO: %s: %s StatusCreated\n", portName, reqURL)
 	case http.StatusNotModified:
-		fmt.Fprintf(outfile, "INFO: %s: %s StatusNotModified\n", ifname, reqURL)
+		fmt.Fprintf(outfile, "INFO: %s: %s StatusNotModified\n", portName, reqURL)
 	default:
 		fmt.Fprintf(outfile, "ERROR: %s: %s statuscode %d %s\n",
-			ifname, reqURL, rv.HTTPResp.StatusCode,
+			portName, reqURL, rv.HTTPResp.StatusCode,
 			http.StatusText(rv.HTTPResp.StatusCode))
 		fmt.Fprintf(outfile, "ERROR: %s: Received %s\n",
-			ifname, string(rv.RespContents))
+			portName, string(rv.RespContents))
 		return false, nil, rv.Status, nil
 	}
 	if len(rv.RespContents) > 0 {
 		err = zedcloud.RemoveAndVerifyAuthContainer(zedcloudCtx, &rv, false)
 		if err != nil {
 			fmt.Fprintf(outfile, "ERROR: %s: %s RemoveAndVerifyAuthContainer  %s\n",
-				ifname, reqURL, err)
+				portName, reqURL, err)
 			return false, nil, rv.Status, nil
 		}
 	}

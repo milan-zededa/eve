@@ -428,13 +428,21 @@ func TestGetPortCostList(t *testing.T) {
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := GetPortCostList(test.deviceNetworkStatus)
+		value := test.deviceNetworkStatus.GetPortCostList()
 		assert.Equal(t, test.expectedValue, value)
 	}
 }
 
-// TestGetMgmtPortsSortedCost covers both GetMgmtPortsSortedCost and GetAllPortsSortedCost.
-func TestGetMgmtPortsSortedCost(t *testing.T) {
+func portsToIfNames(ports []*NetworkPortStatus) []string {
+	ifNames := []string{}
+	for _, p := range ports {
+		ifNames = append(ifNames, p.IfName)
+	}
+	return ifNames
+}
+
+// TestGetMgmtPortsSortedByCost covers both GetMgmtPortsSortedByCost and GetAllPortsSortedByCost.
+func TestGetMgmtPortsSortedByCost(t *testing.T) {
 	testMatrix := map[string]struct {
 		deviceNetworkStatus DeviceNetworkStatus
 		rotate              int
@@ -587,10 +595,10 @@ func TestGetMgmtPortsSortedCost(t *testing.T) {
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := GetMgmtPortsSortedCost(test.deviceNetworkStatus, test.rotate)
-		assert.Equal(t, test.expectedMgmtValue, value)
-		value = GetAllPortsSortedCost(test.deviceNetworkStatus, test.rotate)
-		assert.Equal(t, test.expectedAllValue, value)
+		ports := test.deviceNetworkStatus.GetMgmtPortsSortedByCost(test.rotate)
+		assert.Equal(t, test.expectedMgmtValue, portsToIfNames(ports))
+		ports = test.deviceNetworkStatus.GetAllPortsSortedByCost(test.rotate)
+		assert.Equal(t, test.expectedAllValue, portsToIfNames(ports))
 	}
 }
 
@@ -728,8 +736,8 @@ func TestGetMgmtPortsByCost(t *testing.T) {
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := GetMgmtPortsByCost(test.deviceNetworkStatus, test.cost)
-		assert.Equal(t, test.expectedValue, value)
+		ports := test.deviceNetworkStatus.GetMgmtPortsByCost(test.cost)
+		assert.Equal(t, test.expectedValue, portsToIfNames(ports))
 	}
 }
 
@@ -817,59 +825,50 @@ var (
 	addrIPv6Local4  = net.ParseIP("fe80::4")
 )
 
-func TestCountLocalAddrAnyNoLinkLocal(t *testing.T) {
+func TestCountAddrsExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		expectedValue int
 	}{
-		"Test CountLocalAddrAnyNoLinkLocal": {
+		"Test CountAddrsExceptLinkLocal": {
 			expectedValue: 8,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := CountLocalAddrAnyNoLinkLocal(commonDeviceNetworkStatus)
+		value := commonDeviceNetworkStatus.CountAddrsExceptLinkLocal()
 		assert.Equal(t, test.expectedValue, value)
 	}
 }
 
-func TestCountLocalAddrAnyNoLinkLocalIf(t *testing.T) {
+func TestPortCountAddrsExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		ifname        string
 		expectFail    bool
 		expectedValue int
 	}{
-		"Test port1 CountLocalAddrAnyNoLinkLocalIf": {
+		"Test port1 CountAddrsExceptLinkLocal": {
 			ifname:        "port1",
 			expectedValue: 3,
 		},
-		"Test port2 CountLocalAddrAnyNoLinkLocalIf": {
+		"Test port2 CountAddrsExceptLinkLocal": {
 			ifname:        "port2",
 			expectedValue: 0,
 			expectFail:    true,
 		},
-		"Test port3 CountLocalAddrAnyNoLinkLocalIf": {
+		"Test port3 CountAddrsExceptLinkLocal": {
 			ifname:        "port3",
 			expectedValue: 0,
 			expectFail:    true,
 		},
-		"Test port4 CountLocalAddrAnyNoLinkLocalIf": {
+		"Test port4 CountAddrsExceptLinkLocal": {
 			ifname:        "port4",
 			expectedValue: 5,
-		},
-		"Test badport CountLocalAddrAnyNoLinkLocalIf": {
-			ifname:        "badport",
-			expectedValue: 0,
-			expectFail:    true,
-		},
-		"Test noport CountLocalAddrAnyNoLinkLocalIf": {
-			expectedValue: 0,
-			expectFail:    true,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value, err := CountLocalAddrAnyNoLinkLocalIf(commonDeviceNetworkStatus,
-			test.ifname)
+		port := commonDeviceNetworkStatus.GetPortByIfName(test.ifname)
+		value, err := port.CountAddrsExceptLinkLocal()
 		assert.Equal(t, test.expectedValue, value)
 		if test.expectFail {
 			assert.NotNil(t, err)
@@ -879,89 +878,79 @@ func TestCountLocalAddrAnyNoLinkLocalIf(t *testing.T) {
 	}
 }
 
-func TestCountLocalAddrNoLinkLocalWithCost(t *testing.T) {
+func TestCountAddrsExceptLinkLocalWithCost(t *testing.T) {
 	testMatrix := map[string]struct {
 		cost          uint8
 		expectedValue int
 	}{
-		"Test 0 CountLocalAddrNoLinkLocalWithCost": {
+		"Test 0 CountAddrsExceptLinkLocalWithCost": {
 			cost:          0,
 			expectedValue: 5,
 		},
-		"Test 16 CountLocalAddrNoLinkLocalWithCost": {
+		"Test 16 CountAddrsExceptLinkLocalWithCost": {
 			cost:          16,
 			expectedValue: 5,
 		},
-		"Test 17 CountLocalAddrNoLinkLocalWithCost": {
+		"Test 17 CountAddrsExceptLinkLocalWithCost": {
 			cost:          17,
 			expectedValue: 8,
 		},
-		"Test 255 CountLocalAddrNoLinkLocalWithCost": {
+		"Test 255 CountAddrsExceptLinkLocalWithCost": {
 			cost:          255,
 			expectedValue: 8,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := CountLocalAddrNoLinkLocalWithCost(commonDeviceNetworkStatus,
-			test.cost)
+		value := commonDeviceNetworkStatus.CountAddrsExceptLinkLocalWithCost(test.cost)
 		assert.Equal(t, test.expectedValue, value)
 	}
 }
 
-func TestCountLocalIPv4AddrAnyNoLinkLocal(t *testing.T) {
+func TestCountIPv4AddrsExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		expectedValue int
 	}{
-		"Test CountLocalIPv4AddrAnyNoLinkLocal": {
+		"Test CountIPv4AddrsExceptLinkLocal": {
 			expectedValue: 5,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := CountLocalIPv4AddrAnyNoLinkLocal(commonDeviceNetworkStatus)
+		value := commonDeviceNetworkStatus.CountIPv4AddrsExceptLinkLocal()
 		assert.Equal(t, test.expectedValue, value)
 	}
 }
 
-func TestCountLocalIPv4AddrAnyNoLinkLocalIf(t *testing.T) {
+func TestPortCountIPv4AddrsExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		ifname        string
 		expectFail    bool
 		expectedValue int
 	}{
-		"Test port1 CountLocalIPv4AddrAnyNoLinkLocalIf": {
+		"Test port1 CountIPv4AddrsExceptLinkLocal": {
 			ifname:        "port1",
 			expectedValue: 2,
 		},
-		"Test port2 CountLocalIPv4AddrAnyNoLinkLocalIf": {
+		"Test port2 CountIPv4AddrsExceptLinkLocal": {
 			ifname:        "port2",
 			expectedValue: 0,
 			expectFail:    true,
 		},
-		"Test port3 CountLocalIPv4AddrAnyNoLinkLocalIf": {
+		"Test port3 CountIPv4AddrsExceptLinkLocal": {
 			ifname:        "port3",
 			expectedValue: 0,
 			expectFail:    true,
 		},
-		"Test port4 CountLocalIPv4AddrAnyNoLinkLocalIf": {
+		"Test port4 CountIPv4AddrsExceptLinkLocal": {
 			ifname:        "port4",
 			expectedValue: 3,
-		},
-		"Test badport CountLocalIPv4AddrAnyNoLinkLocalIf": {
-			ifname:        "badport",
-			expectedValue: 0,
-			expectFail:    true,
-		},
-		"Test noport CountLocalIPv4AddrAnyNoLinkLocalIf": {
-			expectedValue: 0,
-			expectFail:    true,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value, err := CountLocalIPv4AddrAnyNoLinkLocalIf(commonDeviceNetworkStatus,
-			test.ifname)
+		port := commonDeviceNetworkStatus.GetPortByIfName(test.ifname)
+		value, err := port.CountIPv4AddrsExceptLinkLocal()
 		assert.Equal(t, test.expectedValue, value)
 		if test.expectFail {
 			assert.NotNil(t, err)
@@ -971,46 +960,45 @@ func TestCountLocalIPv4AddrAnyNoLinkLocalIf(t *testing.T) {
 	}
 }
 
-func TestGetLocalAddrAnyNoLinkLocal(t *testing.T) {
+func TestPickAddrExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		pickNum       int
 		expectedValue net.IP
 		expectFail    bool
 	}{
-		"Test 0 GetLocalAddrAnyNoLinkLocal": {
+		"Test 0 PickAddrExceptLinkLocal": {
 			pickNum:       0,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test 1 GetLocalAddrAnyNoLinkLocal": {
+		"Test 1 PickAddrExceptLinkLocal": {
 			pickNum:       1,
 			expectedValue: addrIPv6Global4,
 		},
-		"Test 2 GetLocalAddrAnyNoLinkLocal": {
+		"Test 2 PickAddrExceptLinkLocal": {
 			pickNum:       2,
 			expectedValue: addrIPv4Global3,
 		},
-		"Test 3 GetLocalAddrAnyNoLinkLocal": {
+		"Test 3 PickAddrExceptLinkLocal": {
 			pickNum:       3,
 			expectedValue: addrIPv6Global3,
 		},
-		"Test 7 GetLocalAddrAnyNoLinkLocal": {
+		"Test 7 PickAddrExceptLinkLocal": {
 			pickNum:       7,
 			expectedValue: addrIPv4Global5,
 		},
 		// Wrap around
-		"Test 8 GetLocalAddrAnyNoLinkLocal": {
+		"Test 8 PickAddrExceptLinkLocal": {
 			pickNum:       8,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test 9 GetLocalAddrAnyNoLinkLocal": {
+		"Test 9 PickAddrExceptLinkLocal": {
 			pickNum:       9,
 			expectedValue: addrIPv6Global4,
 		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value, err := GetLocalAddrAnyNoLinkLocal(commonDeviceNetworkStatus,
-			test.pickNum, "")
+		value, err := commonDeviceNetworkStatus.PickAddrExceptLinkLocal(test.pickNum)
 		assert.Equal(t, test.expectedValue, value)
 		if test.expectFail {
 			assert.NotNil(t, err)
@@ -1020,78 +1008,66 @@ func TestGetLocalAddrAnyNoLinkLocal(t *testing.T) {
 	}
 }
 
-func TestGetLocalAddrAnyNoLinkLocal_Interface(t *testing.T) {
+func TestPortPickAddrExceptLinkLocal(t *testing.T) {
 	testMatrix := map[string]struct {
 		ifname        string
 		pickNum       int
 		expectedValue net.IP
 		expectFail    bool
 	}{
-		"Test port1 pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port1 pick 0 PickAddrExceptLinkLocal": {
 			ifname:        "port1",
 			pickNum:       0,
 			expectedValue: addrIPv4Global1,
 		},
-		"Test port1 pick 1 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port1 pick 1 PickAddrExceptLinkLocal": {
 			ifname:        "port1",
 			pickNum:       1,
 			expectedValue: addrIPv6Global1,
 		},
-		"Test port1 pick 2 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port1 pick 2 PickAddrExceptLinkLocal": {
 			ifname:        "port1",
 			pickNum:       2,
 			expectedValue: addrIPv4Global5,
 		},
 		// Wraparound
-		"Test port1 pick 3 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port1 pick 3 PickAddrExceptLinkLocal": {
 			ifname:        "port1",
 			pickNum:       3,
 			expectedValue: addrIPv4Global1,
 		},
-		"Test port2 pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
-			ifname: "port2",
-
+		"Test port2 pick 0 PickAddrExceptLinkLocal": {
+			ifname:        "port2",
 			pickNum:       0,
 			expectedValue: net.IP{},
 			expectFail:    true,
 		},
-		"Test port3 pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port3 pick 0 PickAddrExceptLinkLocal": {
 			ifname:        "port3",
 			pickNum:       0,
 			expectedValue: net.IP{},
 			expectFail:    true,
 		},
-		"Test port4 pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port4 pick 0 PickAddrExceptLinkLocal": {
 			ifname:        "port4",
 			pickNum:       0,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test port4 pick 1 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port4 pick 1 PickAddrExceptLinkLocal": {
 			ifname:        "port4",
 			pickNum:       1,
 			expectedValue: addrIPv6Global4,
 		},
-		"Test port4 pick 2 GetLocalAddrAnyNoLinkLocal_Interface": {
+		"Test port4 pick 2 PickAddrExceptLinkLocal": {
 			ifname:        "port4",
 			pickNum:       2,
 			expectedValue: addrIPv4Global3,
 		},
-		"Test badport pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
-			ifname:        "badport",
-			pickNum:       0,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		// This is the same as above; get across all interfaces
-		"Test noport pick 0 GetLocalAddrAnyNoLinkLocal_Interface": {
-			pickNum:       0,
-			expectedValue: addrIPv4Global4,
-		},
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value, err := GetLocalAddrAnyNoLinkLocal(commonDeviceNetworkStatus,
-			test.pickNum, test.ifname)
+		port := commonDeviceNetworkStatus.GetPortByIfName(test.ifname)
+		value, err := port.PickAddrExceptLinkLocal(test.pickNum)
 		assert.Equal(t, test.expectedValue, value)
 		if test.expectFail {
 			assert.NotNil(t, err)
@@ -1101,81 +1077,81 @@ func TestGetLocalAddrAnyNoLinkLocal_Interface(t *testing.T) {
 	}
 }
 
-func TestGetLocalAddrNoLinkLocalWithCost(t *testing.T) {
+func TestPickAddrExceptLinkLocalWithCost(t *testing.T) {
 	testMatrix := map[string]struct {
 		pickNum       int
 		cost          uint8
 		expectedValue net.IP
 		expectFail    bool
 	}{
-		"Test 0 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 0 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       0,
 			cost:          0,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test 1 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 1 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       1,
 			cost:          0,
 			expectedValue: addrIPv6Global4,
 		},
-		"Test 2 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 2 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       2,
 			cost:          0,
 			expectedValue: addrIPv4Global3,
 		},
-		"Test 3 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 3 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       3,
 			cost:          0,
 			expectedValue: addrIPv6Global3,
 		},
 		// Wrap around
-		"Test 7 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 7 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       7,
 			cost:          0,
 			expectedValue: addrIPv4Global3,
 		},
-		"Test 8 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 8 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       8,
 			cost:          0,
 			expectedValue: addrIPv6Global3,
 		},
-		"Test 9 cost 0 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 9 cost 0 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       9,
 			cost:          0,
 			expectedValue: addrIPv4Global6,
 		},
-		"Test 0 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 0 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       0,
 			cost:          20,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test 1 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 1 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       1,
 			cost:          20,
 			expectedValue: addrIPv6Global4,
 		},
-		"Test 2 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 2 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       2,
 			cost:          20,
 			expectedValue: addrIPv4Global3,
 		},
-		"Test 3 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 3 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       3,
 			cost:          20,
 			expectedValue: addrIPv6Global3,
 		},
-		"Test 7 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 7 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       7,
 			cost:          20,
 			expectedValue: addrIPv4Global5,
 		},
 		// Wrap around
-		"Test 8 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 8 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       8,
 			cost:          20,
 			expectedValue: addrIPv4Global4,
 		},
-		"Test 9 cost 20 GetLocalAddrNoLinkLocalWithCost": {
+		"Test 9 cost 20 PickAddrExceptLinkLocalWithCost": {
 			pickNum:       9,
 			cost:          20,
 			expectedValue: addrIPv6Global4,
@@ -1183,208 +1159,8 @@ func TestGetLocalAddrNoLinkLocalWithCost(t *testing.T) {
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value, err := GetLocalAddrNoLinkLocalWithCost(commonDeviceNetworkStatus,
-			test.pickNum, "", test.cost)
-		assert.Equal(t, test.expectedValue, value)
-		if test.expectFail {
-			assert.NotNil(t, err)
-		} else {
-			assert.Nil(t, err)
-		}
-	}
-}
-
-func TestGetLocalAddrNoLinkLocalWithCost_Interface(t *testing.T) {
-	testMatrix := map[string]struct {
-		ifname        string
-		pickNum       int
-		cost          uint8
-		expectedValue net.IP
-		expectFail    bool
-	}{
-		"Test port1 pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       0,
-			cost:          10,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port1 pick 1 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       1,
-			cost:          10,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port2 pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname: "port2",
-
-			pickNum:       0,
-			cost:          10,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port3 pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port3",
-			pickNum:       0,
-			cost:          10,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port4 pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       0,
-			cost:          10,
-			expectedValue: addrIPv4Global4,
-		},
-		"Test port4 pick 1 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       1,
-			cost:          10,
-			expectedValue: addrIPv6Global4,
-		},
-		"Test port4 pick 2 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       2,
-			cost:          10,
-			expectedValue: addrIPv4Global3,
-		},
-		"Test badport pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "badport",
-			pickNum:       0,
-			cost:          10,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		// This is the same as above; get across all interfaces
-		"Test noport pick 0 cost 10 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			pickNum:       0,
-			cost:          10,
-			expectedValue: addrIPv4Global4,
-		},
-		"Test port1 pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       0,
-			cost:          99,
-			expectedValue: addrIPv4Global1,
-		},
-		"Test port1 pick 1 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       1,
-			cost:          99,
-			expectedValue: addrIPv6Global1,
-		},
-		"Test port1 pick 2 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       2,
-			cost:          99,
-			expectedValue: addrIPv4Global5,
-		},
-		// Wraparound
-		"Test port1 pick 3 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port1",
-			pickNum:       3,
-			cost:          99,
-			expectedValue: addrIPv4Global1,
-		},
-		"Test port2 pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname: "port2",
-
-			pickNum:       0,
-			cost:          99,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port3 pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port3",
-			pickNum:       0,
-			cost:          99,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		"Test port4 pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       0,
-			cost:          99,
-			expectedValue: addrIPv4Global4,
-		},
-		"Test port4 pick 1 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       1,
-			cost:          99,
-			expectedValue: addrIPv6Global4,
-		},
-		"Test port4 pick 2 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "port4",
-			pickNum:       2,
-			cost:          99,
-			expectedValue: addrIPv4Global3,
-		},
-		"Test badport pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			ifname:        "badport",
-			pickNum:       0,
-			cost:          99,
-			expectedValue: net.IP{},
-			expectFail:    true,
-		},
-		// This is the same as above; get across all interfaces
-		"Test noport pick 0 cost 99 GetLocalAddrNoLinkLocalWithCost_Interface": {
-			pickNum:       0,
-			cost:          99,
-			expectedValue: addrIPv4Global4,
-		},
-	}
-	for testname, test := range testMatrix {
-		t.Logf("Running test case %s", testname)
-		value, err := GetLocalAddrNoLinkLocalWithCost(commonDeviceNetworkStatus,
-			test.pickNum, test.ifname, test.cost)
-		assert.Equal(t, test.expectedValue, value)
-		if test.expectFail {
-			assert.NotNil(t, err)
-		} else {
-			assert.Nil(t, err)
-		}
-	}
-}
-
-func TestGetLocalAddrList(t *testing.T) {
-	testMatrix := map[string]struct {
-		ifname        string
-		expectFail    bool
-		expectedValue []net.IP
-	}{
-		"Test port1 GetLocalAddrList": {
-			ifname:        "port1",
-			expectedValue: []net.IP{addrIPv4Global1, addrIPv6Global1, addrIPv4Global5},
-		},
-		"Test port2 GetLocalAddrList": {
-			ifname:        "port2",
-			expectedValue: []net.IP{},
-			expectFail:    true,
-		},
-		"Test port3 GetLocalAddrList": {
-			ifname:        "port3",
-			expectedValue: []net.IP{},
-			expectFail:    true,
-		},
-		"Test port4 GetLocalAddrList": {
-			ifname:        "port4",
-			expectedValue: []net.IP{addrIPv4Global4, addrIPv6Global4, addrIPv4Global3, addrIPv6Global3, addrIPv4Global6},
-		},
-		"Test badport GetLocalAddrList": {
-			ifname:        "badport",
-			expectedValue: []net.IP{},
-			expectFail:    true,
-		},
-		"Test noport GetLocalAddrList": {
-			expectedValue: []net.IP{},
-			expectFail:    true,
-		},
-	}
-	for testname, test := range testMatrix {
-		t.Logf("Running test case %s", testname)
-		value, err := GetLocalAddrList(commonDeviceNetworkStatus,
-			test.ifname)
+		value, err := commonDeviceNetworkStatus.PickAddrExceptLinkLocalWithCost(
+			test.pickNum, test.cost)
 		assert.Equal(t, test.expectedValue, value)
 		if test.expectFail {
 			assert.NotNil(t, err)

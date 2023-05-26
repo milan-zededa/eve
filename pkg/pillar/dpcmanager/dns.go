@@ -77,19 +77,38 @@ func (m *DpcManager) updateDNS() {
 			}
 		}
 		// Do not try to get state data for interface which is in PCIback.
-		ioBundle := m.adapters.LookupIoBundleIfName(port.IfName)
+		ioBundle := m.adapters.LookupIoBundleLogicallabel(port.Logicallabel)
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			err := fmt.Errorf("port %s is in PCIBack", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			if !m.deviceNetStatus.Ports[ix].HasError() {
+				// Prefer errors recorded by DPC verification.
+				// Set error from here only when there is none yet.
+				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			}
+			continue
+		}
+		if port.IfName == "" {
+			err := fmt.Errorf("port %s is missing interface name", port.Logicallabel)
+			if !m.deviceNetStatus.Ports[ix].HasError() {
+				// Prefer errors recorded by DPC verification.
+				// Set error from here only when there is none yet.
+				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			}
+			m.Log.Warnf("updateDNS: interface name of port %s is not yet known, "+
+				"will not retrieve some attributes", port.Logicallabel)
 			continue
 		}
 		// Get interface state data from the network stack.
 		ifindex, exists, err := m.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if !exists || err != nil {
-			err = fmt.Errorf("port %s does not exist", port.IfName)
+			err = fmt.Errorf("port %s is missing", port.Logicallabel)
 			m.Log.Warnf("updateDNS: %v", err)
-			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			if !m.deviceNetStatus.Ports[ix].HasError() {
+				// Prefer errors recorded by DPC verification.
+				// Set error from here only when there is none yet.
+				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			}
 			continue
 		}
 		ifAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifindex)
@@ -141,7 +160,7 @@ func (m *DpcManager) updateDNS() {
 		// We always redo this since we don't know what has changed
 		// from the previous DeviceNetworkStatus.
 		err = devicenetwork.CheckAndGetNetworkProxy(
-			m.Log, &m.deviceNetStatus, port.IfName, m.ZedcloudMetrics)
+			m.Log, &m.deviceNetStatus, port.Logicallabel, m.ZedcloudMetrics)
 		if err != nil {
 			err = fmt.Errorf("updateDNS: CheckAndGetNetworkProxy failed for %s: %v",
 				port.IfName, err)
@@ -157,7 +176,7 @@ func (m *DpcManager) updateDNS() {
 		for addrIdx := range port.AddrInfoList {
 			// Need pointer since we are going to modify
 			ai := &port.AddrInfoList[addrIdx]
-			oai := oldDNS.GetPortAddrInfo(port.IfName, ai.Addr)
+			oai := oldDNS.GetPortAddrInfo(port.Logicallabel, ai.Addr)
 			if oai == nil {
 				continue
 			}
@@ -178,7 +197,7 @@ func (m *DpcManager) updateGeo() {
 	var change bool
 	for idx := range m.deviceNetStatus.Ports {
 		port := &m.deviceNetStatus.Ports[idx]
-		if m.deviceNetStatus.Version >= types.DPCIsMgmt && !port.IsMgmt {
+		if !port.IsMgmt {
 			continue
 		}
 		for i := range port.AddrInfoList {
@@ -187,7 +206,10 @@ func (m *DpcManager) updateGeo() {
 			if ai.Addr.IsLinkLocalUnicast() {
 				continue
 			}
-			numDNSServers := types.CountDNSServers(m.deviceNetStatus, port.IfName)
+			if port.IfName == "" {
+				continue
+			}
+			numDNSServers := len(port.DNSServers)
 			if numDNSServers == 0 {
 				continue
 			}

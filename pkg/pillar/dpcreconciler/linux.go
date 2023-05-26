@@ -529,6 +529,12 @@ func (r *LinuxDpcReconciler) Reconcile(ctx context.Context, args Args) Reconcile
 	if !found && len(args.DPC.Ports) > 0 {
 		dnsError = errors.New("resolv.conf is not installed")
 	}
+	dnsServers := make(map[string][]net.IP)
+	for ifName, ips := range resolvConf.DNSServers {
+		if port := args.DPC.GetPortByIfName(ifName); port != nil {
+			dnsServers[port.Logicallabel] = ips
+		}
+	}
 
 	r.resumeReconcile = make(chan struct{}, 10)
 	newStatus := ReconcileStatus{
@@ -544,7 +550,7 @@ func (r *LinuxDpcReconciler) Reconcile(ctx context.Context, args Args) Reconcile
 		},
 		DNS: DNSStatus{
 			Error:   dnsError,
-			Servers: resolvConf.DNSServers,
+			Servers: dnsServers,
 		},
 	}
 
@@ -665,7 +671,7 @@ func (r *LinuxDpcReconciler) updateCurrentPhysicalIO(
 		if port.L2Type != types.L2LinkTypeNone || port.IfName == "" {
 			continue
 		}
-		ioBundle := aa.LookupIoBundleIfName(port.IfName)
+		ioBundle := aa.LookupIoBundleLogicallabel(port.Logicallabel)
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			// Until confirmed by domainmgr that the interface is out of PCIBack
 			// and ready, pretend that it doesn't exist. This is because domainmgr
@@ -674,6 +680,9 @@ func (r *LinuxDpcReconciler) updateCurrentPhysicalIO(
 			// But note that until there is a config from controller,
 			// we do not have any IO Bundles, therefore interfaces without
 			// entries in AssignableAdapters should not be ignored.
+			continue
+		}
+		if port.IfName == "" {
 			continue
 		}
 		_, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -905,7 +914,7 @@ func (r *LinuxDpcReconciler) getIntendedLogicalIO(dpc types.DevicePortConfig) dg
 		}
 		switch port.L2Type {
 		case types.L2LinkTypeVLAN:
-			parent := dpc.LookupPortByLogicallabel(port.VLAN.ParentPort)
+			parent := dpc.GetPortByLogicalLabel(port.VLAN.ParentPort)
 			if parent != nil {
 				vlan := linux.Vlan{
 					LogicalLabel: port.Logicallabel,
@@ -929,7 +938,7 @@ func (r *LinuxDpcReconciler) getIntendedLogicalIO(dpc types.DevicePortConfig) dg
 		case types.L2LinkTypeBond:
 			var aggrIfNames []string
 			for _, aggrPort := range port.Bond.AggregatedPorts {
-				if nps := dpc.LookupPortByLogicallabel(aggrPort); nps != nil {
+				if nps := dpc.GetPortByLogicalLabel(aggrPort); nps != nil {
 					aggrIfNames = append(aggrIfNames, nps.IfName)
 					// Allocate the physical interface for use by the bond.
 					intendedIO.PutItem(generic.IOHandle{

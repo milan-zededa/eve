@@ -24,6 +24,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/sriov"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
+	"github.com/lf-edge/eve/pkg/pillar/utils/netutils"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -762,7 +763,7 @@ func validateAndAssignNetPorts(dpc *types.DevicePortConfig, newPorts []*types.Ne
 				port2.RecordFailure(errStr)
 				break
 			}
-			if port.IfName == port2.IfName {
+			if port.IfName != "" && port.IfName == port2.IfName {
 				errStr := fmt.Sprintf(
 					"Port collides with another port with the same interface name (%s)",
 					port.IfName)
@@ -1111,7 +1112,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			errStr := fmt.Sprintf("Device Config Error. Port %s configured with "+
 				"UNKNOWN Network UUID (%s). Err: %s. Please fix the "+
 				"device configuration.",
-				port.IfName, sysAdapter.NetworkUUID, err)
+				port.Logicallabel, sysAdapter.NetworkUUID, err)
 			log.Errorf("parseSystemAdapterConfig: %s", errStr)
 			port.RecordFailure(errStr)
 		} else {
@@ -1122,7 +1123,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			if network.HasError() {
 				errStr := fmt.Sprintf("Port %s configured with a network "+
 					"(UUID: %s) which has an error (%s).",
-					port.IfName, port.NetworkUUID, network.Error)
+					port.Logicallabel, port.NetworkUUID, network.Error)
 				log.Errorf("parseSystemAdapterConfig: %s", errStr)
 				port.RecordFailure(errStr)
 			}
@@ -1146,7 +1147,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 				if port.AddrSubnet == "" {
 					errStr := fmt.Sprintf("Port %s Configured as DT_STATIC but "+
 						"missing subnet address. SysAdapter - Name: %s, Addr:%s",
-						port.IfName, sysAdapter.Name, sysAdapter.Addr)
+						port.Logicallabel, sysAdapter.Name, sysAdapter.Addr)
 					log.Errorf("parseSystemAdapterConfig: %s", errStr)
 					port.RecordFailure(errStr)
 				}
@@ -1157,14 +1158,14 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 					errStr := fmt.Sprintf("Port %s configured as Management port "+
 						"with an unsupported DHCP type %d. Client and static are "+
 						"the only allowed DHCP modes for management ports.",
-						port.IfName, types.DT_NONE)
+						port.Logicallabel, types.DT_NONE)
 
 					log.Errorf("parseSystemAdapterConfig: %s", errStr)
 					port.RecordFailure(errStr)
 				}
 			default:
 				errStr := fmt.Sprintf("Port %s configured with unknown DHCP type %v",
-					port.IfName, network.Dhcp)
+					port.Logicallabel, network.Dhcp)
 				log.Errorf("parseSystemAdapterConfig: %s", errStr)
 				port.RecordFailure(errStr)
 			}
@@ -1176,7 +1177,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 	} else if isMgmt {
 		errStr := fmt.Sprintf("Port %s Configured as Management port without "+
 			"configuring a Network. Network is required for Management ports",
-			port.IfName)
+			port.Logicallabel)
 		log.Errorf("parseSystemAdapterConfig: %s", errStr)
 		port.RecordFailure(errStr)
 	}
@@ -2072,7 +2073,7 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 		config.DhcpRange.End = end
 	}
 
-	addrCount := types.GetIPAddrCountOnSubnet(config.Subnet)
+	addrCount := netutils.GetIPAddrCountOnSubnet(config.Subnet)
 	if addrCount < types.MinSubnetSize {
 		return fmt.Errorf("network(%s), Subnet too small(%d)",
 			config.Key(), addrCount)
@@ -2080,7 +2081,7 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 
 	// if not set, take some default
 	if config.Gateway == nil {
-		config.Gateway = types.AddToIP(config.Subnet.IP, 1)
+		config.Gateway = netutils.AddToIP(config.Subnet.IP, 1)
 		log.Warnf("network(%s), No Gateway, setting default(%s)",
 			config.Key(), config.Gateway.String())
 	}
@@ -2098,39 +2099,39 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 
 	// if not set, take some default
 	if config.DhcpRange.Start == nil {
-		config.DhcpRange.Start = types.AddToIP(config.Subnet.IP,
+		config.DhcpRange.Start = netutils.AddToIP(config.Subnet.IP,
 			dhcpRangeStart)
 		log.Warnf("network(%s), No Dhcp Start, setting default(%s)",
 			config.Key(), config.DhcpRange.Start.String())
 	}
 	if config.DhcpRange.End == nil {
-		config.DhcpRange.End = types.AddToIP(config.Subnet.IP,
+		config.DhcpRange.End = netutils.AddToIP(config.Subnet.IP,
 			dhcpRangeEnd)
 		log.Warnf("network(%s), No Dhcp End, setting default(%s)",
 			config.Key(), config.DhcpRange.End.String())
 	}
 	// check whether the dhcp range(start, end)
 	// equal (network, gateway, broadcast) addresses
-	if network := types.GetIPNetwork(config.Subnet); network != nil {
+	if network := netutils.GetIPNetwork(config.Subnet); network != nil {
 		if network.Equal(config.DhcpRange.Start) {
 			log.Warnf("network(%s), Dhcp Start is Network(%s), correcting",
 				config.Key(), config.Subnet.IP.String())
 			config.DhcpRange.Start =
-				types.AddToIP(config.DhcpRange.Start, 1)
+				netutils.AddToIP(config.DhcpRange.Start, 1)
 		}
 		if config.Gateway.Equal(config.DhcpRange.Start) {
 			log.Warnf("network(%s), Dhcp Start is Gateway(%s), correcting",
 				config.Key(), config.Gateway.String())
 			config.DhcpRange.Start =
-				types.AddToIP(config.Gateway, 1)
+				netutils.AddToIP(config.Gateway, 1)
 		}
 	}
-	if bcast := types.GetIPBroadcast(config.Subnet); bcast != nil {
+	if bcast := netutils.GetIPBroadcast(config.Subnet); bcast != nil {
 		if bcast.Equal(config.DhcpRange.End) {
 			log.Warnf("network(%s), Dhcp End is Broadcast(%s), correcting",
 				config.Key(), bcast.String())
 			config.DhcpRange.End =
-				types.AddToIP(config.DhcpRange.End, -1)
+				netutils.AddToIP(config.DhcpRange.End, -1)
 		}
 	}
 	// Gateway should not be inside the DhcpRange
@@ -2146,7 +2147,7 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 	// what ByteAllocator can provide) and use it for network instances
 	// that require bigger subnets.
 	if addressesInRange > objtonum.ByteAllocatorMaxNum {
-		config.DhcpRange.End = types.AddToIP(config.DhcpRange.Start, objtonum.ByteAllocatorMaxNum)
+		config.DhcpRange.End = netutils.AddToIP(config.DhcpRange.Start, objtonum.ByteAllocatorMaxNum)
 	}
 	return nil
 }

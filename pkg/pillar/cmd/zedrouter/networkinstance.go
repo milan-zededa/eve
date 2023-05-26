@@ -86,8 +86,8 @@ func (z *zedrouter) getNIUplinkConfig(
 	return nireconciler.Uplink{
 		LogicalLabel: port.Logicallabel,
 		IfName:       ifName,
-		DNSServers:   types.GetDNSServers(*z.deviceNetworkStatus, ifName),
-		NTPServers:   types.GetNTPServers(*z.deviceNetworkStatus, ifName),
+		DNSServers:   z.deviceNetworkStatus.GetDNSServers(port.Logicallabel),
+		NTPServers:   z.deviceNetworkStatus.GetNTPServers(port.Logicallabel),
 	}
 }
 
@@ -123,6 +123,10 @@ func (z *zedrouter) setSelectedUplink(uplinkLogicalLabel string,
 	}
 	ifName := ports[0].IfName
 	status.SelectedUplinkIntfName = ifName
+	if ifName == "" {
+		err = fmt.Errorf("interface name of uplink port %s is unknown", uplinkLogicalLabel)
+		return true, err
+	}
 	ifIndex, exists, _ := z.networkMonitor.GetInterfaceIndex(ifName)
 	if !exists {
 		// Wait for uplink interface to appear in the network stack.

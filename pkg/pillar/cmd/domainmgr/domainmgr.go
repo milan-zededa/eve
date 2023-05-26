@@ -62,12 +62,6 @@ var nilUUID = uuid.UUID{}
 // Set from Makefile
 var Version = "No version specified"
 
-func isPort(ctx *domainContext, ifname string) bool {
-	ctx.dnsLock.Lock()
-	defer ctx.dnsLock.Unlock()
-	return types.IsPort(ctx.deviceNetworkStatus, ifname)
-}
-
 // Information for handleCreate/Modify/Delete
 type domainContext struct {
 	agentbase.AgentBase
@@ -2788,6 +2782,10 @@ func createVfIoBundle(pfIb types.IoBundle, vf sriov.EthVF) (types.IoBundle, erro
 	if vfUserConfig == nil {
 		return types.IoBundle{}, fmt.Errorf("Can't find any with index %d", vf.Index)
 	}
+	if pfIb.Ifname == "" {
+		return types.IoBundle{}, fmt.Errorf("missing interface name for physical function "+
+			"with logical label %s", pfIb.Logicallabel)
+	}
 	vfIb := pfIb
 	vfIb.Type = types.IoNetEthVF
 	vfIb.Ifname = sriov.GetVfIfaceName(vf.Index, pfIb.Ifname)
@@ -2875,7 +2873,8 @@ func updatePortAndPciBackIoBundle(ctx *domainContext, ib *types.IoBundle) (chang
 	// EVE controller doesn't know it
 	list = aa.ExpandControllers(log, list, hyper.PCISameController)
 	for _, ib := range list {
-		if types.IsPort(ctx.deviceNetworkStatus, ib.Ifname) {
+		port := ctx.deviceNetworkStatus.GetPortByLogicallabel(ib.Logicallabel)
+		if port != nil {
 			isPort = true
 			keepInHost = true
 		}
@@ -2973,7 +2972,7 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 						ib.PciLong)
 					return changed, err
 				}
-				if ifname != ib.Ifname {
+				if ib.Ifname != "" && ifname != ib.Ifname {
 					log.Warnf("Found: %d %s %s at %s",
 						ib.Type, ib.Phylabel, ib.Ifname,
 						ifname)
@@ -3020,7 +3019,7 @@ func checkAndFillIoBundle(ib *types.IoBundle) (bool, error) {
 
 	log.Functionf("checkAndFillIoBundle(%d %s %s)", ib.Type, ib.Phylabel, ib.AssignmentGroup)
 	changed := false
-	if ib.Type.IsNet() && ib.MacAddr == "" {
+	if ib.Type.IsNet() && ib.MacAddr == "" && ib.Ifname != "" {
 		ib.MacAddr = getMacAddr(ib.Ifname)
 		changed = true
 		log.Functionf("checkAndFillIoBundle(%d %s %s) found macaddr %s",
@@ -3057,6 +3056,9 @@ func checkAndFillIoBundle(ib *types.IoBundle) (bool, error) {
 	return changed, nil
 }
 
+// TODO: use this function only for to-be assigned adapters and virtual functions.
+// With userspace vswitch, using netlink for management ports will not work.
+// Alternatively, get MAC address by PCI or USB address when possible.
 func getMacAddr(ifname string) string {
 	link, err := netlink.LinkByName(ifname)
 	if err != nil {
@@ -3085,8 +3087,8 @@ func checkIoBundleAll(ctx *domainContext) {
 // changed in addition to the name to pci-id lookup.
 func checkIoBundle(ctx *domainContext, ib *types.IoBundle) error {
 
-	if ib.Type.IsNet() && ib.MacAddr != "" {
-		macAddr := getMacAddr(ib.Phylabel)
+	if ib.Type.IsNet() && ib.MacAddr != "" && ib.Ifname != "" {
+		macAddr := getMacAddr(ib.Ifname)
 		// Will be empty string if adapter is assigned away
 		if macAddr != "" && macAddr != ib.MacAddr {
 			errStr := fmt.Sprintf("IoBundle(%d %s %s) changed MacAddr from %s to %s",

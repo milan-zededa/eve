@@ -122,7 +122,8 @@ func initTest(test *testing.T) *GomegaWithT {
 	wwanWatcher = &MockWwanWatcher{}
 	geoService = &MockGeoService{}
 	connTester = &conntester.MockConnectivityTester{
-		TestDuration: 2 * time.Second,
+		TestDuration:   2 * time.Second,
+		NetworkMonitor: networkMonitor,
 	}
 	dpcManager = &dpcmngr.DpcManager{
 		Log:                      logObj,
@@ -753,7 +754,7 @@ func TestSingleDPC(test *testing.T) {
 	t.Expect(dpcList[0].State).To(Equal(types.DPCStateFail))
 	t.Expect(dpcList[0].LastFailed.After(dpcList[0].LastSucceeded)).To(BeTrue())
 	t.Expect(dpcList[0].LastError).To(Equal("not enough working ports (0); failed with: " +
-		"[interface eth0: no suitable IP address available]"))
+		"[port mock-eth0: no suitable IP address available]"))
 
 	// Simulate the interface obtaining the IP address back after a while.
 	time.Sleep(5 * time.Second)
@@ -814,7 +815,10 @@ func TestDPCFallback(test *testing.T) {
 	t.Expect(dpcList[0].State).To(Equal(types.DPCStateFail))
 	t.Expect(dpcList[0].LastFailed.After(dpcList[0].LastSucceeded)).To(BeTrue())
 	t.Expect(dpcList[0].LastError).To(
-		Equal("not enough working ports (0); failed with: [interface eth1 is missing]"))
+		Equal("not enough working ports (0); failed with: [port mock-eth1 is missing]"))
+	t.Expect(dpcList[0].Ports).To(HaveLen(1))
+	t.Expect(dpcList[0].Ports[0].HasError()).To(BeTrue())
+	t.Expect(dpcList[0].Ports[0].LastError).To(Equal("missing port mock-eth1"))
 	t.Expect(dpcList[1].Key).To(Equal("lastresort"))
 	t.Expect(dpcList[1].TimePriority.Equal(timePrio1)).To(BeTrue())
 	t.Expect(dpcList[1].State).To(Equal(types.DPCStateSuccess))
@@ -850,7 +854,7 @@ func TestDPCFallback(test *testing.T) {
 
 	// Simulate Remote Temporary failure.
 	// This should not trigger fallback to lastresort.
-	connTester.SetConnectivityError("zedagent", "eth0",
+	connTester.SetConnectivityError("zedagent", "mock-eth0",
 		&conntester.RemoteTemporaryFailure{
 			Endpoint:   "fake-url",
 			WrappedErr: errors.New("controller error"),
@@ -873,7 +877,7 @@ func TestDPCFallback(test *testing.T) {
 
 	// Simulate a loss of connectivity with "zedagent" DPC.
 	// Manager should fallback to lastresort.
-	connTester.SetConnectivityError("zedagent", "eth0",
+	connTester.SetConnectivityError("zedagent", "mock-eth0",
 		fmt.Errorf("failed to connect"))
 	time.Sleep(time.Second)
 
@@ -909,12 +913,12 @@ func TestDPCWithMultipleEths(test *testing.T) {
 	networkMonitor.AddOrUpdateInterface(eth0)
 	networkMonitor.AddOrUpdateInterface(eth1)
 	// lastresort will work through one interface
-	connTester.SetConnectivityError("lastresort", "eth1",
+	connTester.SetConnectivityError("lastresort", "mock-eth1",
 		errors.New("failed to connect over eth1"))
 	// DPC "zedagent" will not work at all
-	connTester.SetConnectivityError("zedagent", "eth0",
+	connTester.SetConnectivityError("zedagent", "mock-eth0",
 		errors.New("failed to connect over eth0"))
-	connTester.SetConnectivityError("zedagent", "eth1",
+	connTester.SetConnectivityError("zedagent", "mock-eth1",
 		errors.New("failed to connect over eth1"))
 
 	// Apply global config first.
@@ -993,7 +997,7 @@ func TestDNS(test *testing.T) {
 	geoSetAt := time.Now()
 	geoService.SetGeolocationInfo(eth0.IPAddrs[0].IP, mockEth0Geo())
 	// lastresort will work through one interface
-	connTester.SetConnectivityError("lastresort", "eth1",
+	connTester.SetConnectivityError("lastresort", "mock-eth1",
 		errors.New("failed to connect over eth1"))
 
 	// Apply global config first.
@@ -1406,7 +1410,7 @@ func TestDPCWithAssignedInterface(test *testing.T) {
 	t.Expect(dpcList[0].TimePriority.Equal(timePrio1)).To(BeTrue())
 	t.Expect(dpcList[0].State).To(Equal(types.DPCStateFail))
 	t.Expect(dpcList[0].LastFailed.After(dpcList[0].LastSucceeded)).To(BeTrue())
-	t.Expect(dpcList[0].LastError).To(Equal("port eth1 in PCIBack is used by ccf4c2f8-1d0f-4b44-b55a-220f7a138f6d"))
+	t.Expect(dpcList[0].LastError).To(Equal("port mock-eth1 in PCIBack is used by ccf4c2f8-1d0f-4b44-b55a-220f7a138f6d"))
 
 	// eth1 was released from the application but it is still in PCIBack.
 	aa.IoBundleList[1].UsedByUUID = uuid.UUID{}
@@ -1850,9 +1854,9 @@ func TestTransientDNSError(test *testing.T) {
 	// Simulate an event of interface receiving IP and DNS config from DHCP.
 	// However, let's pretend that the DNS resolver of the connection tester
 	// has not reloaded DNS config yet.
-	connTester.SetConnectivityError("zedagent", "eth0",
+	connTester.SetConnectivityError("zedagent", "mock-eth0",
 		&types.DNSNotAvail{
-			IfName: eth0.Attrs.IfName,
+			PortLL: "mock-eth0",
 		})
 	eth0 = mockEth0() // With IPAddrs and DNS.
 	networkMonitor.AddOrUpdateInterface(eth0)
@@ -1863,15 +1867,15 @@ func TestTransientDNSError(test *testing.T) {
 	dpcEth0 := dpc.GetPortByIfName("eth0")
 	t.Expect(dpcEth0).ToNot(BeNil())
 	t.Expect(dpcEth0.HasError()).To(BeTrue())
-	t.Expect(dpcEth0.LastError).To(Equal("interface eth0: no DNS server available"))
+	t.Expect(dpcEth0.LastError).To(Equal("port mock-eth0: no DNS server available"))
 	dns := getDNS()
 	dnsEth0 := dns.GetPortByIfName("eth0")
 	t.Expect(dnsEth0).ToNot(BeNil())
 	t.Expect(dnsEth0.HasError()).To(BeTrue())
-	t.Expect(dnsEth0.LastError).To(Equal("interface eth0: no DNS server available"))
+	t.Expect(dnsEth0.LastError).To(Equal("port mock-eth0: no DNS server available"))
 
 	// Eventually the DNS resolver reloads DNS config.
-	connTester.SetConnectivityError("zedagent", "eth0", nil)
+	connTester.SetConnectivityError("zedagent", "mock-eth0", nil)
 	t.Eventually(testingInProgressCb()).Should(BeFalse())
 	t.Expect(getDPC(0).State).To(Equal(types.DPCStateSuccess))
 	dpc = getDPC(0)

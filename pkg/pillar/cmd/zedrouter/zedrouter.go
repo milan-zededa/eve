@@ -1244,13 +1244,19 @@ func (z *zedrouter) getExternalIPForApp(remoteIP net.IP) (net.IP, int) {
 		z.log.Errorf("getExternalIPForApp: No NetworkInstanceStatus for %v", remoteIP)
 		return nil, http.StatusNotFound
 	}
-	if netstatus.SelectedUplinkIntfName == "" {
-		z.log.Warnf("getExternalIPForApp: No SelectedUplinkIntfName for %v", remoteIP)
+	uplinkLL := netstatus.SelectedUplinkLogicalLabel
+	if uplinkLL == "" {
+		z.log.Warnf("getExternalIPForApp: No uplink port selected for %v", remoteIP)
 		// Nothing to report */
 		return nil, http.StatusNoContent
 	}
-	ip, err := types.GetLocalAddrAnyNoLinkLocal(*z.deviceNetworkStatus,
-		0, netstatus.SelectedUplinkIntfName)
+	uplinkPort := z.deviceNetworkStatus.GetPortByLogicallabel(uplinkLL)
+	if uplinkPort == nil {
+		z.log.Errorf("getExternalIPForApp: No NetworkPortStatus for uplink needed for %v",
+			remoteIP)
+		return nil, http.StatusNotFound
+	}
+	ip, err := uplinkPort.PickAddrExceptLinkLocal(0)
 	if err != nil {
 		z.log.Errorf("getExternalIPForApp: No externalIP for %s: %s",
 			remoteIP.String(), err)

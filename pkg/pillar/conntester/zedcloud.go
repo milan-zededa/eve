@@ -93,14 +93,13 @@ func (t *ZedcloudConnectivityTester) TestConnectivity(dns types.DeviceNetworkSta
 		tlsConfig.ClientSessionCache = t.prevTLSConfig.ClientSessionCache
 	}
 	zedcloudCtx.TlsConfig = tlsConfig
-	for ix := range dns.Ports {
-		ifName := dns.Ports[ix].IfName
-		err = devicenetwork.CheckAndGetNetworkProxy(t.Log, &dns, ifName, t.Metrics)
+	for _, port := range dns.Ports {
+		err = devicenetwork.CheckAndGetNetworkProxy(t.Log, &dns, port.Logicallabel, t.Metrics)
 		if err != nil {
-			err = fmt.Errorf("failed to get network proxy for interface %s: %v",
-				ifName, err)
+			err = fmt.Errorf("failed to get network proxy for port %s: %v",
+				port.Logicallabel, err)
 			t.Log.Errorf("TestConnectivity: %v", err)
-			intfStatusMap.RecordFailure(ifName, err.Error())
+			intfStatusMap.RecordFailure(port.Logicallabel, err.Error())
 			return intfStatusMap, nil, err
 		}
 	}
@@ -124,7 +123,7 @@ func (t *ZedcloudConnectivityTester) TestConnectivity(dns types.DeviceNetworkSta
 				Endpoint:   serverNameAndPort,
 				WrappedErr: err,
 			}
-		} else if portsNotReady := t.getPortsNotReady(err, dns); len(portsNotReady) > 0 {
+		} else if portsNotReady := t.getPortsNotReady(err); len(portsNotReady) > 0 {
 			// At least one of the uplink ports is not ready in terms of L3 connectivity.
 			// Signal to the caller that it might make sense to wait and repeat test later.
 			err = &PortsNotReady{
@@ -147,21 +146,17 @@ func (t *ZedcloudConnectivityTester) TestConnectivity(dns types.DeviceNetworkSta
 }
 
 func (t *ZedcloudConnectivityTester) getPortsNotReady(
-	verifyErr error, dns types.DeviceNetworkStatus) (ports []string) {
+	verifyErr error) (ports []string) {
 	if sendErr, isSendErr := verifyErr.(*zedcloud.SendError); isSendErr {
 		portMap := make(map[string]struct{}) // Avoid duplicate entries.
 		for _, attempt := range sendErr.Attempts {
 			var dnsErr *types.DNSNotAvail
 			if errors.As(attempt.Err, &dnsErr) {
-				if port := dns.GetPortByIfName(dnsErr.IfName); port != nil {
-					portMap[port.Logicallabel] = struct{}{}
-				}
+				portMap[dnsErr.PortLL] = struct{}{}
 			}
 			var ipErr *types.IPAddrNotAvail
 			if errors.As(attempt.Err, &ipErr) {
-				if port := dns.GetPortByIfName(ipErr.IfName); port != nil {
-					portMap[port.Logicallabel] = struct{}{}
-				}
+				portMap[ipErr.PortLL] = struct{}{}
 			}
 		}
 		for port := range portMap {
@@ -175,6 +170,12 @@ func (t *ZedcloudConnectivityTester) getPortsNotReady(
 // are quite small.
 func (t *ZedcloudConnectivityTester) netTraceOpts(
 	dns types.DeviceNetworkStatus) []nettrace.TraceOpt {
+	var intfsForPcap []string
+	for _, port := range dns.Ports {
+		if port.IsMgmt && port.IfName != "" {
+			intfsForPcap = append(intfsForPcap, port.IfName)
+		}
+	}
 	return []nettrace.TraceOpt{
 		&nettrace.WithLogging{
 			CustomLogger: &base.LogrusWrapper{Log: t.Log},
@@ -187,7 +188,7 @@ func (t *ZedcloudConnectivityTester) netTraceOpts(
 			HeaderFields: nettrace.HdrFieldsOptValueLenOnly,
 		},
 		&nettrace.WithPacketCapture{
-			Interfaces:  types.GetMgmtPortsAny(dns, 0),
+			Interfaces:  intfsForPcap,
 			IncludeICMP: true,
 			IncludeARP:  true,
 		},

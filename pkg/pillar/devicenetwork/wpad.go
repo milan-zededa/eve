@@ -18,35 +18,35 @@ import (
 
 // Download a wpad file if so configured
 func CheckAndGetNetworkProxy(log *base.LogObject, dns *types.DeviceNetworkStatus,
-	ifname string, metrics *zedcloud.AgentMetrics) error {
+	portLL string, metrics *zedcloud.AgentMetrics) error {
 
-	portStatus := dns.GetPortByIfName(ifname)
+	portStatus := dns.GetPortByLogicallabel(portLL)
 	if portStatus == nil {
-		errStr := fmt.Sprintf("Missing port status for interface %s", ifname)
+		errStr := fmt.Sprintf("Missing port status for port %s", portLL)
 		log.Errorln(errStr)
 		return errors.New(errStr)
 	}
 	proxyConfig := &portStatus.ProxyConfig
 
 	log.Tracef("CheckAndGetNetworkProxy(%s): enable %v, url %s\n",
-		ifname, proxyConfig.NetworkProxyEnable,
+		portLL, proxyConfig.NetworkProxyEnable,
 		proxyConfig.NetworkProxyURL)
 
 	if proxyConfig.Pacfile != "" {
 		log.Tracef("CheckAndGetNetworkProxy(%s): already have Pacfile\n",
-			ifname)
+			portLL)
 		return nil
 	}
 	if !proxyConfig.NetworkProxyEnable {
 		log.Tracef("CheckAndGetNetworkProxy(%s): not enabled\n",
-			ifname)
+			portLL)
 		return nil
 	}
 	if proxyConfig.NetworkProxyURL != "" {
-		pac, err := getPacFile(log, proxyConfig.NetworkProxyURL, dns, ifname, metrics)
+		pac, err := getPacFile(log, proxyConfig.NetworkProxyURL, dns, portLL, metrics)
 		if err != nil {
 			errStr := fmt.Sprintf("Failed to fetch %s for %s: %s",
-				proxyConfig.NetworkProxyURL, ifname, err)
+				proxyConfig.NetworkProxyURL, portLL, err)
 			log.Errorln(errStr)
 			return errors.New(errStr)
 		}
@@ -55,30 +55,30 @@ func CheckAndGetNetworkProxy(log *base.LogObject, dns *types.DeviceNetworkStatus
 	}
 	dn := portStatus.DomainName
 	if dn == "" {
-		errStr := fmt.Sprintf("NetworkProxyEnable for %s but neither a NetworkProxyURL nor a DomainName",
-			ifname)
+		errStr := fmt.Sprintf("NetworkProxyEnable for %s but neither a NetworkProxyURL "+
+			"nor a DomainName", portLL)
 		log.Errorln(errStr)
 		return errors.New(errStr)
 	}
 	log.Functionf("CheckAndGetNetworkProxy(%s): DomainName %s\n",
-		ifname, dn)
+		portLL, dn)
 	// Try http://wpad.%s/wpad.dat", dn where we the leading labels
 	// in DomainName until we succeed
 	for {
 		url := fmt.Sprintf("http://wpad.%s/wpad.dat", dn)
-		pac, err := getPacFile(log, url, dns, ifname, metrics)
+		pac, err := getPacFile(log, url, dns, portLL, metrics)
 		if err == nil {
 			proxyConfig.Pacfile = pac
 			proxyConfig.WpadURL = url
 			return nil
 		}
 		errStr := fmt.Sprintf("Failed to fetch %s for %s: %s",
-			url, ifname, err)
+			url, portLL, err)
 		log.Warnln(errStr)
 		i := strings.Index(dn, ".")
 		if i == -1 {
 			log.Functionf("CheckAndGetNetworkProxy(%s): no dots in DomainName %s\n",
-				ifname, dn)
+				portLL, dn)
 			log.Errorln(errStr)
 			return errors.New(errStr)
 		}
@@ -89,7 +89,7 @@ func CheckAndGetNetworkProxy(log *base.LogObject, dns *types.DeviceNetworkStatus
 		count := strings.Count(dn, ".")
 		if count == 0 {
 			log.Functionf("CheckAndGetNetworkProxy(%s): reached TLD in DomainName %s\n",
-				ifname, dn)
+				portLL, dn)
 			log.Errorln(errStr)
 			return errors.New(errStr)
 		}
@@ -97,7 +97,7 @@ func CheckAndGetNetworkProxy(log *base.LogObject, dns *types.DeviceNetworkStatus
 }
 
 func getPacFile(log *base.LogObject, url string, dns *types.DeviceNetworkStatus,
-	ifname string, metrics *zedcloud.AgentMetrics) (string, error) {
+	portLL string, metrics *zedcloud.AgentMetrics) (string, error) {
 
 	zedcloudCtx := zedcloud.NewContext(log, zedcloud.ContextOptions{
 		SendTimeout:      15,
@@ -110,7 +110,7 @@ func getPacFile(log *base.LogObject, url string, dns *types.DeviceNetworkStatus,
 	const useOnboard = false
 	const withNetTracing = false
 	rv, err := zedcloud.SendOnIntf(
-		context.Background(), &zedcloudCtx, url, ifname, 0, nil,
+		context.Background(), &zedcloudCtx, url, portLL, 0, nil,
 		allowProxy, useOnboard, withNetTracing, false)
 	if err != nil {
 		return "", err
@@ -128,7 +128,7 @@ func getPacFile(log *base.LogObject, url string, dns *types.DeviceNetworkStatus,
 	switch mimeType {
 	case "application/x-ns-proxy-autoconfig":
 		log.Functionf("getPacFile(%s): fetched from URL %s: %s\n",
-			ifname, url, string(rv.RespContents))
+			portLL, url, string(rv.RespContents))
 		encoded := base64.StdEncoding.EncodeToString(rv.RespContents)
 		return encoded, nil
 	default:

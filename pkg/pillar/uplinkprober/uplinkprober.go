@@ -287,9 +287,9 @@ func (p *UplinkProber) GetProbeMetrics(
 	}
 	uplink := status.SelectedUplinkLL
 	if uplink != "" {
-		ports := p.dns.GetPortsByLogicallabel(status.SelectedUplinkLL)
-		if len(ports) == 1 {
-			metrics.SelectedUplinkIntf = ports[0].IfName
+		port := p.dns.GetPortByLogicallabel(status.SelectedUplinkLL)
+		if port != nil {
+			metrics.SelectedUplinkIntf = port.IfName
 		}
 		if uplinkStatus, exists := p.uplinkProbeStatus[uplink]; exists {
 			var remoteEps []string
@@ -430,14 +430,13 @@ func (p *UplinkProber) applyPendingDNS(pendingDNS types.DeviceNetworkStatus) {
 	// Remove ports from uplinkProbeStatus that do not exist anymore
 	// or are no longer configured for management.
 	for uplinkLL := range p.uplinkProbeStatus {
-		ports := p.pendingDNS.GetPortsByLogicallabel(uplinkLL)
-		if len(ports) == 0 {
+		port := p.pendingDNS.GetPortByLogicallabel(uplinkLL)
+		if port == nil {
 			p.log.Noticef("UplinkProber: Removed %s from the list of probed uplinks",
 				uplinkLL)
 			delete(p.uplinkProbeStatus, uplinkLL)
 			continue
 		}
-		port := ports[0]
 		if !port.IsMgmt {
 			p.log.Noticef("UplinkProber: Removed %s from the list of probed uplinks",
 				uplinkLL)
@@ -450,8 +449,8 @@ func (p *UplinkProber) applyPendingDNS(pendingDNS types.DeviceNetworkStatus) {
 			continue
 		}
 		uplinkStatus, haveStatus := p.uplinkProbeStatus[port.Logicallabel]
-		if !haveStatus {
-			// Newly appeared port.
+		if !haveStatus || uplinkStatus.ifName != port.IfName {
+			// Newly appeared port or interface name changed.
 			uplinkLL := port.Logicallabel
 			p.uplinkProbeStatus[uplinkLL] = &uplinkProbeStatus{
 				logicallabel: port.Logicallabel,
@@ -491,7 +490,6 @@ func (p *UplinkProber) probeUplinkNH(uplinkStatus *uplinkProbeStatus) {
 				uplinkStatus.nhUP = true
 				p.log.Noticef("UplinkProber: Setting NH to UP for uplink %s "+
 					"(sudden change)", uplinkLL)
-
 			}
 			uplinkStatus.nhSuccessCnt++
 			uplinkStatus.nhFailedCnt = 0

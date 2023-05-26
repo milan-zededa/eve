@@ -354,23 +354,55 @@ func (m *DpcManager) doUpdateRadioSilence(ctx context.Context, newRS types.Radio
 // created by the kernel for the modem data-path.
 func (m *DpcManager) setDiscoveredWwanIfNames(dpc *types.DevicePortConfig) bool {
 	var changed bool
-	updatedPorts := make([]types.NetworkPortConfig, len(dpc.Ports))
+	ifNames := make(map[string]string) // interface name -> logical label
+	currentDPC := m.currentDPC()
 	for i := range dpc.Ports {
 		port := &dpc.Ports[i]
-		updatedPorts[i] = *port // copy
-		if port.WirelessCfg.WType == types.WirelessTypeCellular {
-			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(
-				port.Logicallabel)
-			if found && wwanNetStatus.PhysAddrs.Interface != "" {
-				if port.IfName != wwanNetStatus.PhysAddrs.Interface {
-					updatedPorts[i].IfName = wwanNetStatus.PhysAddrs.Interface
+		if port.WirelessCfg.WType != types.WirelessTypeCellular {
+			continue
+		}
+		wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
+		if found && wwanNetStatus.PhysAddrs.Interface != "" {
+			ifNames[wwanNetStatus.PhysAddrs.Interface] = port.Logicallabel
+			if port.IfName != wwanNetStatus.PhysAddrs.Interface {
+				changed = true
+			}
+		} else if port.IfName == "" && currentDPC != nil && currentDPC != dpc {
+			// Maybe we received new DPC while modem status is not yet available.
+			// See if we can get interface name from the current DPC.
+			currentPortConfig := currentDPC.GetPortByLogicalLabel(port.Logicallabel)
+			if currentPortConfig != nil && currentPortConfig.IfName != "" &&
+				currentPortConfig.USBAddr == port.USBAddr &&
+				currentPortConfig.PCIAddr == port.PCIAddr {
+				if _, used := ifNames[currentPortConfig.IfName]; !used {
+					ifNames[currentPortConfig.IfName] = port.Logicallabel
 					changed = true
 				}
 			}
 		}
 	}
-	if changed {
-		dpc.Ports = updatedPorts
+	if !changed {
+		return false
 	}
-	return changed
+	updatedPorts := make([]types.NetworkPortConfig, len(dpc.Ports))
+	// First see if any wwan modem has changed interface name.
+	for i := range dpc.Ports {
+		port := &dpc.Ports[i]
+		updatedPorts[i] = *port // copy
+		if port.IfName != "" {
+			if port2 := ifNames[port.IfName]; port2 != "" && port2 != port.Logicallabel {
+				// This interface name was taken by port2.
+				updatedPorts[i].IfName = ""
+				m.Log.Noticef("Interface name %s was taken from port %s by port %s",
+					port.IfName, port.Logicallabel, port2)
+			}
+		}
+		for ifName, port2 := range ifNames {
+			if port.Logicallabel == port2 {
+				updatedPorts[i].IfName = ifName
+			}
+		}
+	}
+	dpc.Ports = updatedPorts
+	return true
 }

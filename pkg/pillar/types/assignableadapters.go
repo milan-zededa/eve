@@ -195,16 +195,6 @@ func IoBundleFromPhyAdapter(log *base.LogObject, phyAdapter PhysicalIOAdapter) *
 	ib.Vfs.Data = make([]sriov.EthVF, len(phyAdapter.Vfs.Data))
 	copy(ib.Vfs.Data, phyAdapter.Vfs.Data)
 	ib.Vfs.Count = phyAdapter.Vfs.Count
-	// Guard against models without ifname for network adapters
-	if ib.Type.IsNet() && ib.Ifname == "" {
-		log.Warnf("phyAdapter IsNet without ifname: phylabel %s logicallabel %s",
-			ib.Phylabel, ib.Logicallabel)
-		if ib.Logicallabel != "" {
-			ib.Ifname = ib.Logicallabel
-		} else {
-			ib.Ifname = ib.Phylabel
-		}
-	}
 	return &ib
 }
 
@@ -449,7 +439,7 @@ func (aa *AssignableAdapters) CheckBadAssignmentGroups(log *base.LogObject, PCIS
 			}
 			if PCISameController != nil && PCISameController(ib.PciLong, ib2.PciLong) {
 				err := fmt.Errorf("CheckBadAssignmentGroup: %s same PCI controller as %s; pci long %s vs %s",
-					ib2.Ifname, ib.Ifname, ib2.PciLong, ib.PciLong)
+					ib2.Logicallabel, ib.Logicallabel, ib2.PciLong, ib.PciLong)
 				log.Error(err)
 				ib.Error = err.Error()
 				ib.ErrorTime = time.Now()

@@ -342,16 +342,14 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 
 	// Use the network metrics from zedrouter subscription
 	// Only report stats for the ports in DeviceNetworkStatus
-	labelList := types.ReportLogicallabels(*deviceNetworkStatus)
-	for _, label := range labelList {
+	for _, p := range deviceNetworkStatus.Ports {
 		var metric *types.NetworkMetric
-		ports := deviceNetworkStatus.GetPortsByLogicallabel(label)
-		if len(ports) == 0 {
-			continue
-		}
-		p := ports[0]
 		if !p.IsL3Port {
 			// metrics for ports from lower layers are not reported
+			continue
+		}
+		if p.IfName == "" {
+			// Cannot associate metrics with the port until interface name is known.
 			continue
 		}
 		for _, m := range networkMetrics.MetricList {
@@ -365,7 +363,7 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 		}
 		networkDetails := new(metrics.NetworkMetric)
 		networkDetails.LocalName = metric.IfName
-		networkDetails.IName = label
+		networkDetails.IName = p.Logicallabel
 		networkDetails.Alias = p.Alias
 		networkDetails.TxPkts = metric.TxPkts
 		networkDetails.RxPkts = metric.RxPkts
@@ -1125,10 +1123,11 @@ func PublishAppInfoToZedCloud(ctx *zedagentContext, uuid string,
 			if niStatus != nil {
 				networkInfo.NtpServers = []string{}
 				if niStatus.NtpServer != nil {
-					networkInfo.NtpServers = append(networkInfo.NtpServers, niStatus.NtpServer.String())
-				} else {
-					ntpServers := types.GetNTPServers(*deviceNetworkStatus,
-						niStatus.SelectedUplinkIntfName)
+					networkInfo.NtpServers = append(networkInfo.NtpServers,
+						niStatus.NtpServer.String())
+				} else if niStatus.SelectedUplinkLogicalLabel != "" {
+					ntpServers := deviceNetworkStatus.GetNTPServers(
+						niStatus.SelectedUplinkLogicalLabel)
 					for _, server := range ntpServers {
 						networkInfo.NtpServers = append(networkInfo.NtpServers, server.String())
 					}

@@ -10,13 +10,15 @@ import (
 	"time"
 
 	"github.com/lf-edge/eve/pkg/pillar/netdump"
+	"github.com/lf-edge/eve/pkg/pillar/netmonitor"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
 // MockConnectivityTester is used for unit testing.
 type MockConnectivityTester struct {
 	sync.Mutex
-	TestDuration time.Duration // inject
+	TestDuration   time.Duration             // inject
+	NetworkMonitor netmonitor.NetworkMonitor // inject
 
 	iteration  int
 	connErrors map[ifRef]error
@@ -24,19 +26,19 @@ type MockConnectivityTester struct {
 
 type ifRef struct {
 	dpcKey string
-	ifName string
+	portLL string
 }
 
 // SetConnectivityError : allows to simulate failing connectivity for an interface
 // with a config from a given DPC.
 // With nil error value, any previously set error is removed.
-func (t *MockConnectivityTester) SetConnectivityError(dpcKey, ifName string, err error) {
+func (t *MockConnectivityTester) SetConnectivityError(dpcKey, portLL string, err error) {
 	t.Lock()
 	defer t.Unlock()
 	if t.connErrors == nil {
 		t.connErrors = make(map[ifRef]error)
 	}
-	ifRef := ifRef{dpcKey: dpcKey, ifName: ifName}
+	ifRef := ifRef{dpcKey: dpcKey, portLL: portLL}
 	if err == nil {
 		delete(t.connErrors, ifRef)
 	} else {
@@ -60,36 +62,31 @@ func (t *MockConnectivityTester) TestConnectivity(dns types.DeviceNetworkStatus,
 	t.iteration++
 	intfStatusMap = *types.NewIntfStatusMap()
 
-	intfs := types.GetMgmtPortsSortedCost(dns, t.iteration)
-	if len(intfs) == 0 {
+	ports := dns.GetMgmtPortsSortedByCost(t.iteration)
+	if len(ports) == 0 {
 		err = errors.New("no management interfaces")
 		return intfStatusMap, nil, err
 	}
 
-	for _, ifName := range intfs {
+	for _, port := range ports {
 		if successCount >= requiredSuccessCount {
 			// We have enough uplinks with cloud connectivity working.
 			break
 		}
-		port := dns.GetPortByIfName(ifName)
-		missingErr := fmt.Sprintf("port %s does not exist", ifName)
-		if port == nil || port.LastError == missingErr {
-			err := fmt.Errorf("interface %s is missing", ifName)
+		if _, exists, _ := t.NetworkMonitor.GetInterfaceIndex(port.IfName); !exists {
+			err = fmt.Errorf("port %s is missing", port.Logicallabel)
 			errorList = append(errorList, err)
-			intfStatusMap.RecordFailure(ifName, err.Error())
-			continue
-		}
-		if !port.IsMgmt {
+			intfStatusMap.RecordFailure(port.Logicallabel, err.Error())
 			continue
 		}
 		if len(port.AddrInfoList) == 0 {
-			err := &types.IPAddrNotAvail{IfName: ifName}
+			err := &types.IPAddrNotAvail{PortLL: port.Logicallabel}
 			errorList = append(errorList, err)
-			intfStatusMap.RecordFailure(ifName, err.Error())
+			intfStatusMap.RecordFailure(port.Logicallabel, err.Error())
 			continue
 		}
 		time.Sleep(t.TestDuration)
-		ifRef := ifRef{dpcKey: dns.DPCKey, ifName: ifName}
+		ifRef := ifRef{dpcKey: dns.DPCKey, portLL: port.Logicallabel}
 		err = t.connErrors[ifRef]
 		if _, rtf := err.(*RemoteTemporaryFailure); rtf {
 			rtfErr = err
@@ -104,10 +101,10 @@ func (t *MockConnectivityTester) TestConnectivity(dns types.DeviceNetworkStatus,
 		}
 		if err != nil {
 			errorList = append(errorList, err)
-			intfStatusMap.RecordFailure(ifName, err.Error())
+			intfStatusMap.RecordFailure(port.Logicallabel, err.Error())
 		} else {
 			successCount++
-			intfStatusMap.RecordSuccess(ifName)
+			intfStatusMap.RecordSuccess(port.Logicallabel)
 		}
 	}
 

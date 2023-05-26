@@ -187,8 +187,7 @@ func handleSyncOp(ctx *downloaderContext, key string,
 	if dsLocal {
 		addrCount = 1
 	} else {
-		addrCount = types.CountLocalAddrNoLinkLocalWithCost(ctx.deviceNetworkStatus,
-			downloadMaxPortCost)
+		addrCount = ctx.deviceNetworkStatus.CountAddrsExceptLinkLocalWithCost(downloadMaxPortCost)
 		if addrCount == 0 {
 			err := fmt.Errorf("No IP management port addresses with cost <= %d",
 				downloadMaxPortCost)
@@ -216,8 +215,14 @@ func handleSyncOp(ctx *downloaderContext, key string,
 			},
 		}
 		if ctx.netdumpWithPCAP {
+			var intfsForPcap []string
+			for _, port := range ctx.deviceNetworkStatus.Ports {
+				if port.IsMgmt && port.IfName != "" {
+					intfsForPcap = append(intfsForPcap, port.IfName)
+				}
+			}
 			traceOpts = append(traceOpts, &nettrace.WithPacketCapture{
-				Interfaces:        types.GetMgmtPortsAny(ctx.deviceNetworkStatus, 0),
+				Interfaces:        intfsForPcap,
 				TotalSizeLimit:    pcapSizeLimit,
 				IncludeICMP:       true,
 				IncludeARP:        true,
@@ -232,14 +237,27 @@ func handleSyncOp(ctx *downloaderContext, key string,
 		var ipSrc net.IP
 		var tracedReq netdump.TracedNetRequest
 		if !dsLocal {
-			ipSrc, err = types.GetLocalAddrNoLinkLocalWithCost(ctx.deviceNetworkStatus,
-				addrIndex, "", downloadMaxPortCost)
+			ipSrc, err = ctx.deviceNetworkStatus.PickAddrExceptLinkLocalWithCost(
+				addrIndex, downloadMaxPortCost)
 			if err != nil {
 				log.Errorf("GetLocalAddr failed: %s", err)
 				errStr = errStr + "\n" + err.Error()
 				continue
 			}
-			ifname = types.GetMgmtPortFromAddr(ctx.deviceNetworkStatus, ipSrc)
+			port := ctx.deviceNetworkStatus.GetMgmtPortByAddr(ipSrc)
+			if port == nil {
+				err = fmt.Errorf("skipping source address %s: missing port status", ipSrc)
+				log.Error(err)
+				errStr = errStr + "\n" + err.Error()
+				continue
+			}
+			if port.IfName == "" {
+				err = fmt.Errorf("skipping source address %s: missing interface name", ipSrc)
+				log.Error(err)
+				errStr = errStr + "\n" + err.Error()
+				continue
+			}
+			ifname = port.IfName
 		} else {
 			serverURL, ifname, ipSrc, err = findDSmDNS(ctx, serverURL)
 			if err != nil {

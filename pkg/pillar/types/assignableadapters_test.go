@@ -22,42 +22,49 @@ var aa = AssignableAdapters{
 			AssignmentGroup: "eth0-1",
 			Phylabel:        "eth0",
 			Ifname:          "eth0",
+			Logicallabel:    "ethernet0",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth0-1",
 			Phylabel:        "eth1",
 			Ifname:          "eth1",
+			Logicallabel:    "ethernet1",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth2",
 			Phylabel:        "eth2",
 			Ifname:          "eth2",
+			Logicallabel:    "ethernet2",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth4",
 			Ifname:          "eth4",
+			Logicallabel:    "ethernet4",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth5",
 			Ifname:          "eth5",
+			Logicallabel:    "ethernet5",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth6",
 			Ifname:          "eth6",
+			Logicallabel:    "ethernet6",
 		},
 		{
 			Type:            IoNetEth,
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth7",
 			Ifname:          "eth7",
+			Logicallabel:    "ethernet7",
 		},
 	},
 }
@@ -184,6 +191,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth0-1",
 			Phylabel:        "eth0",
 			Ifname:          "eth0",
+			Logicallabel:    "ethernet0",
 			PciLong:         "0000:f2:00.0",
 		},
 		{
@@ -191,6 +199,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth0-1",
 			Phylabel:        "eth1",
 			Ifname:          "eth1",
+			Logicallabel:    "ethernet1",
 			PciLong:         "0000:f2:00.0",
 		},
 		{
@@ -198,6 +207,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth2",
 			Phylabel:        "eth2",
 			Ifname:          "eth2",
+			Logicallabel:    "ethernet2",
 			PciLong:         "0000:f2:00.0",
 		},
 		{
@@ -205,6 +215,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth3",
 			Phylabel:        "eth3",
 			Ifname:          "eth3",
+			Logicallabel:    "ethernet3",
 			PciLong:         "0000:f2:00.1",
 		},
 		{
@@ -212,6 +223,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth4",
 			Ifname:          "eth4",
+			Logicallabel:    "ethernet4",
 			PciLong:         "0000:f4:00.0",
 		},
 		{
@@ -219,6 +231,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth5",
 			Ifname:          "eth5",
+			Logicallabel:    "ethernet5",
 			PciLong:         "0000:f4:00.1",
 		},
 		{
@@ -226,6 +239,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth6",
 			Ifname:          "eth6",
+			Logicallabel:    "ethernet6",
 			PciLong:         "0000:f4:00.2",
 		},
 		{
@@ -233,6 +247,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth4-7",
 			Phylabel:        "eth7",
 			Ifname:          "eth7",
+			Logicallabel:    "ethernet7",
 			PciLong:         "0000:f4:00.3",
 		},
 		{
@@ -240,6 +255,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth8",
 			Phylabel:        "eth8",
 			Ifname:          "eth8",
+			Logicallabel:    "ethernet8",
 			PciLong:         "0000:f8:00.0",
 		},
 		{
@@ -247,6 +263,7 @@ var aa2 = AssignableAdapters{
 			AssignmentGroup: "eth9",
 			Phylabel:        "eth9",
 			Ifname:          "eth9",
+			Logicallabel:    "ethernet9",
 			PciLong:         "0000:f8:00.1",
 		},
 		{
@@ -354,16 +371,16 @@ var aa2 = AssignableAdapters{
 
 // Same indices as above
 var aa2Errors = []string{
-	"CheckBadAssignmentGroup: eth3 same PCI controller as eth0; pci long 0000:f2:00.1 vs 0000:f2:00.0",
-	"CheckBadAssignmentGroup: eth3 same PCI controller as eth1; pci long 0000:f2:00.1 vs 0000:f2:00.0",
-	"CheckBadAssignmentGroup: eth3 same PCI controller as eth2; pci long 0000:f2:00.1 vs 0000:f2:00.0",
-	"CheckBadAssignmentGroup: eth2 same PCI controller as eth3; pci long 0000:f2:00.0 vs 0000:f2:00.1",
+	"CheckBadAssignmentGroup: ethernet3 same PCI controller as ethernet0; pci long 0000:f2:00.1 vs 0000:f2:00.0",
+	"CheckBadAssignmentGroup: ethernet3 same PCI controller as ethernet1; pci long 0000:f2:00.1 vs 0000:f2:00.0",
+	"CheckBadAssignmentGroup: ethernet3 same PCI controller as ethernet2; pci long 0000:f2:00.1 vs 0000:f2:00.0",
+	"CheckBadAssignmentGroup: ethernet2 same PCI controller as ethernet3; pci long 0000:f2:00.0 vs 0000:f2:00.1",
 	"",
 	"",
 	"",
 	"",
-	"CheckBadAssignmentGroup: eth9 same PCI controller as eth8; pci long 0000:f8:00.1 vs 0000:f8:00.0",
-	"CheckBadAssignmentGroup: eth8 same PCI controller as eth9; pci long 0000:f8:00.0 vs 0000:f8:00.1",
+	"CheckBadAssignmentGroup: ethernet9 same PCI controller as ethernet8; pci long 0000:f8:00.1 vs 0000:f8:00.0",
+	"CheckBadAssignmentGroup: ethernet8 same PCI controller as ethernet9; pci long 0000:f8:00.0 vs 0000:f8:00.1",
 	"",
 	"",
 	"",
