@@ -304,7 +304,7 @@ func handleDNSImpl(ctxArg interface{}, key string,
 	log.Functionf("handleDNSImpl: changed %v",
 		cmp.Diff(*ctx.deviceNetworkStatus, status))
 	*ctx.deviceNetworkStatus = status
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.deviceNetworkStatus)
+	newAddrCount := ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	if newAddrCount != 0 && ctx.usableAddressCount == 0 {
 		log.Functionf("DeviceNetworkStatus from %d to %d addresses\n",
 			ctx.usableAddressCount, newAddrCount)
@@ -325,7 +325,7 @@ func handleDNSDelete(ctxArg interface{}, key string,
 		return
 	}
 	*ctx.deviceNetworkStatus = types.DeviceNetworkStatus{}
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*ctx.deviceNetworkStatus)
+	newAddrCount := ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	ctx.DNSinitialized = false
 	ctx.usableAddressCount = newAddrCount
 	log.Functionf("handleDNSDelete done for %s\n", key)
@@ -388,44 +388,34 @@ func scanAIConfigs(ctx *wstunnelclientContext) {
 	}
 	deviceNetworkStatus := ctx.dnsContext.deviceNetworkStatus
 	for _, port := range deviceNetworkStatus.Ports {
-		ifname := port.IfName
-		if !types.IsMgmtPort(*deviceNetworkStatus, ifname) {
-			log.Tracef("Skipping connection using non-mangement intf %s\n",
-				ifname)
+		if !port.IsMgmt {
+			log.Tracef("Skipping connection using non-mangement port %s\n",
+				port.Logicallabel)
 			continue
 		}
 		wstunnelclient := zedcloud.InitializeTunnelClient(log, ctx.serverNameAndPort, "localhost:4822")
 		destURL := wstunnelclient.Tunnel
 
-		addrCount, err := types.CountLocalAddrAnyNoLinkLocalIf(*deviceNetworkStatus,
-			ifname)
-		if err != nil {
-			log.Errorf("CountLocalIPv4AddrAnyNoLinkLocalIf failed for %s: %v",
-				ifname, err)
-			continue
-		}
-
-		log.Functionf("Connecting to %s using intf %s #sources %d\n",
-			destURL, ifname, addrCount)
+		addrCount, _ := port.CountAddrsExceptLinkLocal()
+		log.Functionf("Connecting to %s using port %s #sources %d\n",
+			destURL, port.Logicallabel, addrCount)
 
 		if addrCount == 0 {
-			errStr := fmt.Sprintf("No IP addresses to connect to %s using intf %s",
-				destURL, ifname)
+			errStr := fmt.Sprintf("No IP addresses to connect to %s using port %s",
+				destURL, port.Logicallabel)
 			log.Functionln(errStr)
 			continue
 		}
 
 		var connected bool
 		for retryCount := 0; retryCount < addrCount; retryCount++ {
-			localAddr, err := types.GetLocalAddrAnyNoLinkLocal(*deviceNetworkStatus,
-				retryCount, ifname)
+			localAddr, err := port.PickAddrExceptLinkLocal(retryCount)
 			if err != nil {
 				log.Function(err)
 				continue
 			}
 
-			proxyURL, _ := zedcloud.LookupProxy(log, deviceNetworkStatus,
-				ifname, destURL)
+			proxyURL, _ := zedcloud.LookupProxy(log, port, destURL)
 			if err := wstunnelclient.TestConnection(deviceNetworkStatus, proxyURL, localAddr, ctx.devUUID); err != nil {
 				log.Function(err)
 				continue
@@ -438,7 +428,7 @@ func scanAIConfigs(ctx *wstunnelclientContext) {
 			ctx.wstunnelclient = wstunnelclient
 			break
 		}
-		log.Functionf("Could not connect to %s using intf %s\n", destURL, ifname)
+		log.Functionf("Could not connect to %s using port %s\n", destURL, port.Logicallabel)
 	}
 }
 

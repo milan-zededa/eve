@@ -58,6 +58,11 @@ type ReconcileStatus struct {
 	// (which DPC reconciler does not work with).
 	DNS DNSStatus
 	// XXX Add more as needed...
+	//     For example, with vswitch we may need a map from port logical label
+	//     to the interface name. For user-space vswitch there might be two interfaces
+	//     representing a physical port - one in the user-space, another in the Linux
+	//     kernel-space (e.g. a TAP). We will see if the user-space interface name
+	//     will be actually needed outside of DPC Reconciler...
 }
 
 // RadioSilenceStatus : state information related to radio silence.
@@ -71,6 +76,6 @@ type RadioSilenceStatus struct {
 type DNSStatus struct {
 	// Non-nil if reconciler failed to apply DNS configuration.
 	Error error
-	// Configured DNS servers sorted by physical interface name.
-	Servers map[string][]net.IP // interface name -> DNS servers
+	// Configured DNS servers sorted by port logical label.
+	Servers map[string][]net.IP // port logical label -> DNS servers
 }

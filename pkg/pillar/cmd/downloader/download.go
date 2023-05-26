@@ -108,19 +108,21 @@ func download(ctx *downloaderContext, trType zedUpload.SyncTransportType,
 			return "", cancel, tracedReq, err
 		}
 	}
-	// check for proxies on the selected management port interface
-	proxyLookupURL := zedcloud.IntfLookupProxyCfg(log, &ctx.deviceNetworkStatus, ifname, downloadURL, trType)
-	proxyURL, err := zedcloud.LookupProxy(log, &ctx.deviceNetworkStatus, ifname, proxyLookupURL)
-	if err != nil {
-		log.Errorf("Lookup Proxy failed: %s", err)
-		return "", cancel, tracedReq, err
-	}
-	if proxyURL != nil {
-		log.Functionf("%s: Using proxy %s", trType, proxyURL.String())
-		err = dEndPoint.WithProxy(proxyURL)
+	// If the interface is a physical port, check for configured network proxies.
+	if port := ctx.deviceNetworkStatus.GetPortByIfName(ifname); port != nil {
+		proxyLookupURL := zedcloud.PortLookupProxyCfg(log, *port, downloadURL, trType)
+		proxyURL, err := zedcloud.LookupProxy(log, *port, proxyLookupURL)
 		if err != nil {
-			log.Errorf("Set proxy failed: %s", err)
+			log.Errorf("Lookup Proxy failed: %s", err)
 			return "", cancel, tracedReq, err
+		}
+		if proxyURL != nil {
+			log.Functionf("%s: Using proxy %s", trType, proxyURL.String())
+			err = dEndPoint.WithProxy(proxyURL)
+			if err != nil {
+				log.Errorf("Set proxy failed: %s", err)
+				return "", cancel, tracedReq, err
+			}
 		}
 	}
 
@@ -312,12 +314,15 @@ func objectMetadata(ctx *downloaderContext, trType zedUpload.SyncTransportType,
 
 	// Configure the network client.
 	dEndPoint.WithSrcIP(ipSrc)
-	// check for proxies on the selected management port interface
-	proxyLookupURL := zedcloud.IntfLookupProxyCfg(log, &ctx.deviceNetworkStatus, ifname, downloadURL, trType)
-	proxyURL, err := zedcloud.LookupProxy(log, &ctx.deviceNetworkStatus, ifname, proxyLookupURL)
-	if err == nil && proxyURL != nil {
-		log.Functionf("%s: Using proxy %s", trType, proxyURL.String())
-		dEndPoint.WithProxy(proxyURL)
+
+	// If the interface is a physical port, check for configured network proxies.
+	if port := ctx.deviceNetworkStatus.GetPortByIfName(ifname); port != nil {
+		proxyLookupURL := zedcloud.PortLookupProxyCfg(log, *port, downloadURL, trType)
+		proxyURL, err := zedcloud.LookupProxy(log, *port, proxyLookupURL)
+		if err == nil && proxyURL != nil {
+			log.Functionf("%s: Using proxy %s", trType, proxyURL.String())
+			dEndPoint.WithProxy(proxyURL)
+		}
 	}
 
 	var respChan = make(chan *zedUpload.DronaRequest)

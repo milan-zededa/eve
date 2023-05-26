@@ -201,7 +201,7 @@ func resolveTagsToHash(ctx *downloaderContext, rc types.ResolveConfig,
 	log.Functionf("Resolving config <%s> using %d downloadMaxPortCost",
 		rc.Name, downloadMaxPortCost)
 
-	addrCount := types.CountLocalAddrNoLinkLocalWithCost(ctx.deviceNetworkStatus,
+	addrCount := ctx.deviceNetworkStatus.CountAddrsExceptLinkLocalWithCost(
 		downloadMaxPortCost)
 	log.Functionf("Have %d management port addresses for cost %d",
 		addrCount, downloadMaxPortCost)
@@ -257,20 +257,32 @@ func resolveTagsToHash(ctx *downloaderContext, rc types.ResolveConfig,
 
 	// Loop through all interfaces until a success
 	for addrIndex := 0; addrIndex < addrCount; addrIndex++ {
-		ipSrc, err := types.GetLocalAddrNoLinkLocalWithCost(ctx.deviceNetworkStatus,
-			addrIndex, "", downloadMaxPortCost)
+		ipSrc, err := ctx.deviceNetworkStatus.PickAddrExceptLinkLocalWithCost(
+			addrIndex, downloadMaxPortCost)
 		if err != nil {
-			log.Errorf("GetLocalAddr failed: %s", err)
+			log.Errorf("PickAddrExceptLinkLocalWithCost failed: %s", err)
 			errStr = errStr + "\n" + err.Error()
 			continue
 		}
-		ifname := types.GetMgmtPortFromAddr(ctx.deviceNetworkStatus, ipSrc)
+		port := ctx.deviceNetworkStatus.GetMgmtPortByAddr(ipSrc)
+		if port == nil {
+			err = fmt.Errorf("skipping source address %s: missing port status", ipSrc)
+			log.Error(err)
+			errStr = errStr + "\n" + err.Error()
+			continue
+		}
+		if port.IfName == "" {
+			err = fmt.Errorf("skipping source address %s: missing interface name", ipSrc)
+			log.Error(err)
+			errStr = errStr + "\n" + err.Error()
+			continue
+		}
 		log.Functionf("Using IP source %v if %s transport %v",
-			ipSrc, ifname, dsCtx.TransportMethod)
+			ipSrc, port.IfName, dsCtx.TransportMethod)
 
 		sha256, cancelled, err = objectMetadata(ctx, trType, syncOp, serverURL, auth,
 			dsCtx.Dpath, dsCtx.Region,
-			ifname, ipSrc, remoteName, receiveChan)
+			port.IfName, ipSrc, remoteName, receiveChan)
 		if err != nil {
 			if cancelled {
 				errStr = "tag resolution cancelled by user"

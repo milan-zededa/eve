@@ -522,6 +522,12 @@ func (r *LinuxDpcReconciler) Reconcile(ctx context.Context, args Args) Reconcile
 	if !found && len(args.DPC.Ports) > 0 {
 		dnsError = errors.New("resolv.conf is not installed")
 	}
+	dnsServers := make(map[string][]net.IP)
+	for ifName, ips := range resolvConf.DNSServers {
+		if port := args.DPC.GetPortByIfName(ifName); port != nil {
+			dnsServers[port.Logicallabel] = ips
+		}
+	}
 
 	r.resumeReconcile = make(chan struct{}, 10)
 	newStatus := ReconcileStatus{
@@ -537,7 +543,7 @@ func (r *LinuxDpcReconciler) Reconcile(ctx context.Context, args Args) Reconcile
 		},
 		DNS: DNSStatus{
 			Error:   dnsError,
-			Servers: resolvConf.DNSServers,
+			Servers: dnsServers,
 		},
 	}
 
@@ -653,7 +659,7 @@ func (r *LinuxDpcReconciler) updateCurrentPhysicalIO(
 		if port.L2Type != types.L2LinkTypeNone {
 			continue
 		}
-		ioBundle := aa.LookupIoBundleIfName(port.IfName)
+		ioBundle := aa.LookupIoBundleLogicallabel(port.Logicallabel)
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			// Until confirmed by domainmgr that the interface is out of PCIBack
 			// and ready, pretend that it doesn't exist. This is because domainmgr
@@ -662,6 +668,9 @@ func (r *LinuxDpcReconciler) updateCurrentPhysicalIO(
 			// But note that until there is a config from controller,
 			// we do not have any IO Bundles, therefore interfaces without
 			// entries in AssignableAdapters should not be ignored.
+			continue
+		}
+		if port.IfName == "" {
 			continue
 		}
 		_, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -694,7 +703,7 @@ func (r *LinuxDpcReconciler) updateCurrentAdapterAddrs(
 	sgPath := dg.NewSubGraphPath(L3SG, AdaptersSG, AdapterAddrsSG)
 	currentAddrs := dg.New(dg.InitArgs{Name: AdapterAddrsSG})
 	for _, port := range dpc.Ports {
-		if !port.IsL3Port {
+		if !port.IsL3Port || port.IfName == "" {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -733,6 +742,9 @@ func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (ch
 	sgPath := dg.NewSubGraphPath(L3SG, RoutesSG)
 	currentRoutes := dg.New(dg.InitArgs{Name: RoutesSG})
 	for _, port := range dpc.Ports {
+		if port.IfName == "" {
+			continue
+		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
 			r.Log.Errorf("updateCurrentRoutes: failed to get ifIndex for %s: %v",
@@ -801,7 +813,7 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig) dg
 	// Intended content of /etc/resolv.conf
 	dnsServers := make(map[string][]net.IP)
 	for _, port := range dpc.Ports {
-		if !port.IsMgmt {
+		if !port.IsMgmt || port.IfName == "" {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -832,7 +844,7 @@ func (r *LinuxDpcReconciler) getIntendedPhysicalIO(dpc types.DevicePortConfig) d
 	}
 	intendedIO := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if port.L2Type == types.L2LinkTypeNone {
+		if port.L2Type == types.L2LinkTypeNone && port.IfName != "" {
 			intendedIO.PutItem(generic.PhysIf{
 				LogicalLabel: port.Logicallabel,
 				IfName:       port.IfName,
@@ -851,7 +863,7 @@ func (r *LinuxDpcReconciler) getIntendedLogicalIO(dpc types.DevicePortConfig) dg
 	for _, port := range dpc.Ports {
 		switch port.L2Type {
 		case types.L2LinkTypeVLAN:
-			parent := dpc.LookupPortByLogicallabel(port.VLAN.ParentPort)
+			parent := dpc.GetPortByLogicalLabel(port.VLAN.ParentPort)
 			if parent != nil {
 				vlan := linux.Vlan{
 					LogicalLabel: port.Logicallabel,
@@ -875,7 +887,7 @@ func (r *LinuxDpcReconciler) getIntendedLogicalIO(dpc types.DevicePortConfig) dg
 		case types.L2LinkTypeBond:
 			var aggrIfNames []string
 			for _, aggrPort := range port.Bond.AggregatedPorts {
-				if nps := dpc.LookupPortByLogicallabel(aggrPort); nps != nil {
+				if nps := dpc.GetPortByLogicalLabel(aggrPort); nps != nil {
 					aggrIfNames = append(aggrIfNames, nps.IfName)
 					// Allocate the physical interface for use by the bond.
 					intendedIO.PutItem(generic.IOHandle{
@@ -933,7 +945,7 @@ func (r *LinuxDpcReconciler) getIntendedAdapters(dpc types.DevicePortConfig) dg.
 	}
 	intendedAdapters := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if !port.IsL3Port {
+		if !port.IsL3Port || port.IfName == "" {
 			continue
 		}
 		adapter := linux.Adapter{
@@ -981,6 +993,9 @@ func (r *LinuxDpcReconciler) getIntendedSrcIPRules(dpc types.DevicePortConfig) d
 	}
 	intendedRules := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
+		if port.IfName == "" {
+			continue
+		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
 			r.Log.Errorf("getIntendedSrcIPRules: failed to get ifIndex for %s: %v",
@@ -1015,6 +1030,9 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 	}
 	intendedRoutes := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
+		if port.IfName == "" {
+			continue
+		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
 			r.Log.Errorf("getIntendedRoutes: failed to get ifIndex for %s: %v",
@@ -1072,6 +1090,9 @@ type portAddr struct {
 func (r *LinuxDpcReconciler) groupPortAddrs(dpc types.DevicePortConfig) map[string][]portAddr {
 	arpGroups := map[string][]portAddr{}
 	for _, port := range dpc.Ports {
+		if port.IfName == "" {
+			continue
+		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if err != nil {
 			r.Log.Errorf("groupPortAddrs: failed to get ifIndex for %s: %v",
@@ -1699,6 +1720,9 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 	// i.e. these rules are below protoMarkV4Rules/protoMarkV6Rules
 	var dropMarkRules []iptables.Rule
 	for _, port := range dpc.Ports {
+		if port.IfName == "" {
+			continue
+		}
 		dropIngressRule := iptables.Rule{
 			RuleLabel: fmt.Sprintf("Ingress from %s", port.IfName),
 			MatchOpts: []string{"-i", port.IfName},

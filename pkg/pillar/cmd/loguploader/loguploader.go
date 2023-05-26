@@ -446,7 +446,7 @@ func handleDNSImp(ctxArg interface{}, key string, statusArg interface{}) {
 		return
 	}
 	*deviceNetworkStatus = status
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*deviceNetworkStatus)
+	newAddrCount := deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	ctx.usableAddrCount = newAddrCount // inc both ipv4 and ipv6 of mgmt intfs
 
 	// update proxy certs if configured
@@ -466,7 +466,7 @@ func handleDNSDelete(ctxArg interface{}, key string, statusArg interface{}) {
 		return
 	}
 	*deviceNetworkStatus = types.DeviceNetworkStatus{}
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(*deviceNetworkStatus)
+	newAddrCount := deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	ctx.usableAddrCount = newAddrCount
 	log.Tracef("handleDNSDelete done for %s", key)
 }

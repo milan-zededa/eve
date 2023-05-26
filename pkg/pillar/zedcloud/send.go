@@ -48,8 +48,8 @@ type ZedCloudContext struct {
 	DeviceNetworkStatus *types.DeviceNetworkStatus
 	// revive:disable-next-line
 	TlsConfig          *tls.Config
-	FailureFunc        func(log *base.LogObject, intf string, url string, reqLen int64, respLen int64, authFail bool)
-	SuccessFunc        func(log *base.LogObject, intf string, url string, reqLen int64, respLen int64, timeSpent int64, resume bool)
+	FailureFunc        func(log *base.LogObject, ifName string, url string, reqLen int64, respLen int64, authFail bool)
+	SuccessFunc        func(log *base.LogObject, ifName string, url string, reqLen int64, respLen int64, timeSpent int64, resume bool)
 	NoLedManager       bool // Don't call UpdateLedManagerConfig
 	DevUUID            uuid.UUID
 	DevSerial          string
@@ -97,8 +97,8 @@ type ContextOptions struct {
 type SendAttempt struct {
 	// Non-nil if the attempt failed.
 	Err error
-	// Name of the interface through which the data were send.
-	IfName string
+	// Name (aka logical label) of the port through which the data were send.
+	PortLL string
 	// Source IP address used by the send operation.
 	SourceAddr net.IP
 }
@@ -109,7 +109,7 @@ func (sa SendAttempt) String() string {
 	if sa.SourceAddr != nil && !sa.SourceAddr.IsUnspecified() {
 		withSrc = " with src IP " + sa.SourceAddr.String()
 	}
-	return fmt.Sprintf("send via %s%s: %v", sa.IfName, withSrc, sa.Err)
+	return fmt.Sprintf("send via %s%s: %v", sa.PortLL, withSrc, sa.Err)
 }
 
 // SendError - error that may be returned by VerifyAllIntf and SendOn* functions below,
@@ -191,23 +191,22 @@ func SendOnAllIntf(ctxWork context.Context, ctx *ZedCloudContext, url string, re
 	var attempts []SendAttempt
 	combinedRV := SendRetval{ReqURL: url}
 
-	intfs := types.GetMgmtPortsSortedCostWithoutFailed(*ctx.DeviceNetworkStatus, iteration)
-	if len(intfs) == 0 {
+	ports := ctx.DeviceNetworkStatus.GetMgmtPortsSortedByCostWithoutFailed(iteration)
+	if len(ports) == 0 {
 		// This can happen during onboarding etc and the failed status
 		// might be updated infrequently by nim
 		log.Warnf("All management ports are marked failed; trying all")
-		intfs = types.GetMgmtPortsSortedCost(*ctx.DeviceNetworkStatus, iteration)
+		ports = ctx.DeviceNetworkStatus.GetMgmtPortsSortedByCost(iteration)
 	}
-	if len(intfs) == 0 {
-		err := fmt.Errorf("Can not connect to %s: No management interfaces",
-			url)
+	if len(ports) == 0 {
+		err := fmt.Errorf("cannot connect to %s: No management ports", url)
 		log.Error(err.Error())
 		return combinedRV, err
 	}
 
-	for _, intf := range intfs {
+	for _, port := range ports {
 		const useOnboard = false
-		rv, err := SendOnIntf(ctxWork, ctx, url, intf, reqlen, b,
+		rv, err := SendOnIntf(ctxWork, ctx, url, port.Logicallabel, reqlen, b,
 			allowProxy, useOnboard, withNetTracing, false)
 		combinedRV.TracedReqs = append(combinedRV.TracedReqs, rv.TracedReqs...)
 		// this changes original boolean logic a little in V2 API, basically the last status non-zero enum would
@@ -244,7 +243,7 @@ func SendOnAllIntf(ctxWork context.Context, ctx *ZedCloudContext, url string, re
 			} else {
 				attempts = append(attempts, SendAttempt{
 					Err:    err,
-					IfName: intf,
+					PortLL: port.Logicallabel,
 				})
 			}
 			continue
@@ -316,15 +315,15 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 	// that was needed to achieve requiredSuccessCount.
 	var workingMgmtCost uint8
 
-	intfs := types.GetAllPortsSortedCost(*ctx.DeviceNetworkStatus, iteration)
+	ports := ctx.DeviceNetworkStatus.GetAllPortsSortedByCost(iteration)
 	ctxWork, cancel := GetContextForAllIntfFunctions(ctx)
 	defer cancel()
 
 	// Always iterate through *all* uplink interfaces, never break out of the loop.
 	// However, some of the interfaces might be verified only using local checks
 	// (aka dry-run).
-	for _, intf := range intfs {
-		portStatus := types.GetPort(*ctx.DeviceNetworkStatus, intf)
+	for _, portStatus := range ports {
+		portLL := portStatus.Logicallabel
 		// If we have enough uplinks with cloud connectivity, then the remaining
 		// interfaces (some of which might not be free) are verified using
 		// only local checks, without generating any traffic.
@@ -338,17 +337,17 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 		if portStatus.WirelessStatus.WType == types.WirelessTypeCellular {
 			wwanStatus := portStatus.WirelessStatus.Cellular
 			if wwanStatus.ConfigError != "" {
-				verifyRV.IntfStatusMap.RecordFailure(intf, wwanStatus.ConfigError)
+				verifyRV.IntfStatusMap.RecordFailure(portLL, wwanStatus.ConfigError)
 				continue
 			}
 			if wwanStatus.Module.OpMode != types.WwanOpModeConnected {
-				verifyRV.IntfStatusMap.RecordFailure(intf,
+				verifyRV.IntfStatusMap.RecordFailure(portLL,
 					fmt.Sprintf("modem %s is not connected, current state: %s",
 						wwanStatus.Module.Name, wwanStatus.Module.OpMode))
 				continue
 			}
 			if wwanStatus.ProbeError != "" {
-				verifyRV.IntfStatusMap.RecordFailure(intf, wwanStatus.ProbeError)
+				verifyRV.IntfStatusMap.RecordFailure(portLL, wwanStatus.ProbeError)
 				continue
 			}
 		}
@@ -356,7 +355,7 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 		// not have return envelope verifying check after the call nor
 		// does it check other values of status.
 		const useOnboard = false
-		rv, err := SendOnIntf(ctxWork, ctx, url, intf, 0, nil,
+		rv, err := SendOnIntf(ctxWork, ctx, url, portLL, 0, nil,
 			allowProxy, useOnboard, withNetTracing, dryRun)
 		verifyRV.TracedReqs = append(verifyRV.TracedReqs, rv.TracedReqs...)
 		switch rv.Status {
@@ -369,18 +368,18 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 			verifyRV.RemoteTempFailure = true
 		}
 		if err != nil {
-			log.Errorf("Zedcloud un-reachable via interface %s: %s",
-				intf, err)
+			log.Errorf("Zedcloud un-reachable via port %s: %s",
+				portLL, err)
 			if sendErr, ok := err.(*SendError); ok && len(sendErr.Attempts) > 0 {
 				// Merge errors from all attempts.
 				attempts = append(attempts, sendErr.Attempts...)
 			} else {
 				attempts = append(attempts, SendAttempt{
 					Err:    err,
-					IfName: intf,
+					PortLL: portLL,
 				})
 			}
-			verifyRV.IntfStatusMap.RecordFailure(intf, err.Error())
+			verifyRV.IntfStatusMap.RecordFailure(portLL, err.Error())
 			continue
 		}
 		if dryRun {
@@ -393,7 +392,7 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 			// (or cheaper interface(s) will start working and this interface will be
 			// relegated to dry-run testing only).
 			if !portStatus.IsMgmt || portStatus.Cost > workingMgmtCost {
-				verifyRV.IntfStatusMap.RecordSuccess(intf)
+				verifyRV.IntfStatusMap.RecordSuccess(portLL)
 			}
 			if portStatus.IsMgmt {
 				intfSuccessCount++
@@ -402,8 +401,8 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 		}
 		switch rv.HTTPResp.StatusCode {
 		case http.StatusOK, http.StatusCreated, http.StatusNotModified, http.StatusNoContent:
-			log.Tracef("VerifyAllIntf: Zedcloud reachable via interface %s", intf)
-			verifyRV.IntfStatusMap.RecordSuccess(intf)
+			log.Tracef("VerifyAllIntf: Zedcloud reachable via port %s", portLL)
+			verifyRV.IntfStatusMap.RecordSuccess(portLL)
 			if intfSuccessCount < requiredSuccessCount {
 				workingMgmtCost = portStatus.Cost
 			}
@@ -411,12 +410,12 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 		default:
 			err = fmt.Errorf("controller with URL %s returned status code %d (%s)",
 				url, rv.HTTPResp.StatusCode, http.StatusText(rv.HTTPResp.StatusCode))
-			log.Errorf("Uplink test FAILED via %s: %v", intf, err)
+			log.Errorf("Uplink test FAILED via %s: %v", portLL, err)
 			attempts = append(attempts, SendAttempt{
 				Err:    err,
-				IfName: intf,
+				PortLL: portLL,
 			})
-			verifyRV.IntfStatusMap.RecordFailure(intf, err.Error())
+			verifyRV.IntfStatusMap.RecordFailure(portLL, err.Error())
 			continue
 		}
 	}
@@ -425,7 +424,7 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 		verifyRV.CloudReachable = true
 		return verifyRV, nil
 	}
-	if len(types.GetMgmtPortsAny(*ctx.DeviceNetworkStatus, 0)) == 0 {
+	if len(ctx.DeviceNetworkStatus.GetMgmtPortsAny(0)) == 0 {
 		err := fmt.Errorf("Can not connect to %s: No management interfaces", url)
 		log.Error(err.Error())
 		return verifyRV, err
@@ -470,7 +469,7 @@ func VerifyAllIntf(ctx *ZedCloudContext, url string, requiredSuccessCount uint,
 // Enable dryRun to just perform all pre-send interface checks without actually
 // sending any data.
 func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL string,
-	intf string, reqlen int64, b *bytes.Buffer, allowProxy, useOnboard, withNetTracing,
+	portLL string, reqlen int64, b *bytes.Buffer, allowProxy, useOnboard, withNetTracing,
 	dryRun bool) (SendRetval, error) {
 
 	log := ctx.log
@@ -501,33 +500,37 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 		isGet = true
 	}
 
-	addrCount, err := types.CountLocalAddrAnyNoLinkLocalIf(*ctx.DeviceNetworkStatus, intf)
-	if err != nil {
+	portStatus := ctx.DeviceNetworkStatus.GetPortByLogicallabel(portLL)
+	if portStatus == nil {
+		err := fmt.Errorf("missing port status for port %s", portLL)
+		log.Error(err)
 		return rv, err
 	}
-	log.Tracef("Connecting to %s using intf %s #sources %d reqlen %d\n",
-		reqURL, intf, addrCount, reqlen)
+	addrCount, _ := portStatus.CountAddrsExceptLinkLocal()
+	log.Tracef("Connecting to %s using port %s #sources %d reqlen %d\n",
+		reqURL, portLL, addrCount, reqlen)
 
 	if addrCount == 0 {
-		if ctx.FailureFunc != nil && !dryRun {
-			ctx.FailureFunc(log, intf, reqURL, 0, 0, false)
+		if ctx.FailureFunc != nil && portStatus.IfName != "" && !dryRun {
+			ctx.FailureFunc(log, portStatus.IfName, reqURL, 0, 0, false)
 		}
-		// Determine a specific failure for intf
-		link, err := netlink.LinkByName(intf)
+		// Determine a specific failure for the port link.
+		// TODO Use NetworkMonitor to avoid using netlink directly.
+		link, err := netlink.LinkByName(portStatus.IfName)
 		if err != nil {
-			errStr := fmt.Sprintf("Link not found to connect to %s using intf %s: %s",
-				reqURL, intf, err)
+			errStr := fmt.Sprintf("Link not found to connect to %s using port %s: %s",
+				reqURL, portLL, err)
 			log.Traceln(errStr)
 			return rv, errors.New(errStr)
 		}
 		attrs := link.Attrs()
 		if attrs.OperState != netlink.OperUp {
-			errStr := fmt.Sprintf("Link not up to connect to %s using intf %s: %s",
-				reqURL, intf, attrs.OperState.String())
+			errStr := fmt.Sprintf("Link not up to connect to %s using port %s: %s",
+				reqURL, portLL, attrs.OperState.String())
 			log.Traceln(errStr)
 			return rv, errors.New(errStr)
 		}
-		err = &types.IPAddrNotAvail{IfName: intf}
+		err = &types.IPAddrNotAvail{PortLL: portLL}
 		log.Trace(err)
 		return rv, err
 	}
@@ -546,7 +549,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 	}
 
 	// Get the transport header with proxy information filled
-	proxyURL, err := LookupProxy(ctx.log, ctx.DeviceNetworkStatus, intf, reqURL)
+	proxyURL, err := LookupProxy(ctx.log, *portStatus, reqURL)
 	var usedProxy, usedProxyWithIP bool
 	if err == nil && proxyURL != nil && allowProxy {
 		log.Tracef("sendOnIntf: For input URL %s, proxy found is %s",
@@ -564,13 +567,13 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 	// EVE does not need to perform any domain name resolution.
 	// The resolution of the controller's domain name is performed by the proxy,
 	// not by EVE.
-	dnsServers := types.GetDNSServers(*ctx.DeviceNetworkStatus, intf)
+	dnsServers := ctx.DeviceNetworkStatus.GetDNSServers(portLL)
 	if len(dnsServers) == 0 && !usedProxyWithIP {
-		if ctx.FailureFunc != nil && !dryRun {
-			ctx.FailureFunc(log, intf, reqURL, 0, 0, false)
+		if ctx.FailureFunc != nil && portStatus.IfName != "" && !dryRun {
+			ctx.FailureFunc(log, portStatus.IfName, reqURL, 0, 0, false)
 		}
 		err = &types.DNSNotAvail{
-			IfName: intf,
+			PortLL: portLL,
 		}
 		log.Trace(err)
 		return rv, err
@@ -623,15 +626,14 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 
 	// Try all addresses
 	for retryCount := 0; retryCount < addrCount; retryCount++ {
-		localAddr, err := types.GetLocalAddrAnyNoLinkLocal(*ctx.DeviceNetworkStatus,
-			retryCount, intf)
+		localAddr, err := portStatus.PickAddrExceptLinkLocal(retryCount)
 		if err != nil {
 			log.Error(err)
 			return rv, err
 		}
 		clientConfig.SourceIP = localAddr
 		attempt := SendAttempt{
-			IfName:     intf,
+			PortLL:     portLL,
 			SourceAddr: localAddr,
 		}
 
@@ -737,15 +739,15 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 			} else {
 				reqMethod = "POST"
 			}
-			tracedReqName = fmt.Sprintf("%s-%d", intf, retryCount)
+			tracedReqName = fmt.Sprintf("%s-%d", portLL, retryCount)
 			tracedReqDescr = fmt.Sprintf("%s %s via %s src IP %v",
-				reqMethod, reqURL, intf, localAddr)
+				reqMethod, reqURL, portLL, localAddr)
 		} else {
 			fromDNSCache = true // set to false by resolverDial below
 			localTCPAddr := net.TCPAddr{IP: localAddr}
 			localUDPAddr := net.UDPAddr{IP: localAddr}
 			log.Tracef("Connecting to %s using intf %s source %v\n",
-				reqURL, intf, localTCPAddr)
+				reqURL, portLL, localTCPAddr)
 			resolverDial := func(ctx context.Context, network, address string) (net.Conn, error) {
 				log.Tracef("resolverDial %v %v", network, address)
 				fromDNSCache = false
@@ -805,7 +807,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 				}
 			}
 			if !fromDNSCache && !dnsIsAvail {
-				attempt.Err = &types.DNSNotAvail{IfName: intf}
+				attempt.Err = &types.DNSNotAvail{PortLL: portLL}
 			} else if cf, cert := isCertFailure(err); cf {
 				// XXX can we ever get this from a proxy?
 				// We assume we reached the controller here
@@ -907,8 +909,8 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 				if !ctx.NoLedManager {
 					utils.UpdateLedManagerConfig(log, types.LedBlinkRespWithoutTLS)
 				}
-				if ctx.FailureFunc != nil {
-					ctx.FailureFunc(log, intf, reqURL, reqlen,
+				if ctx.FailureFunc != nil && portStatus.IfName != "" {
+					ctx.FailureFunc(log, portStatus.IfName, reqURL, reqlen,
 						resplen, false)
 				}
 				continue
@@ -933,8 +935,8 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 					if !ctx.NoLedManager {
 						utils.UpdateLedManagerConfig(log, types.LedBlinkRespWithoutOSCP)
 					}
-					if ctx.FailureFunc != nil {
-						ctx.FailureFunc(log, intf, reqURL,
+					if ctx.FailureFunc != nil && portStatus.IfName != "" {
+						ctx.FailureFunc(log, portStatus.IfName, reqURL,
 							reqlen, resplen, false)
 					}
 					attempt.Err = errors.New(errStr)
@@ -948,7 +950,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 		// success since we care about the connectivity to the cloud.
 		totalTimeMillis := int64(time.Since(apiCallStartTime) / time.Millisecond)
 		if ctx.SuccessFunc != nil {
-			ctx.SuccessFunc(log, intf, reqURL, reqlen, resplen, totalTimeMillis, sessionResume)
+			ctx.SuccessFunc(log, portStatus.IfName, reqURL, reqlen, resplen, totalTimeMillis, sessionResume)
 		}
 
 		switch resp.StatusCode {
@@ -984,8 +986,8 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 			return rv, errors.New(errStr)
 		}
 	}
-	if ctx.FailureFunc != nil {
-		ctx.FailureFunc(log, intf, reqURL, 0, 0, false)
+	if ctx.FailureFunc != nil && portStatus.IfName != "" {
+		ctx.FailureFunc(log, portStatus.IfName, reqURL, 0, 0, false)
 	}
 	errStr := fmt.Sprintf("All attempts to connect to %s failed: %v",
 		reqURL, attempts)
@@ -998,7 +1000,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 }
 
 // SendLocal uses local routes to request the data
-func SendLocal(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
+func SendLocal(ctx *ZedCloudContext, destURL string, localIntf string, ipSrc net.IP,
 	reqlen int64, b *bytes.Buffer, reqContentType string) (*http.Response, []byte, error) {
 
 	log := ctx.log
@@ -1103,7 +1105,7 @@ func SendLocal(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
 		errStr := fmt.Sprintf("client.Do (timeout %d) fail: %v", ctx.NetworkSendTimeout, err)
 		log.Errorln(errStr)
 		if ctx.FailureFunc != nil {
-			ctx.FailureFunc(log, intf, reqURL, reqlen, 0, false)
+			ctx.FailureFunc(log, localIntf, reqURL, reqlen, 0, false)
 		}
 		return nil, nil, errors.New(errStr)
 	}
@@ -1113,7 +1115,7 @@ func SendLocal(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
 		resp.Body.Close()
 		resp.Body = nil
 		if ctx.FailureFunc != nil {
-			ctx.FailureFunc(log, intf, reqURL, reqlen, 0, false)
+			ctx.FailureFunc(log, localIntf, reqURL, reqlen, 0, false)
 		}
 		return nil, nil, fmt.Errorf("ReadAll failed: %v", err)
 	}
@@ -1125,13 +1127,13 @@ func SendLocal(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
 	case http.StatusOK, http.StatusCreated, http.StatusNotModified, http.StatusNoContent:
 		totalTimeMillis := int64(time.Since(callStartTime) / time.Millisecond)
 		if ctx.SuccessFunc != nil {
-			ctx.SuccessFunc(log, intf, reqURL, reqlen, resplen, totalTimeMillis, false)
+			ctx.SuccessFunc(log, localIntf, reqURL, reqlen, resplen, totalTimeMillis, false)
 		}
 		log.Tracef("SendLocal to %s, response %s", reqURL, resp.Status)
 		return resp, contents, nil
 	}
 	if ctx.FailureFunc != nil {
-		ctx.FailureFunc(log, intf, reqURL, reqlen, resplen, false)
+		ctx.FailureFunc(log, localIntf, reqURL, reqlen, resplen, false)
 	}
 	return resp, nil, fmt.Errorf("SendLocal to %s reqlen %d statuscode %d %s",
 		reqURL, reqlen, resp.StatusCode,
@@ -1139,7 +1141,7 @@ func SendLocal(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
 }
 
 // SendLocalProto is a variant of SendLocal which sends and receives proto messages.
-func SendLocalProto(ctx *ZedCloudContext, destURL string, intf string, ipSrc net.IP,
+func SendLocalProto(ctx *ZedCloudContext, destURL string, localIntf string, ipSrc net.IP,
 	req proto.Message, resp proto.Message) (*http.Response, error) {
 	var (
 		reqBuf      *bytes.Buffer
@@ -1155,7 +1157,7 @@ func SendLocalProto(ctx *ZedCloudContext, destURL string, intf string, ipSrc net
 		reqLen = int64(len(reqBytes))
 		contentType = ContentTypeProto
 	}
-	httpResp, respBytes, err := SendLocal(ctx, destURL, intf, ipSrc, reqLen, reqBuf, contentType)
+	httpResp, respBytes, err := SendLocal(ctx, destURL, localIntf, ipSrc, reqLen, reqBuf, contentType)
 	if err != nil {
 		return httpResp, err
 	}

@@ -142,7 +142,7 @@ func handleDNSImpl(ctxArg interface{}, key string,
 	log.Functionf("handleDNSImpl: changed %v",
 		cmp.Diff(ctx.deviceNetworkStatus, status))
 	ctx.deviceNetworkStatus = status
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus)
+	newAddrCount := ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	ctx.DNSinitialized = true
 	ctx.usableAddressCount = newAddrCount
 	log.Functionf("handleDNSImpl done for %s\n", key)
@@ -159,7 +159,7 @@ func handleDNSDelete(ctxArg interface{}, key string,
 		return
 	}
 	ctx.deviceNetworkStatus = types.DeviceNetworkStatus{}
-	newAddrCount := types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus)
+	newAddrCount := ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal()
 	ctx.DNSinitialized = false
 	ctx.usableAddressCount = newAddrCount
 	log.Functionf("handleDNSDelete done for %s\n", key)

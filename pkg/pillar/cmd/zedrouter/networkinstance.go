@@ -86,8 +86,8 @@ func (z *zedrouter) getNIUplinkConfig(
 	return nireconciler.Uplink{
 		LogicalLabel: port.Logicallabel,
 		IfName:       ifName,
-		DNSServers:   types.GetDNSServers(*z.deviceNetworkStatus, ifName),
-		NTPServers:   types.GetNTPServers(*z.deviceNetworkStatus, ifName),
+		DNSServers:   z.deviceNetworkStatus.GetDNSServers(port.Logicallabel),
+		NTPServers:   z.deviceNetworkStatus.GetNTPServers(port.Logicallabel),
 	}
 }
 

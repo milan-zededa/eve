@@ -191,21 +191,20 @@ func (m *DpcManager) runVerify(ctx context.Context, reason string) {
 
 func (m *DpcManager) verifyDPC(ctx context.Context) (status types.DPCState) {
 	dpc := m.currentDPC()
-	defer m.updateDNS()
 
-	// Stop pending timer if its running.
+	// Stop pending timer if it is running.
 	if m.pendingDpcTimer.C != nil {
 		m.pendingDpcTimer.Stop()
 	}
 
 	// Check if there is any port assigned to an application.
-	assignedPort, ifName, usedByUUID := dpc.IsAnyPortInPciBack(m.Log, &m.adapters, true)
+	assignedPort, portLL, usedByUUID := dpc.IsAnyPortInPciBack(m.Log, &m.adapters, true)
 	if assignedPort {
 		errStr := fmt.Sprintf("port %s in PCIBack is "+
-			"used by %s", ifName, usedByUUID.String())
+			"used by %s", portLL, usedByUUID.String())
 		m.Log.Errorf("DPC verify: %s\n", errStr)
 		dpc.RecordFailure(errStr)
-		dpc.RecordPortFailure(ifName, errStr)
+		dpc.RecordPortFailure(portLL, errStr)
 		status = types.DPCStateFail
 		dpc.State = status
 		return status
@@ -237,14 +236,12 @@ func (m *DpcManager) verifyDPC(ctx context.Context) (status types.DPCState) {
 	// Note that the TestResults will at least have an updated timestamp
 	// for one of the ports.
 	dpc.UpdatePortStatusFromIntfStatusMap(intfStatusMap)
-	m.deviceNetStatus.UpdatePortStatusFromIntfStatusMap(intfStatusMap)
 	defer func() {
 		// Publish DPCL, DNS and potentially also netdump at the end when dpc.State
 		// is determined.
 		_ = m.PubDummyDevicePortConfig.Publish(dpc.PubKey(), *dpc) // for logging
 		m.publishDPCL()
-		m.deviceNetStatus.State = dpc.State
-		m.publishDNS()
+		m.updateDNS()
 		if withNetTrace {
 			var cloudConnWorks bool
 			switch dpc.State {
@@ -285,19 +282,45 @@ func (m *DpcManager) verifyDPC(ctx context.Context) (status types.DPCState) {
 
 	// Connectivity test failed, maybe we are missing an interface or an address.
 	elapsed = time.Since(m.dpcVerify.startedAt)
-	portInPciBack, ifName, _ := dpc.IsAnyPortInPciBack(m.Log, &m.adapters, false)
+	portInPciBack, portLL, _ := dpc.IsAnyPortInPciBack(m.Log, &m.adapters, false)
 	if portInPciBack {
 		if elapsed < waitForIfRetries*m.dpcTestDuration {
 			m.Log.Noticef("DPC verify: port %s is still in PCIBack (waiting for %v)",
-				ifName, elapsed)
+				portLL, elapsed)
 			status = types.DPCStatePCIWait
 			dpc.State = status
 			return status
 		}
 		// Continue...
+		m.Log.Warnf("DPC verify: port %s is still in PCIBack (waited for %v)",
+			portLL, elapsed)
+	}
+
+	portsWithoutIfNames := dpc.GetPortsWithoutIfName()
+	for _, portLL := range portsWithoutIfNames {
+		errStr := fmt.Sprintf("port %s is missing interface name", portLL)
+		m.Log.Warnf("DPC verify: %s", errStr)
+		dpc.RecordPortFailure(portLL, errStr)
+	}
+	if len(portsWithoutIfNames) > 0 {
+		if elapsed < waitForIfRetries*m.dpcTestDuration {
+			m.Log.Noticef("DPC verify: ports %v are missing interface name "+
+				"(waiting for %v)", portsWithoutIfNames, elapsed)
+			status = types.DPCStateIntfWait
+			dpc.State = status
+			return status
+		}
+		// Continue...
+		m.Log.Warnf("DPC verify: ports %v are missing interface name "+
+			"(waited for %v)", portsWithoutIfNames, elapsed)
 	}
 
 	availablePorts, missingPorts := m.checkMgmtPortsPresence()
+	for _, portLL = range missingPorts {
+		errStr := fmt.Sprintf("missing port %s", portLL)
+		m.Log.Warnf("DPC verify: %s", errStr)
+		dpc.RecordPortFailure(portLL, errStr)
+	}
 	if len(missingPorts) > 0 {
 		// Still waiting for network interface(s) to appear
 		if elapsed < waitForIfRetries*m.dpcTestDuration {
@@ -308,16 +331,11 @@ func (m *DpcManager) verifyDPC(ctx context.Context) (status types.DPCState) {
 			dpc.State = status
 			return status
 		}
+		// Continue...
 		m.Log.Warnf("DPC verify: Mgmt ports %v are missing (waited for %v)",
 			missingPorts, elapsed)
 	} else {
 		m.Log.Functionf("DPC verify: No required ports are missing.")
-	}
-
-	for _, ifName = range missingPorts {
-		errStr := fmt.Sprintf("missing interface %s", ifName)
-		m.Log.Warnf("DPC verify: %s", errStr)
-		dpc.RecordPortFailure(ifName, errStr)
 	}
 
 	if len(availablePorts) == 0 {
@@ -535,32 +553,27 @@ func (m *DpcManager) isInterfaceCrucial(ifName string) bool {
 // Check if at least one management port in the given DeviceNetworkStatus
 // have at least one IP address each and at least one DNS server.
 func (m *DpcManager) checkIfMgmtPortsHaveIPandDNS() bool {
-	mgmtPorts := types.GetMgmtPortsAny(m.deviceNetStatus, 0)
+	mgmtPorts := m.deviceNetStatus.GetMgmtPortsAny(0)
 	if m.reconcileStatus.DNS.Error != nil {
 		m.Log.Warnf("resolv.conf has error: %v", m.reconcileStatus.DNS.Error)
 		return false
 	}
 	for _, port := range mgmtPorts {
-		numAddrs, err := types.CountLocalIPv4AddrAnyNoLinkLocalIf(m.deviceNetStatus, port)
-		if err != nil {
-			m.Log.Errorf("CountLocalIPv4AddrAnyNoLinkLocalIf failed for %s: %v",
-				port, err)
-			continue
-		}
+		numAddrs, _ := port.CountIPv4AddrsExceptLinkLocal()
 		if numAddrs < 1 {
-			m.Log.Tracef("No addresses on %s", port)
+			m.Log.Tracef("No addresses on %s", port.Logicallabel)
 			continue
 		}
-		numDNSServers := types.CountDNSServers(m.deviceNetStatus, port)
+		numDNSServers := len(port.DNSServers)
 		if numDNSServers < 1 {
-			m.Log.Tracef("Have addresses but no DNS on %s", port)
+			m.Log.Tracef("Have addresses but no DNS on %s", port.Logicallabel)
 			continue
 		}
 		// Also confirm that the global resolv.conf contains entries for this port.
-		dnsServers := m.reconcileStatus.DNS.Servers[port]
+		dnsServers := m.reconcileStatus.DNS.Servers[port.Logicallabel]
 		if len(dnsServers) == 0 {
 			m.Log.Tracef("Have addresses but DNS config is not yet installed "+
-				"for %s", port)
+				"for %s", port.Logicallabel)
 			continue
 		}
 		return true
@@ -569,13 +582,16 @@ func (m *DpcManager) checkIfMgmtPortsHaveIPandDNS() bool {
 }
 
 func (m *DpcManager) checkMgmtPortsPresence() (available, missing []string) {
-	mgmtPorts := types.GetMgmtPortsAny(m.deviceNetStatus, 0)
-	for _, ifName := range mgmtPorts {
-		_, exists, _ := m.NetworkMonitor.GetInterfaceIndex(ifName)
+	ports := m.deviceNetStatus.GetMgmtPortsAny(0)
+	for _, port := range ports {
+		if port.IfName == "" {
+			continue
+		}
+		_, exists, _ := m.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if exists {
-			available = append(available, ifName)
+			available = append(available, port.Logicallabel)
 		} else {
-			missing = append(missing, ifName)
+			missing = append(missing, port.Logicallabel)
 		}
 	}
 	return available, missing

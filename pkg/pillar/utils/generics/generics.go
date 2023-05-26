@@ -138,3 +138,12 @@ func FilterDuplicatesFn[Type any](list []Type, equal func(a, b Type) bool) (filt
 	}
 	return
 }
+
+// RotateList rotates the list items by the given amount.
+func RotateList[Type any](arr []Type, amount int) []Type {
+	if len(arr) == 0 {
+		return []Type{}
+	}
+	amount = amount % len(arr)
+	return append(append([]Type{}, arr[amount:]...), arr[:amount]...)
+}

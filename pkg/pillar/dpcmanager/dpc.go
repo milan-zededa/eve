@@ -42,8 +42,8 @@ func (m *DpcManager) doAddDPC(ctx context.Context, dpc types.DevicePortConfig) {
 	// When the current DeviceNetworkStatus does not have any usable IP addresses,
 	// we should go ahead and call RestartVerify even when "configChanged" is false.
 	// Also if we have no working one (index -1) we restart.
-	ipAddrCount := types.CountLocalIPv4AddrAnyNoLinkLocal(m.deviceNetStatus)
-	numDNSServers := types.CountDNSServers(m.deviceNetStatus, "")
+	ipAddrCount := m.deviceNetStatus.CountIPv4AddrsExceptLinkLocal()
+	numDNSServers := m.deviceNetStatus.CountDNSServers("")
 	if !configChanged && ipAddrCount > 0 && numDNSServers > 0 &&
 		m.dpcList.CurrentIndex != -1 {
 		m.Log.Functionf("doAddDPC: Config already current. No changes to process\n")

@@ -130,16 +130,8 @@ func (p *ControllerReachProber) ProbeRemoteReach(ctx context.Context,
 		AgentName:        p.agentName,
 		DevNetworkStatus: dns,
 	})
-	ports := dns.GetPortsByLogicallabel(uplinkLL)
-	if len(ports) == 0 {
-		return probedEps, fmt.Errorf("missing status for uplink interface %s", uplinkLL)
-	}
-	if len(ports) > 1 {
-		return probedEps, fmt.Errorf("multiple uplink interfaces match label %s", uplinkLL)
-	}
-	port := ports[0]
 	rv, err := zedcloud.SendOnIntf(
-		ctx, &zcloudCtx, p.controllerURL.String(), port.IfName,
+		ctx, &zcloudCtx, p.controllerURL.String(), uplinkLL,
 		0, nil, allowProxy, useOnboard, withNetTracing, false)
 	if rv.HTTPResp != nil {
 		// Any HTTP response received is good enough to claim the controller

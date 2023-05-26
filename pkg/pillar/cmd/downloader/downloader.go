@@ -125,7 +125,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	log.Functionf("processed Vault Status")
 	// First wait to have some management ports with addresses
 	// Looking at any management ports since we can do download over all
-	for types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus) == 0 {
+	for ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal() == 0 {
 		log.Functionf("Waiting for management port addresses")
 
 		select {
@@ -146,7 +146,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		ps.StillRunning(agentName, warningTime, errorTime)
 	}
 	log.Functionf("Have %d management ports addresses to use",
-		types.CountLocalAddrAnyNoLinkLocal(ctx.deviceNetworkStatus))
+		ctx.deviceNetworkStatus.CountAddrsExceptLinkLocal())
 
 	ctx.dCtx = downloaderInit(&ctx)
 
