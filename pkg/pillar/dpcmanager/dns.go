@@ -81,11 +81,7 @@ func (m *DpcManager) updateDNS() {
 		if ioBundle != nil && ioBundle.IsPCIBack {
 			err := fmt.Errorf("port %s is in PCIBack", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			if !m.deviceNetStatus.Ports[ix].HasError() {
-				// Prefer errors recorded by DPC verification.
-				// Set error from here only when there is none yet.
-				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
-			}
+			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
 		// Get interface state data from the network stack.
@@ -93,11 +89,7 @@ func (m *DpcManager) updateDNS() {
 		if !exists || err != nil {
 			err = fmt.Errorf("port %s does not exist", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
-			if !m.deviceNetStatus.Ports[ix].HasError() {
-				// Prefer errors recorded by DPC verification.
-				// Set error from here only when there is none yet.
-				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
-			}
+			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
 		ifAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifindex)
