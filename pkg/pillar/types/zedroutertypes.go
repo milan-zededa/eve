@@ -848,6 +848,8 @@ func (config *DevicePortConfig) MostlyEqual(config2 *DevicePortConfig) bool {
 	for i, p1 := range config.Ports {
 		p2 := config2.Ports[i]
 		if p1.IfName != p2.IfName ||
+			p1.PCIAddr != p2.PCIAddr ||
+			p1.USBAddr != p2.USBAddr ||
 			p1.Phylabel != p2.Phylabel ||
 			p1.Logicallabel != p2.Logicallabel ||
 			p1.Alias != p2.Alias ||
@@ -1165,6 +1167,8 @@ type BondArpMonitor struct {
 // Note that if fields are added the MostlyEqual function needs to be updated.
 type NetworkPortConfig struct {
 	IfName       string
+	USBAddr      string
+	PCIAddr      string
 	Phylabel     string // Physical name set by controller/model
 	Logicallabel string // SystemAdapter's name which is logical label in phyio
 	Alias        string // From SystemAdapter's alias

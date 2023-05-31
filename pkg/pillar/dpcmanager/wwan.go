@@ -348,8 +348,10 @@ func (m *DpcManager) doUpdateRadioSilence(ctx context.Context, newRS types.Radio
 	m.updateDNS()
 }
 
-// TODO: perhaps should be called also when Manager performs fallback from one DPC to another
-// (before submitting to Reconciler).
+// Handle cellular modems referenced in the device model by USB or PCI addresses
+// but without interface name included.
+// Use status published by the wwan microservice to learn the name of the interface
+// created by the kernel for the modem data-path.
 func (m *DpcManager) setDiscoveredWwanIfNames(dpc *types.DevicePortConfig) bool {
 	var changed bool
 	for i := range dpc.Ports {

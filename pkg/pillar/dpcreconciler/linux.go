@@ -1277,11 +1277,6 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				continue
 			}
 		}
-		if port.IfName == "" {
-			r.Log.Warnf("getIntendedWwanConfig: missing interface name for port %s, "+
-				"skipping", port.Logicallabel)
-			continue
-		}
 		var accessPoint *types.CellularAccessPoint
 		for _, ap := range port.WirelessCfg.Cellular.AccessPoints {
 			if ap.Activated {
@@ -1313,11 +1308,21 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 				continue
 			}
 		}
+		// Prefer USB and PCI addresses over interface name.
+		// Plus we want to avoid changing /run/wwan/config.json just to put there
+		// discovered interface name (it is the wwan microservice that discovered it anyway
+		// and changing config.json would just trigger many redundant operations inside
+		// of that microservice)
+		var physAddress types.WwanPhysAddrs
+		if port.USBAddr != "" || port.PCIAddr != "" {
+			physAddress.USB = port.USBAddr
+			physAddress.PCI = port.PCIAddr
+		} else {
+			physAddress.Interface = port.IfName
+		}
 		network := types.WwanNetworkConfig{
-			LogicalLabel: port.Logicallabel,
-			PhysAddrs: types.WwanPhysAddrs{
-				Interface: port.IfName,
-			},
+			LogicalLabel:      port.Logicallabel,
+			PhysAddrs:         physAddress,
 			SIMSlot:           accessPoint.SIMSlot,
 			APN:               accessPoint.APN,
 			AuthProtocol:      accessPoint.AuthProtocol,
