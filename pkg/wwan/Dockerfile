@@ -3,7 +3,7 @@ FROM lfedge/eve-alpine:9fb9b9cbf7d90066a70e4704d04a6fe248ff52bb as build
 ENV BUILD_PKGS automake autoconf gettext gettext-dev git pkgconfig \
                libtool libc-dev linux-headers gcc make glib-dev \
                autoconf-archive patch cmake gtk-doc
-ENV PKGS alpine-baselayout musl-utils ppp jq glib
+ENV PKGS alpine-baselayout musl-utils ppp jq glib openssl
 RUN eve-alpine-deploy.sh
 
 ENV LIBUBOX_COMMIT=7da66430de3fc235bfc6ebb0b85fb90ea246138d
