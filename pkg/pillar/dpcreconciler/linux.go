@@ -525,7 +525,7 @@ func (r *LinuxDpcReconciler) Reconcile(ctx context.Context, args Args) Reconcile
 		Error:           rs.Err,
 		AsyncInProgress: rs.AsyncOpsInProgress,
 		ResumeReconcile: r.resumeReconcile,
-		CancelAsyncOps:  rs.CancelAsyncOps,
+		CancelAsyncOps:  func() { rs.CancelAsyncOps(nil) },
 		WaitForAsyncOps: rs.WaitForAsyncOps,
 		FailingItems:    failingItems,
 		RS: RadioSilenceStatus{
