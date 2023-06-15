@@ -18,9 +18,9 @@ import (
 const asyncOpDuration = 3 * time.Second
 
 type mockItemAttrs struct {
-	intAttr   int
-	strAttr   string
-	boolAttr  bool
+	intAttr  int
+	strAttr  string
+	boolAttr bool
 }
 
 type mockItem struct {
@@ -87,7 +87,7 @@ func (m *mockConfigurator) Create(ctx context.Context, item depgraph.Item) (err 
 	}
 	if mItem.asyncCreate {
 		done := reconciler.ContinueInBackground(ctx)
-		go func() {
+		go func(err error) {
 			select {
 			case <-time.After(asyncOpDuration):
 				break
@@ -95,7 +95,7 @@ func (m *mockConfigurator) Create(ctx context.Context, item depgraph.Item) (err 
 				err = errors.New("failed to complete")
 			}
 			done(err)
-		}()
+		}(err)
 		return nil
 	}
 	return err
@@ -127,7 +127,7 @@ func (m *mockConfigurator) Modify(ctx context.Context, oldItem, newItem depgraph
 	}
 	if mNewItem.asyncCreate {
 		done := reconciler.ContinueInBackground(ctx)
-		go func() {
+		go func(err error) {
 			select {
 			case <-time.After(asyncOpDuration):
 				break
@@ -135,7 +135,7 @@ func (m *mockConfigurator) Modify(ctx context.Context, oldItem, newItem depgraph
 				err = errors.New("failed to complete")
 			}
 			done(err)
-		}()
+		}(err)
 		return nil
 	}
 	return err
@@ -157,7 +157,7 @@ func (m *mockConfigurator) Delete(ctx context.Context, item depgraph.Item) (err 
 	}
 	if mItem.asyncDelete {
 		done := reconciler.ContinueInBackground(ctx)
-		go func() {
+		go func(err error) {
 			select {
 			case <-time.After(asyncOpDuration):
 				break
@@ -165,7 +165,7 @@ func (m *mockConfigurator) Delete(ctx context.Context, item depgraph.Item) (err 
 				err = errors.New("failed to complete")
 			}
 			done(err)
-		}()
+		}(err)
 		return nil
 	}
 	return err
