@@ -798,7 +798,7 @@ func (z *zedrouter) processNIReconcileStatus(recStatus nireconciler.NIReconcileS
 		niStatus.BridgeName = recStatus.BrIfName
 		changed = true
 	}
-	if !recStatus.AsyncInProgress {
+	if !recStatus.InProgress {
 		if niStatus.ChangeInProgress != types.ChangeInProgressTypeNone {
 			niStatus.ChangeInProgress = types.ChangeInProgressTypeNone
 			changed = true
@@ -835,10 +835,10 @@ func (z *zedrouter) processAppConnReconcileStatus(
 		}
 		return false
 	}
-	var asyncInProgress bool
+	var inProgress bool
 	var failedItems []string
 	for _, vif := range recStatus.VIFs {
-		asyncInProgress = asyncInProgress || vif.AsyncInProgress
+		inProgress = inProgress || vif.InProgress
 		for itemRef, itemErr := range vif.FailedItems {
 			failedItems = append(failedItems, fmt.Sprintf("%v (%v)", itemRef, itemErr))
 		}
@@ -853,7 +853,7 @@ func (z *zedrouter) processAppConnReconcileStatus(
 			}
 		}
 	}
-	if !asyncInProgress {
+	if !inProgress {
 		if appNetStatus.Pending() {
 			changed = true
 		}
