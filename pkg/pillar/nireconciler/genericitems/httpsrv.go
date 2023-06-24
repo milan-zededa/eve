@@ -84,27 +84,23 @@ func (s HTTPServer) String() string {
 		"listenIf: %s, port: %d}", s.ForNI.String(), s.ListenIP, s.ListenIf.IfName, s.Port)
 }
 
-// Dependencies returns the interface on which the HTTP server listens
-// as the only dependency. It is assumed that if the interface is created,
-// it has ListenIP assigned.
+// Dependencies returns the interface and the IP address on which the HTTP
+// server is supposed to listen.
 func (s HTTPServer) Dependencies() (deps []dg.Dependency) {
 	deps = append(deps, dg.Dependency{
-		RequiredItem: s.ListenIf.ItemRef,
+		RequiredItem: dg.ItemRef{
+			ItemType: IPAddressTypename,
+			ItemName: s.ListenIP.String(),
+		},
 		Description: "interface on which the HTTP server listens must exist " +
 			"and have ListenIP assigned",
 		MustSatisfy: func(item dg.Item) bool {
-			netIfWithIP, isNetIfWithIP := item.(NetworkIfWithIP)
-			if !isNetIfWithIP {
+			ipAddress, isIPAddress := item.(IPAddress)
+			if !isIPAddress {
 				// Should be unreachable.
 				return false
 			}
-			ips := netIfWithIP.GetAssignedIPs()
-			for _, ip := range ips {
-				if s.ListenIP.Equal(ip.IP) {
-					return true
-				}
-			}
-			return false
+			return ipAddress.NetIf == s.ListenIf
 		},
 	})
 	return deps

@@ -20,6 +20,7 @@ func RegisterItems(log *base.LogObject, registry *reconciler.DefaultRegistry,
 	configurators := []configurator{
 		{c: &BridgeConfigurator{Log: log}, t: BridgeTypename},
 		{c: &DummyIfConfigurator{Log: log}, t: DummyIfTypename},
+		{c: &IPAddressConfigurator{Log: log}, t: generic.IPAddressTypename},
 		{c: &IPRuleConfigurator{Log: log}, t: IPRuleTypename},
 		{c: &IPSetConfigurator{Log: log}, t: generic.IPSetTypename},
 		{c: &RouteConfigurator{Log: log, NetworkMonitor: monitor}, t: generic.IPv4RouteTypename},

@@ -28,4 +28,7 @@ const (
 	// Type definition is here because it is referenced by dnsmasq
 	// (when used with Linux ipsets).
 	IPSetTypename = "IPSet"
+	// IPAddressTypename : typename for IP address.
+	// Not implemented in genericitems (implementation specific to network stack).
+	IPAddressTypename = "IPAddress"
 )

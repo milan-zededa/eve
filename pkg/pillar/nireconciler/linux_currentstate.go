@@ -148,6 +148,7 @@ func (r *LinuxNIReconciler) updateCurrentGlobalState(uplinksOnly bool) (changed 
 
 func (r *LinuxNIReconciler) updateCurrentNIState(niID uuid.UUID) (changed bool) {
 	changed = r.updateCurrentNIBridge(niID)
+	changed = r.updateCurrentNIBridgeIP(niID) || changed
 	changed = r.updateCurrentNIRoutes(niID) || changed
 	changed = r.updateCurrentVIFs(niID) || changed
 	return changed
@@ -176,12 +177,10 @@ func (r *LinuxNIReconciler) updateCurrentNIBridge(niID uuid.UUID) (changed bool)
 			break
 		}
 	}
-	// Only non-air-gapped switch network instances use bridges created
-	// outside zedrouter.
-	if ni.config.Type != types.NetworkInstanceTypeSwitch || ni.bridge.Uplink.IfName == "" {
+	if !r.niBridgeIsCreatedByNIM(ni) {
 		return r.updateSingleItem(prevExtBridge, nil, l2SG)
 	}
-	ip, _, mac, found, err := r.getBridgeAddrs(niID)
+	_, _, mac, found, err := r.getBridgeAddrs(niID)
 	if err != nil {
 		r.log.Errorf("%s: updateCurrentNIBridge: getBridgeAddrs(%s) failed: %v",
 			LogAndErrPrefix, niID, err)
@@ -195,10 +194,52 @@ func (r *LinuxNIReconciler) updateCurrentNIBridge(niID uuid.UUID) (changed bool)
 		CreatedByNIM: true,
 		MACAddress:   mac,
 	}
-	if ip != nil {
-		bridge.IPAddresses = append(bridge.IPAddresses, ip)
-	}
 	return r.updateSingleItem(prevExtBridge, bridge, l2SG)
+}
+
+// Update the current state of externally assigned (by NIM) bridge IP address
+// used by the given NI.
+func (r *LinuxNIReconciler) updateCurrentNIBridgeIP(niID uuid.UUID) (changed bool) {
+	ni := r.nis[niID]
+	niSG := r.getOrAddNISubgraph(niID)
+	var l3SG dg.Graph
+	if readHandle := niSG.SubGraph(L3SG); readHandle != nil {
+		l3SG = niSG.EditSubGraph(readHandle)
+	} else {
+		l3SG = dg.New(dg.InitArgs{Name: L3SG})
+		niSG.PutSubGraph(l3SG)
+	}
+	var prevBridgeIP dg.Item
+	iter := l3SG.Items(false)
+	for iter.Next() {
+		item, _ := iter.Item()
+		if item.Type() == generic.IPAddressTypename && item.External() {
+			prevBridgeIP = item
+			// There should be only one bridge IP...
+			break
+		}
+	}
+	if !r.niBridgeIsCreatedByNIM(ni) {
+		return r.updateSingleItem(prevBridgeIP, nil, l3SG)
+	}
+	ip, _, _, found, err := r.getBridgeAddrs(niID)
+	if err != nil {
+		r.log.Errorf("%s: updateCurrentNIBridgeIP: getBridgeAddrs(%s) failed: %v",
+			LogAndErrPrefix, niID, err)
+		return r.updateSingleItem(prevBridgeIP, nil, l3SG)
+	}
+	if !found || ip == nil {
+		return r.updateSingleItem(prevBridgeIP, nil, l3SG)
+	}
+	bridgeIP := generic.IPAddress{
+		AddrWithMask: ip,
+		NetIf: generic.NetworkIf{
+			IfName:  ni.brIfName,
+			ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
+		},
+		AssignedByNIM: true,
+	}
+	return r.updateSingleItem(prevBridgeIP, bridgeIP, l3SG)
 }
 
 // Update the set of routes inside the depgraph for the current state of the given NI
@@ -451,4 +492,16 @@ func (r *LinuxNIReconciler) updateSingleItem(
 		changed = true
 	}
 	return changed
+}
+
+func (r *LinuxNIReconciler) getOrAddNISubgraph(niID uuid.UUID) dg.Graph {
+	sgName := NIToSGName(niID)
+	var niSG dg.Graph
+	if readHandle := r.currentState.SubGraph(sgName); readHandle != nil {
+		niSG = r.currentState.EditSubGraph(readHandle)
+	} else {
+		niSG = dg.New(dg.InitArgs{Name: sgName})
+		r.currentState.PutSubGraph(niSG)
+	}
+	return niSG
 }

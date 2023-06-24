@@ -12,7 +12,6 @@ import (
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
-	"github.com/lf-edge/eve/pkg/pillar/utils"
 	"github.com/vishvananda/netlink"
 )
 
@@ -25,9 +24,6 @@ type Bridge struct {
 	CreatedByNIM bool
 	// MACAddress : MAC address allocated for (or already assigned by NIM to) the bridge.
 	MACAddress net.HardwareAddr
-	// IPAddresses : a set of IP addresses allocated for the bridge itself (L3 NI),
-	// or already assigned by the DHCP client (NIM-created bridge, L2 NI).
-	IPAddresses []*net.IPNet
 }
 
 // Name returns the physical interface name.
@@ -53,8 +49,7 @@ func (b Bridge) Equal(other dg.Item) bool {
 	}
 	return b.IfName == b2.IfName &&
 		b.CreatedByNIM == b2.CreatedByNIM &&
-		bytes.Equal(b.MACAddress, b2.MACAddress) &&
-		utils.EqualSetsFn(b.IPAddresses, b2.IPAddresses, utils.EqualIPNets)
+		bytes.Equal(b.MACAddress, b2.MACAddress)
 }
 
 // External returns true if it was created by NIM and not be zedrouter.
@@ -65,20 +60,12 @@ func (b Bridge) External() bool {
 // String describes Bridge.
 func (b Bridge) String() string {
 	return fmt.Sprintf("Bridge: {ifName: %s, createdByNIM: %t, "+
-		"macAddress: %s, ipAddresses: %v}", b.IfName, b.CreatedByNIM,
-		b.MACAddress, b.IPAddresses)
+		"macAddress: %s}", b.IfName, b.CreatedByNIM, b.MACAddress)
 }
 
 // Dependencies returns no dependencies.
 func (b Bridge) Dependencies() (deps []dg.Dependency) {
 	return nil
-}
-
-// GetAssignedIPs returns IP addresses assigned to the bridge interface.
-// The function is needed for the definition of dependencies for
-// dnsmasq and HTTP server.
-func (b Bridge) GetAssignedIPs() []*net.IPNet {
-	return b.IPAddresses
 }
 
 // BridgeConfigurator implements Configurator interface (libs/reconciler) for Linux bridge.
@@ -117,20 +104,6 @@ func (c *BridgeConfigurator) Create(ctx context.Context, item dg.Item) error {
 			"output from sysctl with args %v: %s", bridge.IfName, args, out)
 		c.Log.Error(err)
 		return err
-	}
-	// Assign IP addresses.
-	link, err := netlink.LinkByName(bridge.IfName)
-	if err != nil {
-		err = fmt.Errorf("failed to get link for bridge %s: %w", bridge.IfName, err)
-		c.Log.Error(err)
-		return err
-	}
-	for _, ipAddr := range bridge.IPAddresses {
-		addr := &netlink.Addr{IPNet: ipAddr}
-		if err := netlink.AddrAdd(link, addr); err != nil {
-			return fmt.Errorf("failed to add IP address %v to bridge %s: %w",
-				ipAddr, bridge.IfName, err)
-		}
 	}
 	return nil
 }

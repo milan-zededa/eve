@@ -107,10 +107,10 @@ import (
 //  |   |   |   +-----------+       |   (in, out, local)  |      |   |   |
 //  |   |   |                       +---------------------+      |   |   |
 //  |   |   |                                                    |   |   |
-//  |   |   |            +--------------------------+            |   |   |
-//  |   |   |            |       IptablesRule       |            |   |   |
-//  |   |   |            |  (MASQUERADE for L3 NI)  |            |   |   |
-//  |   |   |            +--------------------------+            |   |   |
+//  |   |   |   +--------------+   +--------------------------+  |   |   |
+//  |   |   |   |  IPAddress   |   |       IptablesRule       |  |   |   |
+//  |   |   |   | (for bridge) |   |  (MASQUERADE for L3 NI)  |  |   |   |
+//  |   |   |   +--------------+   +--------------------------+  |   |   |
 //  |   |   +----------------------------------------------------+   |   |
 //  |   |                                                            |   |
 //  |   |   +----------------------------------------------------+   |   |
@@ -476,16 +476,11 @@ func (r *LinuxNIReconciler) getIntendedNIL2Cfg(niID uuid.UUID) dg.Graph {
 		Description: "Layer 2 configuration for network instance",
 	}
 	intendedL2Cfg := dg.New(graphArgs)
-	var bridgeIPs []*net.IPNet
-	bridgeIP, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
-	if bridgeIP != nil {
-		bridgeIPs = append(bridgeIPs, bridgeIP)
-	}
+	_, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
 	intendedL2Cfg.PutItem(linux.Bridge{
 		IfName:       ni.brIfName,
-		CreatedByNIM: false,
+		CreatedByNIM: r.niBridgeIsCreatedByNIM(ni),
 		MACAddress:   bridgeMAC,
-		IPAddresses:  bridgeIPs,
 	}, nil)
 	// For Switch NI also add the intended VLAN configuration.
 	// Here we put VLAN config only for the bridge itself and the uplink interface,
@@ -554,8 +549,19 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		Description: "Layer 3 configuration for network instance",
 	}
 	intendedL3Cfg := dg.New(graphArgs)
+	bridgeIP, _, _, _, _ := r.getBridgeAddrs(niID)
+	if bridgeIP != nil {
+		intendedL3Cfg.PutItem(generic.IPAddress{
+			AddrWithMask: bridgeIP,
+			NetIf: generic.NetworkIf{
+				IfName:  ni.brIfName,
+				ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
+			},
+			AssignedByNIM: r.niBridgeIsCreatedByNIM(ni),
+		}, nil)
+	}
 	if ni.config.Type == types.NetworkInstanceTypeSwitch {
-		// No L3 config for switch network instance.
+		// No more L3 config for switch network instance.
 		return intendedL3Cfg
 	}
 	if ni.config.Subnet.IP == nil {
@@ -720,8 +726,7 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 				"of the NI %v", metadataSrvIP, bridgeIP.IP, ni.config.DisplayName),
 		})
 	}
-	uplink := ni.bridge.Uplink.IfName
-	if ni.config.Type == types.NetworkInstanceTypeSwitch && uplink != "" {
+	if r.niBridgeIsCreatedByNIM(ni) {
 		items = append(items, iptables.Rule{
 			RuleLabel: fmt.Sprintf("Block access to metadata server from outside "+
 				"for L2 NI %s", ni.config.UUID),
@@ -999,6 +1004,11 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 	intendedAppConnCfg.PutItem(ipv6Eids, nil)
 	intendedAppConnCfg.PutSubGraph(r.getIntendedAppConnACLs(niID, vif, ul))
 	return intendedAppConnCfg
+}
+
+func (r *LinuxNIReconciler) niBridgeIsCreatedByNIM(ni *niInfo) bool {
+	return ni.config.Type == types.NetworkInstanceTypeSwitch &&
+		ni.bridge.Uplink.IfName != ""
 }
 
 // HostIPSetBasename returns basename (without the "ipvX." prefix) to use for ipset

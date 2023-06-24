@@ -186,14 +186,6 @@ type NetworkIf struct {
 	ItemRef dg.ItemRef
 }
 
-// NetworkIfWithIP should be implemented by the item representing network interface
-// on which dnsmasq is supposed to listen.
-type NetworkIfWithIP interface {
-	// GetAssignedIPs : return IP addresses with subnets currently assigned to the network
-	// interface.
-	GetAssignedIPs() []*net.IPNet
-}
-
 // Name returns the interface name on which Dnsmasq listens.
 // This ensures that there cannot be two different Dnsmasq instances
 // that would attempt to listen on the same interface at the same time.
@@ -236,25 +228,30 @@ func (d Dnsmasq) String() string {
 //   - the (uplink) interface used by dnsmasq to contact upstream DNS servers (if any)
 //   - every referenced ipset
 func (d Dnsmasq) Dependencies() (deps []dg.Dependency) {
-	deps = append(deps, dg.Dependency{
-		RequiredItem: d.ListenIf.ItemRef,
-		Description: "interface on which dnsmasq listens must exist " +
-			"and have ListenIP assigned",
-		MustSatisfy: func(item dg.Item) bool {
-			netIfWithIP, isNetIfWithIP := item.(NetworkIfWithIP)
-			if !isNetIfWithIP {
-				// Should be unreachable.
-				return false
-			}
-			ips := netIfWithIP.GetAssignedIPs()
-			for _, ip := range ips {
-				if d.DNSServer.ListenIP.Equal(ip.IP) {
-					return true
+	if d.DNSServer.ListenIP != nil {
+		deps = append(deps, dg.Dependency{
+			RequiredItem: dg.ItemRef{
+				ItemType: IPAddressTypename,
+				ItemName: d.DNSServer.ListenIP.String(),
+			},
+			Description: "interface on which dnsmasq listens must exist " +
+				"and have ListenIP assigned",
+			MustSatisfy: func(item dg.Item) bool {
+				ipAddress, isIPAddress := item.(IPAddress)
+				if !isIPAddress {
+					// Should be unreachable.
+					return false
 				}
-			}
-			return false
-		},
-	})
+				return ipAddress.NetIf == d.ListenIf
+			},
+		})
+	} else {
+		// Dnsmasq used only as DHCP server, not for DNS.
+		deps = append(deps, dg.Dependency{
+			RequiredItem: d.ListenIf.ItemRef,
+			Description:  "interface on which dnsmasq listens must exist",
+		})
+	}
 	if d.DNSServer.UplinkIf.IfName != "" {
 		deps = append(deps, dg.Dependency{
 			RequiredItem: d.DNSServer.UplinkIf.ItemRef,
