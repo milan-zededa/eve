@@ -27,7 +27,7 @@ type IPAddress struct {
 // Name returns the IP address in the string format.
 // Mask is intentionally excluded because two instances of the same IP address
 // cannot be assigned at the same time (in the same network namespace) even if masks
-// or target interfaces are different (hence we would treat them as the same item
+// or target interfaces are different (hence we should treat them as the same item
 // that can only exist in one instance).
 func (ip IPAddress) Name() string {
 	return ip.AddrWithMask.IP.String()
