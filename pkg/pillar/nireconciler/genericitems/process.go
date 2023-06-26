@@ -31,15 +31,16 @@ func startProcess(ctx context.Context, log *base.LogObject, cmd string, args []s
 		if err != nil {
 			outStr := strings.TrimSpace(string(out))
 			outStr = strings.ReplaceAll(outStr, "\n", "; ")
-			err = fmt.Errorf("failed to start command %s (args: %v): %w, output: %s",
-				cmd, args, err, outStr)
+			err = fmt.Errorf("failed to start command %s (args: %v; pid: %s): %w, output: %s",
+				cmd, args, getPidOfExitedCmd(execCmd), err, outStr)
 			log.Error(err)
 			return err
 		}
 	} else {
 		err := execCmd.Start()
 		if err != nil {
-			err = fmt.Errorf("failed to start command %s (args: %v): %w", cmd, args, err)
+			err = fmt.Errorf("failed to start command %s (args: %v; pid: %s): %w",
+				cmd, args, getPidOfExitedCmd(execCmd), err)
 			log.Error(err)
 			return err
 		}
@@ -60,11 +61,22 @@ func startProcess(ctx context.Context, log *base.LogObject, cmd string, args []s
 		}
 		time.Sleep(1 * time.Second)
 	}
+	pid, _ := getProcessPid(log, pidFile)
+	log.Noticef("Started process %s %v with PID %d", cmd, args, pid)
 	return nil
+}
+
+func getPidOfExitedCmd(cmd *exec.Cmd) string {
+	pid := "?"
+	if cmd.ProcessState != nil && cmd.ProcessState.Pid() != 0 {
+		pid = fmt.Sprintf("%d", cmd.ProcessState.Pid())
+	}
+	return pid
 }
 
 func stopProcess(ctx context.Context, log *base.LogObject,
 	pidFile string, timeout time.Duration) error {
+	pid, _ := getProcessPid(log, pidFile)
 	stopTime := time.Now()
 	if err := sendSignalToProcess(log, pidFile, syscall.SIGTERM); err != nil {
 		return err
@@ -85,6 +97,7 @@ func stopProcess(ctx context.Context, log *base.LogObject,
 		}
 		time.Sleep(1 * time.Second)
 	}
+	log.Noticef("Stopped process with PID %d", pid)
 	return nil
 }
 
@@ -121,16 +134,9 @@ func isProcessRunning(log *base.LogObject, pidFile string) bool {
 }
 
 func getProcess(log *base.LogObject, pidFile string) (process *os.Process) {
-	pidBytes, err := os.ReadFile(pidFile)
+	pid, err := getProcessPid(log, pidFile)
 	if err != nil {
 		// Not running, return nil.
-		return nil
-	}
-	pidStr := strings.TrimSpace(string(pidBytes))
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil {
-		log.Errorf("getProcess(%s): strconv.Atoi of %s failed: %v",
-			pidFile, pidStr, err)
 		return nil
 	}
 	p, err := os.FindProcess(pid)
@@ -140,6 +146,21 @@ func getProcess(log *base.LogObject, pidFile string) (process *os.Process) {
 		return nil
 	}
 	return p
+}
+
+func getProcessPid(log *base.LogObject, pidFile string) (int, error) {
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, err
+	}
+	pidStr := strings.TrimSpace(string(pidBytes))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		log.Errorf("getProcessPid(%s): strconv.Atoi of %s failed: %v",
+			pidFile, pidStr, err)
+		return 0, err
+	}
+	return pid, nil
 }
 
 func ensureDir(log *base.LogObject, dirname string) error {
