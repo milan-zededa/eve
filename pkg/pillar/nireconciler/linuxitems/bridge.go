@@ -12,6 +12,7 @@ import (
 
 	dg "github.com/lf-edge/eve/libs/depgraph"
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/utils"
 	"github.com/vishvananda/netlink"
 )
 
@@ -24,6 +25,19 @@ type Bridge struct {
 	CreatedByNIM bool
 	// MACAddress : MAC address allocated for (or already assigned by NIM to) the bridge.
 	MACAddress net.HardwareAddr
+	// ExclusiveIPs : IP addresses that should be exclusively assigned to the bridge.
+	// This is just a silly hack to avoid an issue in dnsmasq - the "listen-address"
+	// attribute that we put into the config is effectively ignored. DNS server will
+	// listen on all IPs assigned to the bridge interface anyway. The problem is that
+	// as Reconciler moves from one intended state to another with changed NI subnet,
+	// a temporary intermediate state may be reached where bridge has both the old
+	// and the new IPs assigned and dnsmasq will start and continue listening on all IPs
+	// even after the old IPs are removed - this makes DNS port on old IPs occupied
+	// and prevent other NIs to use them.
+	// This hack prevents intermediate reconciliation states with bridges having old
+	// and new IPs assigned at the same time (old IPs are forced to be removed before
+	// new ones are added).
+	ExclusiveIPs []*net.IPNet
 }
 
 // Name returns the physical interface name.
@@ -49,7 +63,8 @@ func (b Bridge) Equal(other dg.Item) bool {
 	}
 	return b.IfName == b2.IfName &&
 		b.CreatedByNIM == b2.CreatedByNIM &&
-		bytes.Equal(b.MACAddress, b2.MACAddress)
+		bytes.Equal(b.MACAddress, b2.MACAddress) &&
+		utils.EqualSetsFn(b.ExclusiveIPs, b2.ExclusiveIPs, utils.EqualIPNets)
 }
 
 // External returns true if it was created by NIM and not be zedrouter.
@@ -60,12 +75,19 @@ func (b Bridge) External() bool {
 // String describes Bridge.
 func (b Bridge) String() string {
 	return fmt.Sprintf("Bridge: {ifName: %s, createdByNIM: %t, "+
-		"macAddress: %s}", b.IfName, b.CreatedByNIM, b.MACAddress)
+		"macAddress: %s, exclusive-ips: %v}", b.IfName, b.CreatedByNIM, b.MACAddress,
+		b.ExclusiveIPs)
 }
 
 // Dependencies returns no dependencies.
 func (b Bridge) Dependencies() (deps []dg.Dependency) {
 	return nil
+}
+
+// GetExclusiveIPs returns IP addresses that should be exclusively assigned
+// to the bridge (no other IP allowed even in intermediate reconciliation state).
+func (b Bridge) GetExclusiveIPs() (ips []*net.IPNet) {
+	return b.ExclusiveIPs
 }
 
 // BridgeConfigurator implements Configurator interface (libs/reconciler) for Linux bridge.

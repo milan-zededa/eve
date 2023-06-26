@@ -476,11 +476,16 @@ func (r *LinuxNIReconciler) getIntendedNIL2Cfg(niID uuid.UUID) dg.Graph {
 		Description: "Layer 2 configuration for network instance",
 	}
 	intendedL2Cfg := dg.New(graphArgs)
-	_, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
+	var bridgeIPs []*net.IPNet
+	bridgeIP, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
+	if bridgeIP != nil {
+		bridgeIPs = append(bridgeIPs, bridgeIP)
+	}
 	intendedL2Cfg.PutItem(linux.Bridge{
 		IfName:       ni.brIfName,
 		CreatedByNIM: r.niBridgeIsCreatedByNIM(ni),
 		MACAddress:   bridgeMAC,
+		ExclusiveIPs: bridgeIPs,
 	}, nil)
 	// For Switch NI also add the intended VLAN configuration.
 	// Here we put VLAN config only for the bridge itself and the uplink interface,

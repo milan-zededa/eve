@@ -180,11 +180,15 @@ func (r *LinuxNIReconciler) updateCurrentNIBridge(niID uuid.UUID) (changed bool)
 	if !r.niBridgeIsCreatedByNIM(ni) {
 		return r.updateSingleItem(prevExtBridge, nil, l2SG)
 	}
-	_, _, mac, found, err := r.getBridgeAddrs(niID)
+	var bridgeIPs []*net.IPNet
+	bridgeIP, _, mac, found, err := r.getBridgeAddrs(niID)
 	if err != nil {
 		r.log.Errorf("%s: updateCurrentNIBridge: getBridgeAddrs(%s) failed: %v",
 			LogAndErrPrefix, niID, err)
 		return r.updateSingleItem(prevExtBridge, nil, l2SG)
+	}
+	if bridgeIP != nil {
+		bridgeIPs = append(bridgeIPs, bridgeIP)
 	}
 	if !found {
 		return r.updateSingleItem(prevExtBridge, nil, l2SG)
@@ -193,6 +197,7 @@ func (r *LinuxNIReconciler) updateCurrentNIBridge(niID uuid.UUID) (changed bool)
 		IfName:       ni.brIfName,
 		CreatedByNIM: true,
 		MACAddress:   mac,
+		ExclusiveIPs: bridgeIPs,
 	}
 	return r.updateSingleItem(prevExtBridge, bridge, l2SG)
 }

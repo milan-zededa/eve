@@ -24,6 +24,13 @@ type IPAddress struct {
 	AssignedByNIM bool
 }
 
+// NetIfWithExclusiveIPs may be implemented by item representing network interface
+// to enforce exclusive assignment of IP addresses (old IPs must be unassigned
+// before new ones can be assigned).
+type NetIfWithExclusiveIPs interface {
+	GetExclusiveIPs() []*net.IPNet
+}
+
 // Name returns the IP address in the string format.
 // Mask is intentionally excluded because two instances of the same IP address
 // cannot be assigned at the same time (in the same network namespace) even if masks
@@ -69,6 +76,15 @@ func (ip IPAddress) Dependencies() (deps []dg.Dependency) {
 	deps = append(deps, dg.Dependency{
 		RequiredItem: ip.NetIf.ItemRef,
 		Description:  "target network interface must exist",
+		MustSatisfy: func(item dg.Item) bool {
+			// Trick to force obsolete IPs to be unassigned before new ones are assigned.
+			netIf, withExclusiveIPs := item.(NetIfWithExclusiveIPs)
+			if withExclusiveIPs {
+				return utils.ContainsItemFn(netIf.GetExclusiveIPs(),
+					ip.AddrWithMask, utils.EqualIPNets)
+			}
+			return true
+		},
 	})
 	return deps
 }
