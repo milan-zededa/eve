@@ -183,8 +183,7 @@ func (t *ZedcloudConnectivityTester) netTraceOpts(
 		&nettrace.WithSockTrace{},
 		&nettrace.WithDNSQueryTrace{},
 		&nettrace.WithHTTPReqTrace{
-			// Hide secrets stored inside values of header fields.
-			HeaderFields: nettrace.HdrFieldsOptValueLenOnly,
+			HeaderFields: nettrace.HdrFieldsOptWithValues,
 		},
 		&nettrace.WithPacketCapture{
 			Interfaces:  types.GetMgmtPortsAny(dns, 0),

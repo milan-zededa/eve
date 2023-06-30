@@ -331,8 +331,7 @@ func initZedcloudContext(networkSendTimeout, networkDialTimeout uint32,
 			&nettrace.WithSockTrace{},
 			&nettrace.WithDNSQueryTrace{},
 			&nettrace.WithHTTPReqTrace{
-				// Hide secrets stored inside values of header fields.
-				HeaderFields: nettrace.HdrFieldsOptValueLenOnly,
+				HeaderFields: nettrace.HdrFieldsOptWithValues,
 			},
 		},
 	})

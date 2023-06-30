@@ -210,9 +210,7 @@ func handleSyncOp(ctx *downloaderContext, key string,
 			&nettrace.WithConntrack{},
 			&nettrace.WithDNSQueryTrace{},
 			&nettrace.WithHTTPReqTrace{
-				// Do not disclose sensitive data stored inside headers,
-				// record only their length.
-				HeaderFields: nettrace.HdrFieldsOptValueLenOnly,
+				HeaderFields: nettrace.HdrFieldsOptWithValues,
 			},
 		}
 		if ctx.netdumpWithPCAP {
