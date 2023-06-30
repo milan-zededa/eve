@@ -67,10 +67,19 @@ func (m *DpcManager) updateDNS() {
 		m.deviceNetStatus.Ports[ix].DNSServers = port.DnsServers
 		m.deviceNetStatus.Ports[ix].NtpServer = port.NtpServer
 		m.deviceNetStatus.Ports[ix].TestResults = port.TestResults
+		m.deviceNetStatus.Ports[ix].WirelessStatus.WType = port.WirelessCfg.WType
+		// If this is a cellular network connectivity, add status information
+		// obtained from the wwan service.
+		if port.WirelessCfg.WType == types.WirelessTypeCellular {
+			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
+			if found {
+				m.deviceNetStatus.Ports[ix].WirelessStatus.Cellular = wwanNetStatus
+			}
+		}
 		// Do not try to get state data for interface which is in PCIback.
 		ioBundle := m.adapters.LookupIoBundleIfName(port.IfName)
 		if ioBundle != nil && ioBundle.IsPCIBack {
-			err := fmt.Errorf("port %s is in PCIBack - ignored", port.IfName)
+			err := fmt.Errorf("port %s is in PCIBack", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
 			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
@@ -78,21 +87,20 @@ func (m *DpcManager) updateDNS() {
 		// Get interface state data from the network stack.
 		ifindex, exists, err := m.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if !exists || err != nil {
-			err = fmt.Errorf("port %s does not exist - ignored", port.IfName)
+			err = fmt.Errorf("port %s does not exist", port.IfName)
 			m.Log.Warnf("updateDNS: %v", err)
 			m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			continue
 		}
-		var isUp bool
 		ifAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifindex)
 		if err != nil {
 			m.Log.Warnf(
 				"updateDNS: failed to get attrs for interface %s with index %d: %v",
 				port.IfName, ifindex, err)
 		} else {
-			isUp = ifAttrs.AdminUp
+			m.deviceNetStatus.Ports[ix].Up = ifAttrs.AdminUp
+			m.deviceNetStatus.Ports[ix].MTU = ifAttrs.MTU
 		}
-		m.deviceNetStatus.Ports[ix].Up = isUp
 		ipAddrs, macAddr, err := m.NetworkMonitor.GetInterfaceAddrs(ifindex)
 		if err != nil {
 			m.Log.Warnf(
@@ -100,7 +108,7 @@ func (m *DpcManager) updateDNS() {
 				port.IfName, ifindex, err)
 			ipAddrs = nil
 		}
-		m.deviceNetStatus.Ports[ix].MacAddr = macAddr.String()
+		m.deviceNetStatus.Ports[ix].MacAddr = macAddr
 		m.deviceNetStatus.Ports[ix].AddrInfoList = make([]types.AddrInfo, len(ipAddrs))
 		if len(ipAddrs) == 0 {
 			m.Log.Functionf("updateDNS: interface %s has NO IP addresses", port.IfName)
@@ -140,18 +148,6 @@ func (m *DpcManager) updateDNS() {
 			// XXX where can we return this failure?
 			// Already have TestResults set from above
 			m.Log.Error(err)
-		}
-
-		// If this is a cellular network connectivity, add status information
-		// obtained from the wwan service.
-		if port.WirelessCfg.WType == types.WirelessTypeCellular {
-			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(port.Logicallabel)
-			if found {
-				m.deviceNetStatus.Ports[ix].WirelessStatus = types.WirelessStatus{
-					WType:    types.WirelessTypeCellular,
-					Cellular: wwanNetStatus,
-				}
-			}
 		}
 	}
 

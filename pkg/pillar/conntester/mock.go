@@ -72,7 +72,7 @@ func (t *MockConnectivityTester) TestConnectivity(dns types.DeviceNetworkStatus,
 			break
 		}
 		port := dns.GetPortByIfName(ifName)
-		missingErr := fmt.Sprintf("port %s does not exist - ignored", ifName)
+		missingErr := fmt.Sprintf("port %s does not exist", ifName)
 		if port == nil || port.LastError == missingErr {
 			err := fmt.Errorf("interface %s is missing", ifName)
 			errorList = append(errorList, err)
