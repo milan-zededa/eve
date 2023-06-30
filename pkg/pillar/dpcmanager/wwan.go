@@ -200,6 +200,13 @@ func (m *DpcManager) reloadWwanStatus(ctx context.Context) {
 	}
 
 	if changed || wasInProgress {
+		if m.currentDPC() != nil {
+			changedDPC := m.setDiscoveredWwanIfNames(m.currentDPC())
+			if changedDPC {
+				m.publishDPCL()
+			}
+		}
+		m.restartVerify(ctx, "wwan status changed")
 		m.updateDNS()
 	}
 	if changed && m.PubWwanStatus != nil {
@@ -339,4 +346,31 @@ func (m *DpcManager) doUpdateRadioSilence(ctx context.Context, newRS types.Radio
 
 	m.rsStatus.ConfigError = strings.Join(errMsgs, "\n")
 	m.updateDNS()
+}
+
+// Handle cellular modems referenced in the device model by USB or PCI addresses
+// but without interface name included.
+// Use status published by the wwan microservice to learn the name of the interface
+// created by the kernel for the modem data-path.
+func (m *DpcManager) setDiscoveredWwanIfNames(dpc *types.DevicePortConfig) bool {
+	var changed bool
+	updatedPorts := make([]types.NetworkPortConfig, len(dpc.Ports))
+	for i := range dpc.Ports {
+		port := &dpc.Ports[i]
+		updatedPorts[i] = *port // copy
+		if port.WirelessCfg.WType == types.WirelessTypeCellular {
+			wwanNetStatus, found := m.wwanStatus.LookupNetworkStatus(
+				port.Logicallabel)
+			if found && wwanNetStatus.PhysAddrs.Interface != "" {
+				if port.IfName != wwanNetStatus.PhysAddrs.Interface {
+					updatedPorts[i].IfName = wwanNetStatus.PhysAddrs.Interface
+					changed = true
+				}
+			}
+		}
+	}
+	if changed {
+		dpc.Ports = updatedPorts
+	}
+	return changed
 }

@@ -891,15 +891,44 @@ func propagateError(higherLayerPort, lowerLayerPort *types.NetworkPortConfig) {
 func propagatePhyioAttrsToPort(port *types.NetworkPortConfig, phyio *types.PhysicalIOAdapter) {
 	port.Phylabel = phyio.Phylabel
 	port.IfName = phyio.Phyaddr.Ifname
+	port.USBAddr = phyio.Phyaddr.UsbAddr
+	port.PCIAddr = phyio.Phyaddr.PciLong
 	if port.IfName == "" {
-		// Might not be set for all models
-		log.Warnf("Physical IO %s (Phylabel %s) has no ifname",
-			phyio.Logicallabel, phyio.Phylabel)
-		if phyio.Logicallabel != "" {
-			port.IfName = phyio.Logicallabel
-		} else {
-			port.IfName = phyio.Phylabel
+		// Inside the device model, network adapter may be referenced by PCI or USB address
+		// instead of the interface name. In fact, with multiple network ports, interface naming
+		// is not necessary deterministic and may depend on the order of network adapter
+		// initialization and discovery by the kernel.
+		// Moreover, once EVE supports userspace vswitch, interface names of ports will differ
+		// depending on if they are assigned to the kernel or vswitch.
+		// For the reasons above, it is preferred to reference network adapters by PCI/USB
+		// addresses going forward.
+		// For now, we will allow network port configs without interface name at least for
+		// cellular modems.
+		// TODO: Allow any type of network port to be defined in PhysicalIOAdapter without
+		//       interface name.
+		switch types.IoType(phyio.Ptype) {
+		case types.IoNetWWAN:
+			if port.USBAddr == "" && port.PCIAddr == "" {
+				log.Warnf("Physical IO %s (Phylabel %s) has no physical address",
+					phyio.Logicallabel, phyio.Phylabel)
+				handleMissingIfname(port, phyio)
+			}
+		default:
+			log.Warnf("Physical IO %s (Phylabel %s) has no ifname",
+				phyio.Logicallabel, phyio.Phylabel)
+			handleMissingIfname(port, phyio)
 		}
+	}
+}
+
+func handleMissingIfname(port *types.NetworkPortConfig, phyio *types.PhysicalIOAdapter) {
+	// Try to use logical or physical label as interface name.
+	// If such interface name is not valid, NIM will report error in DeviceNetworkStatus
+	// under the port's TestResults.
+	if phyio.Logicallabel != "" {
+		port.IfName = phyio.Logicallabel
+	} else {
+		port.IfName = phyio.Phylabel
 	}
 }
 
