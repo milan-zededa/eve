@@ -3,6 +3,7 @@ module github.com/lf-edge/eve/pkg/pillar
 go 1.20
 
 require (
+	github.com/Luzifer/go-openssl/v4 v4.1.0
 	github.com/anatol/smart.go v0.0.0-20220615232124-371056cd18c3
 	github.com/bicomsystems/go-libzfs v0.4.0
 	github.com/containerd/cgroups v1.0.4
