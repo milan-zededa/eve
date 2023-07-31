@@ -156,7 +156,7 @@ func doAppNet(status, appstr string, isSummary bool) string {
 	fmt.Printf("   app uuid %s\n", appStatus.UUIDandVersion.UUID.String())
 
 	if appStatus.GetStatsIPAddr != nil {
-		fmt.Printf("\n - App Container Stats Collect IP %v\n", appStatus.GetStatsIPAddr)
+		fmt.Printf("\n - app container collect stats from IP %v\n", appStatus.GetStatsIPAddr)
 	}
 
 	for _, item := range appStatus.UnderlayNetworkList {
@@ -167,28 +167,21 @@ func doAppNet(status, appstr string, isSummary bool) string {
 		}
 		var niStatus types.NetworkInstanceStatus
 		_ = json.Unmarshal(retbytes, &niStatus)
-		var ifname string
-		var ipaddr net.IP
-		for _, p := range item.ACLDependList {
-			if ifname != p.Ifname || !ipaddr.Equal(p.IPAddr) {
-				fmt.Printf("\n  - uplink port: %s, %v\n", p.Ifname, p.IPAddr)
-				ifname = p.Ifname
-				ipaddr = p.IPAddr
-			}
-		}
+		fmt.Printf("\n  - uplink port: %s, %v\n", niStatus.SelectedUplinkIntfName, "TODO-IP")
 		fmt.Printf("\n == bridge: %s, %s, %v, %s\n", item.Bridge, item.Vif, item.AllocatedIPv4Addr, item.Mac)
 
 		if isSummary {
 			continue
 		}
 
-		ipStr := item.AllocatedIPv4Addr
-		printColor("\n - ping app ip address: "+ipStr, colorRED)
+		appIP := item.AllocatedIPv4Addr.String()
+		appMAC := item.Mac.String()
+		printColor("\n - ping app ip address: "+appIP, colorRED)
 
-		pingIPHost(ipStr, "")
+		pingIPHost(appIP, "")
 
 		if niStatus.Type != types.NetworkInstanceTypeSwitch {
-			printColor("\n - check open ports for "+ipStr, colorRED)
+			printColor("\n - check open ports for "+appIP, colorRED)
 			// nmap package
 
 			files, err := listRecursiveFiles("/run/zedrouter", ".inet")
@@ -200,7 +193,7 @@ func doAppNet(status, appstr string, isSummary bool) string {
 					}
 					retbytes, err := os.ReadFile(l)
 					if err == nil {
-						if strings.Contains(string(retbytes), item.Mac) {
+						if strings.Contains(string(retbytes), appMAC) {
 							fmt.Printf("%s\n", l)
 							break
 						}
@@ -213,7 +206,7 @@ func doAppNet(status, appstr string, isSummary bool) string {
 				printColor("\n - dnsmasq lease files\n", colorGREEN)
 				lines := strings.Split(string(retbytes), "\n")
 				for _, l := range lines {
-					if strings.Contains(l, item.Mac) {
+					if strings.Contains(l, appMAC) {
 						fmt.Printf("%ss\n", l)
 						items := strings.Split(l, " ")
 						unixtime, _ := strconv.Atoi(items[0])
@@ -223,18 +216,20 @@ func doAppNet(status, appstr string, isSummary bool) string {
 				}
 			}
 
-			runAppACLs(item.AllocatedIPv4Addr)
+			runAppACLs(appIP)
 
 			getVifStats(item.Vif)
 
-			getAppNetTable(item.AllocatedIPv4Addr, &niStatus)
+			getAppNetTable(appIP, &niStatus)
 
 			// NI
 			printColor("\n - network instance: ", colorGREEN)
-			fmt.Printf(" %s, type %s, logical label: %s\n\n", niStatus.DisplayName,
-				niType[niStatus.Type], niStatus.Logicallabel)
-			fmt.Printf(" DHCP range start: %v, end: %v\n", niStatus.DhcpRange.Start, niStatus.DhcpRange.End)
-			fmt.Printf(" Current Uplink: %s\n", niStatus.CurrentUplinkIntf)
+			fmt.Printf(" %s, type %s, UUID: %s\n\n", niStatus.DisplayName,
+				niType[niStatus.Type], niStatus.UUID)
+			fmt.Printf(" DHCP range start: %v, end: %v\n",
+				niStatus.DhcpRange.Start, niStatus.DhcpRange.End)
+			fmt.Printf(" Current Uplink: %s (interface: %s)\n",
+				niStatus.SelectedUplinkLogicalLabel, niStatus.SelectedUplinkIntfName)
 			fmt.Printf(" Probe Status:\n")
 			for k, p := range niStatus.PInfo {
 				fmt.Printf(" Uplink Intfname: %s\n", k)
@@ -489,7 +484,7 @@ func getAppIPs(status string) ([]string, uuid.UUID) {
 	var appIPs []string
 	appUUID := appStatus.UUIDandVersion.UUID
 	for _, item := range appStatus.UnderlayNetworkList {
-		appIPs = append(appIPs, item.AllocatedIPv4Addr)
+		appIPs = append(appIPs, item.AllocatedIPv4Addr.String())
 	}
 	return appIPs, appUUID
 }
