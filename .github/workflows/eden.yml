@@ -1,17 +1,11 @@
 ---
 name: Eden
 on:  # yamllint disable-line rule:truthy
-  push:
+  pull_request:
     branches:
       - "master"
       - "[0-9]+.[0-9]+"
       - "[0-9]+.[0-9]+-stable"
-    paths-ignore:
-      - 'docs/**'
-  pull_request_review:
-    types: [submitted]
-    paths-ignore:
-      - 'docs/**'
 
 jobs:
   integration:
@@ -22,7 +16,6 @@ jobs:
       matrix:
         tpm: ["true", "false"]
         fs: ["zfs", "ext4"]
-    if: ${{ github.event.review.state == 'approved' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags') }}
     steps:
       - name: Check
         run: |
@@ -43,6 +36,7 @@ jobs:
         uses: actions/checkout@v3
         with:
           path: 'eve'
+          ref: '1844bc4b5a825fd33a06b7630136a6cbc6e3797d'
       - name: prepare eden
         run: |
           if [ -f ${{ github.workspace }}/eve/tests/eden/eden-version ]; then
@@ -53,48 +47,15 @@ jobs:
           docker run -v $PWD:/out $EDEN_VERSION cp -a /eden/. /out/
           sudo chown -R $(whoami) .
           ./eden config add default
-      - name: fetch or build eve
-        env:
-          TAG: pr${{ github.event.pull_request.number }}
-          CACHE: evebuild/danger
-        run: |
-          BUILD=true
-          if docker pull "$CACHE:$TAG-kvm"; then
-            # we should check version of pulled image
-            # since in case of build in progress we do not want to test
-            # old version pushed to docker hub
-            # version logic must be aligned with PR build workflow
-            COMMIT_ID=$(git --git-dir ./eve/.git describe --abbrev=8 --always)
-            EXPECTED_VERSION="0.0.0-$TAG-$COMMIT_ID-kvm-amd64"
-            PULLED_VERSION=$(docker run --rm "$CACHE:$TAG-kvm" version)
-            if [ "$PULLED_VERSION" = "$EXPECTED_VERSION" ]; then
-              docker tag "$CACHE:$TAG-kvm" "lfedge/eve:$TAG-kvm"
-              docker tag "$CACHE:$TAG-kvm" "lfedge/eve:$TAG-kvm-amd64"
-              BUILD=false
-            else
-              docker rmi --force "$CACHE:$TAG-kvm"
-            fi
-          fi
-          if [ "$BUILD" = "true" ]; then
-            make -C eve V=1 PRUNE=1 pkgs
-            make -C eve V=1 ROOTFS_VERSION="$TAG" eve
-            IMAGES="$(docker images -f reference="lfedge/eve-*" -q)"
-            IMAGES="$IMAGES $(docker images -f reference="eve-build-*" -q)"
-            IMAGES="$IMAGES $(docker images -f reference="golang" -q)"
-            IMAGES="$IMAGES $(docker images -f dangling=true -q)"
-            docker rmi -f $IMAGES||echo "skip conflicts"
-            rm -rf ~/.linuxkit
-          fi
       - name: set debug log level
         if: contains(github.event.review.body, '#eden-debug')
         run: |
           ./eden config set default --key=eve.log-level --value=debug
           ./eden config set default --key=eve.adam-log-level --value=debug
       - name: run
-        env:
-          TAG: pr${{ github.event.pull_request.number }}
         run: |
-          ./eden config set default --key eve.tag --value="$TAG"
+          ./eden config set default --key eve.registry --value="lfedge/eve"
+          ./eden config set default --key eve.tag --value="0.0.0-master-1844bc4b"
           ./eden config set default --key=eve.accel --value=false
           ./eden config set default --key=eve.tpm --value=${{ matrix.tpm }}
           ./eden config set default --key=eve.cpu --value=2
