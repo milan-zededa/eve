@@ -2,8 +2,14 @@ package dpcreconciler
 
 import (
 	"context"
+	"crypto/aes"
+	cryptocipher "crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -12,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Luzifer/go-openssl/v4"
 	dg "github.com/lf-edge/eve-libs/depgraph"
 	"github.com/lf-edge/eve-libs/reconciler"
 	"github.com/lf-edge/eve/pkg/pillar/base"
@@ -27,6 +32,7 @@ import (
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // Device connectivity configuration is modeled using dependency graph (see libs/depgraph).
@@ -1521,17 +1527,29 @@ func (r *LinuxDpcReconciler) getWwanCredentials(ap *types.CellularAccessPoint) (
 	return decBlock, nil
 }
 
-// Encrypt user password using AES-256-CBC with the key derived by the PBKDF2
+const (
+	saltSize        = 16
+	ivSize          = 12
+	pbkdf2IterCount = 4096
+)
+
+// Encrypt user password using AES-256-GCM with the key derived by the PBKDF2
 // method, taking kernel-generated /proc/sys/kernel/random/boot_id as the input.
 // Note that even though the config with the password is passed from NIM to the wwan
 // microservice using the *in-memory only* /run filesystem, we still encrypt
 // the password to avoid accidental exposure when the content of /run/wwan
 // is dumped as part of a customer issue report.
+// The encryption algorithm and its parameters used here should align with the decryption
+// algorithm executed by the command pkg/wwan/decryptpasswd. We have deliberately
+// refrained from integrating the encrypt/decrypt methods into a shared pillar package.
+// This approach prevents importing pillar from decryptpasswd, thereby avoiding
+// unnecessary bloating of the binary size (inside the wwan container)
+// due to some unnecessary dependencies from pillar.
 func (r *LinuxDpcReconciler) encryptCellularPassword(portLL, password string) (
 	ciphertext string, err error) {
 	encPassword := r.encCellularPasswords[portLL]
 	if encPassword != nil && encPassword.cleartext == password {
-		// EncryptBytes uses random salt meaning that it will return different
+		// Encryption algorithm uses random salt meaning that it will return different
 		// ciphertext on each run even for the same password.
 		// However, we do not want to change generated /run/wwan/config.json unless
 		// there is an actual config change (triggers many operations in the wwan
@@ -1544,13 +1562,24 @@ func (r *LinuxDpcReconciler) encryptCellularPassword(portLL, password string) (
 		return "", err
 	}
 	passphrase := strings.TrimSpace(string(bootID))
-	openSSL := openssl.New()
-	encBytes, err := openSSL.EncryptBytes(
-		passphrase, []byte(password), openssl.PBKDF2SHA256)
+	randInput := make([]byte, saltSize+ivSize)
+	if _, err = io.ReadFull(rand.Reader, randInput); err != nil {
+		return "", err
+	}
+	salt := randInput[:saltSize]
+	iv := randInput[saltSize : saltSize+ivSize]
+	// AES-256 uses a 32-byte key.
+	key := pbkdf2.Key([]byte(passphrase), salt, pbkdf2IterCount, 32, sha256.New)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
-	ciphertext = string(encBytes)
+	gcm, err := cryptocipher.NewGCMWithNonceSize(block, ivSize)
+	if err != nil {
+		return "", err
+	}
+	cipherbytes := gcm.Seal(randInput, iv, []byte(password), nil)
+	ciphertext = base64.StdEncoding.EncodeToString(cipherbytes)
 	r.encCellularPasswords[portLL] = &encryptedPassword{
 		cleartext:  password,
 		ciphertext: ciphertext,
