@@ -85,4 +85,4 @@ fi
 # Create configuration end-points
 mkdir -p /run/watchdog/pid /run/watchdog/file 2> /dev/null || :
 
-run_watchdog
+#run_watchdog
