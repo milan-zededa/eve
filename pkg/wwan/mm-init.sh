@@ -5,7 +5,10 @@
 set -e
 
 echo "Loading kernel modules used by ModemManager"
+# For USB modems
 modprobe -a qcserial usb_wwan qmi_wwan cdc_wdm cdc_mbim cdc_acm
+# For PCIe modems
+modprobe -a mhi mhi_pci_generic mhi_net mhi_wwan_mbim mhi_wwan_ctrl mhi_ep qrtr_mhi
 echo "Kernel modules are loaded"
 
 echo "Starting D-Bus daemon"

@@ -1,5 +1,5 @@
 kernel:
-  image: KERNEL_TAG
+  image: eve-kernel-amd64-v6.1.38-generic:v6.1.38-9-g4c59d41f7fe8-gcc
   cmdline: "rootdelay=3"
 init:
   - linuxkit/init:144c9cee8aed9e30a16940f2bf1d3813883aceda
