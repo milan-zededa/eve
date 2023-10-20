@@ -50,8 +50,9 @@ type LinuxNIReconciler struct {
 	netMonitor      netmonitor.NetworkMonitor
 	metadataHandler http.Handler
 
-	exportCurrentState  bool
-	exportIntendedState bool
+	kubernetesNetworking bool
+	exportCurrentState   bool
+	exportIntendedState  bool
 
 	// From GCP
 	disableAllOnesNetmask bool
@@ -134,14 +135,15 @@ type vifInfo struct {
 // on every change.
 func NewLinuxNIReconciler(log *base.LogObject, logger *logrus.Logger,
 	netMonitor netmonitor.NetworkMonitor, metadataHandler http.Handler,
-	exportCurrentState, exportIntendedState bool) *LinuxNIReconciler {
+	kubernetesNetworking, exportCurrentState, exportIntendedState bool) *LinuxNIReconciler {
 	return &LinuxNIReconciler{
-		log:                 log,
-		logger:              logger,
-		netMonitor:          netMonitor,
-		metadataHandler:     metadataHandler,
-		exportCurrentState:  exportCurrentState,
-		exportIntendedState: exportIntendedState,
+		log:                  log,
+		logger:               logger,
+		netMonitor:           netMonitor,
+		metadataHandler:      metadataHandler,
+		kubernetesNetworking: kubernetesNetworking,
+		exportCurrentState:   exportCurrentState,
+		exportIntendedState:  exportIntendedState,
 	}
 }
 
@@ -759,7 +761,15 @@ func (r *LinuxNIReconciler) ApplyUpdatedGCP(ctx context.Context,
 	newGCP types.ConfigItemValueMap) {
 	contWatcher := r.pauseWatcher()
 	defer contWatcher()
-	disableAllOnesNetmask := newGCP.GlobalValueBool(types.DisableDHCPAllOnesNetMask)
+	var disableAllOnesNetmask bool
+	if r.kubernetesNetworking {
+		// With kubernetes networking, DHCP server must publish lease with the original
+		// network instance subnet netmask.
+		// TODO: why?
+		disableAllOnesNetmask = true
+	} else {
+		disableAllOnesNetmask = newGCP.GlobalValueBool(types.DisableDHCPAllOnesNetMask)
+	}
 	if r.disableAllOnesNetmask == disableAllOnesNetmask {
 		// No change in GCP relevant for network instances.
 		return

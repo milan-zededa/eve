@@ -245,7 +245,8 @@ func (z *zedrouter) init() (err error) {
 		z.log, agentName, z.zedcloudMetrics)
 	z.reachProber = controllerReachProber
 	z.niReconciler = nireconciler.NewLinuxNIReconciler(z.log, z.logger, z.networkMonitor,
-		z.makeMetadataHandler(), true, true)
+		z.makeMetadataHandler(), base.IsHVTypeKube(),
+		true, true)
 
 	z.initNumberAllocators()
 	return nil

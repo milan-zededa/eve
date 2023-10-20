@@ -44,7 +44,7 @@ func initTest(test *testing.T) *GomegaWithT {
 		MainRT: unix.RT_TABLE_MAIN,
 	}
 	niReconciler = nirec.NewLinuxNIReconciler(log, logger, networkMonitor, nil,
-		false, false)
+		false, false, false)
 	return t
 }
 
