@@ -884,6 +884,8 @@ var (
 			},
 		},
 	}
+	// For APP3, simulate that VIF interface names are decided by upper layers,
+	// not by NI Reconciler.
 	app3VIFs = []nirec.AppVIF{
 		{
 			App:            app3UUID.UUID,
@@ -892,6 +894,7 @@ var (
 			VIFNum:         1,
 			GuestIfMAC:     macAddress("02:00:00:00:04:05"),
 			GuestIP:        ipAddress("2001::1111:2"),
+			HostIfName:     "app3vif1",
 		},
 		{
 			App:            app3UUID.UUID,
@@ -899,12 +902,13 @@ var (
 			NetAdapterName: "adapter2",
 			VIFNum:         2,
 			GuestIfMAC:     macAddress("02:00:00:00:04:06"),
+			HostIfName:     "app3vif2",
 		},
 	}
 	app3VIF1 = netmonitor.MockInterface{
 		Attrs: netmonitor.IfAttrs{
 			IfIndex:       14,
-			IfName:        "nbu1x3",
+			IfName:        "app3vif1",
 			IfType:        "device",
 			WithBroadcast: true,
 			AdminUp:       true,
@@ -917,7 +921,7 @@ var (
 	app3VIF2 = netmonitor.MockInterface{
 		Attrs: netmonitor.IfAttrs{
 			IfIndex:       15,
-			IfName:        "nbu2x3",
+			IfName:        "app3vif2",
 			IfType:        "device",
 			WithBroadcast: true,
 			AdminUp:       true,
@@ -1653,11 +1657,11 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	t.Expect(appStatus.VIFs).To(HaveLen(2))
 	t.Expect(appStatus.VIFs[0].NetAdapterName).To(Equal("adapter1"))
 	t.Expect(appStatus.VIFs[0].InProgress).To(BeTrue())
-	t.Expect(appStatus.VIFs[0].HostIfName).To(Equal("nbu1x3"))
+	t.Expect(appStatus.VIFs[0].HostIfName).To(Equal("app3vif1"))
 	t.Expect(appStatus.VIFs[0].FailedItems).To(BeEmpty())
 	t.Expect(appStatus.VIFs[1].NetAdapterName).To(Equal("adapter2"))
 	t.Expect(appStatus.VIFs[1].InProgress).To(BeTrue())
-	t.Expect(appStatus.VIFs[1].HostIfName).To(Equal("nbu2x3"))
+	t.Expect(appStatus.VIFs[1].HostIfName).To(Equal("app3vif2"))
 	t.Expect(appStatus.VIFs[1].FailedItems).To(BeEmpty())
 
 	t.Eventually(updatesCh).Should(Receive(&recUpdate))
@@ -1680,7 +1684,7 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 	vif2VLAN := linuxitems.VLANPort{
 		BridgeIfName: "eth2",
 		BridgePort: linuxitems.BridgePort{
-			VIFIfName: "nbu2x3",
+			VIFIfName: "app3vif2",
 		},
 	}
 	t.Expect(itemIsCreated(dg.Reference(vif2VLAN))).To(BeTrue())
@@ -1724,27 +1728,27 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 		ListenIf: genericitems.NetworkIf{IfName: "bn3"}, Port: 80}
 	t.Expect(itemDescription(dg.Reference(httpSrvN3))).To(ContainSubstring(
 		"listenIP: 2001::1111:1"))
-	vif1Eidset := linuxitems.IPSet{SetName: "ipv6.eids.nbu1x3"}
+	vif1Eidset := linuxitems.IPSet{SetName: "ipv6.eids.app3vif1"}
 	t.Expect(itemDescription(dg.Reference(vif1Eidset))).To(ContainSubstring(
 		"entries: [2001:db8::1 2001::1111:2]"))
 	vif1IPRule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 3",
 		Table:     "mangle",
-		ChainName: "PREROUTING-nbu1x3-OUT",
+		ChainName: "PREROUTING-app3vif1-OUT",
 		ForIPv6:   true,
 	}
 	t.Expect(itemDescription(dg.Reference(vif1IPRule))).To(ContainSubstring(
-		"-d 2610:20:6f96:96::4/128 -j bn3-nbu1x3-3"))
+		"-d 2610:20:6f96:96::4/128 -j bn3-app3vif1-3"))
 	ni3PortMapRuleIn := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 5 for uplink IP 2001::20 from inside",
 		Table:     "nat",
-		ChainName: "PREROUTING-nbu1x3",
+		ChainName: "PREROUTING-app3vif1",
 		ForIPv6:   true,
 	}
 	ni3PortMapRuleOut := iptables.Rule{
 		RuleLabel: "User-configured PORTMAP ACL rule 5 for uplink IP 2001::20 from outside",
 		Table:     "nat",
-		ChainName: "PREROUTING-nbu1x3",
+		ChainName: "PREROUTING-app3vif1",
 		ForIPv6:   true,
 	}
 	t.Expect(itemIsCreated(dg.Reference(ni3PortMapRuleIn))).To(BeTrue())
@@ -1755,25 +1759,25 @@ func TestIPv6LocalAndSwitchNIs(test *testing.T) {
 		ListenIf: genericitems.NetworkIf{IfName: "eth2"}, Port: 80}
 	t.Expect(itemDescription(dg.Reference(httpSrvN4))).To(ContainSubstring(
 		"listenIP: 2001::20"))
-	vif2Eidset := linuxitems.IPSet{SetName: "ipv6.eids.nbu2x3"}
+	vif2Eidset := linuxitems.IPSet{SetName: "ipv6.eids.app3vif2"}
 	t.Expect(itemDescription(dg.Reference(vif2Eidset))).To(ContainSubstring(
 		"entries: [2001::101]"))
 	vif2IPv6Rule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 1",
 		Table:     "mangle",
-		ChainName: "PREROUTING-nbu2x3-OUT",
+		ChainName: "PREROUTING-app3vif2-OUT",
 		ForIPv6:   true,
 	}
 	t.Expect(itemDescription(dg.Reference(vif2IPv6Rule))).To(ContainSubstring(
-		"-d ::/0 -j eth2-nbu2x3-1"))
+		"-d ::/0 -j eth2-app3vif2-1"))
 	vif2IPv4Rule := iptables.Rule{
 		RuleLabel: "User configured ALLOW ACL rule 2",
 		Table:     "mangle",
-		ChainName: "PREROUTING-nbu2x3-OUT",
+		ChainName: "PREROUTING-app3vif2-OUT",
 		ForIPv6:   false,
 	}
 	t.Expect(itemDescription(dg.Reference(vif2IPv4Rule))).To(ContainSubstring(
-		"-d 0.0.0.0/0 -j eth2-nbu2x3-2"))
+		"-d 0.0.0.0/0 -j eth2-app3vif2-2"))
 
 	// Do not run dnsmasq and radvd for the switch network instance.
 	t.Expect(itemCountWithType(genericitems.DnsmasqTypename)).To(Equal(1))

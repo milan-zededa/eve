@@ -906,9 +906,13 @@ func (r *LinuxNIReconciler) ConnectApp(ctx context.Context,
 		appNum: appNum,
 	}
 	for _, vif := range vifs {
+		hostIfName := vif.HostIfName
+		if hostIfName == "" {
+			hostIfName = r.generateVifHostIfName(vif.VIFNum, appInfo.appNum)
+		}
 		appInfo.vifs = append(appInfo.vifs, vifInfo{
 			AppVIF:     vif,
-			hostIfName: r.generateVifHostIfName(vif.VIFNum, appNum),
+			hostIfName: hostIfName,
 		})
 	}
 	r.apps[appID] = appInfo
@@ -947,9 +951,13 @@ func (r *LinuxNIReconciler) ReconnectApp(ctx context.Context,
 	appInfo.vifs = nil
 	appInfo.vifStatus = nil
 	for _, vif := range vifs {
+		hostIfName := vif.HostIfName
+		if hostIfName == "" {
+			hostIfName = r.generateVifHostIfName(vif.VIFNum, appInfo.appNum)
+		}
 		appInfo.vifs = append(appInfo.vifs, vifInfo{
 			AppVIF:     vif,
-			hostIfName: r.generateVifHostIfName(vif.VIFNum, appInfo.appNum),
+			hostIfName: hostIfName,
 		})
 	}
 	r.apps[appID] = appInfo

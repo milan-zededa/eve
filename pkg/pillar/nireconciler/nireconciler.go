@@ -138,6 +138,9 @@ type AppVIF struct {
 	GuestIfMAC net.HardwareAddr
 	// GuestIP : IP address assigned to VIF on the guest side (inside the app).
 	GuestIP net.IP
+	// HostIfName : name to assign to VIF on the host side.
+	// If empty, NIReconciler will generate suitable interface name.
+	HostIfName string
 }
 
 // UpdateType : type of the ReconcilerUpdate.
