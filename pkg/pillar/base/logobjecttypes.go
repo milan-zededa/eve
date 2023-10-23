@@ -170,6 +170,8 @@ const (
 	EncryptedVaultKeyFromControllerLogType LogObjectType = "encrypted_vault_key_from_controller"
 	// CachedResolvedIPsLogType:
 	CachedResolvedIPsLogType LogObjectType = "cached_resolved_ips"
+	// AppKubeNetworkStatusLogType:
+	AppKubeNetworkStatusLogType LogObjectType = "app_kube_network_status"
 )
 
 // RelationObjectType :

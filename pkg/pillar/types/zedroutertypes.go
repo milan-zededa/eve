@@ -128,29 +128,6 @@ func (config *AppNetworkConfig) IsNetworkUsed(network uuid.UUID) bool {
 	return false
 }
 
-func (status AppNetworkStatus) Pending() bool {
-	return status.PendingAdd || status.PendingModify || status.PendingDelete
-}
-
-// AwaitingNetwork - Is the app waiting for network?
-func (status AppNetworkStatus) AwaitingNetwork() bool {
-	return status.AwaitNetworkInstance
-}
-
-// GetULStatusForNI returns UnderlayNetworkStatus for every application VIF
-// connected to the given network instance (there can be multiple interfaces connected
-// to the same network instance).
-func (status AppNetworkStatus) GetULStatusForNI(netUUID uuid.UUID) []*UnderlayNetworkStatus {
-	var uls []*UnderlayNetworkStatus
-	for i := range status.UnderlayNetworkList {
-		ul := &status.UnderlayNetworkList[i]
-		if ul.Network == netUUID {
-			uls = append(uls, ul)
-		}
-	}
-	return uls
-}
-
 // Indexed by UUID
 type AppNetworkStatus struct {
 	UUIDandVersion UUIDandVersion
@@ -227,6 +204,29 @@ func (status AppNetworkStatus) LogDelete(logBase *base.LogObject) {
 // LogKey :
 func (status AppNetworkStatus) LogKey() string {
 	return string(base.AppNetworkStatusLogType) + "-" + status.Key()
+}
+
+func (status AppNetworkStatus) Pending() bool {
+	return status.PendingAdd || status.PendingModify || status.PendingDelete
+}
+
+// AwaitingNetwork - Is the app waiting for network?
+func (status AppNetworkStatus) AwaitingNetwork() bool {
+	return status.AwaitNetworkInstance
+}
+
+// GetULStatusForNI returns UnderlayNetworkStatus for every application VIF
+// connected to the given network instance (there can be multiple interfaces connected
+// to the same network instance).
+func (status AppNetworkStatus) GetULStatusForNI(netUUID uuid.UUID) []*UnderlayNetworkStatus {
+	var uls []*UnderlayNetworkStatus
+	for i := range status.UnderlayNetworkList {
+		ul := &status.UnderlayNetworkList[i]
+		if ul.Network == netUUID {
+			uls = append(uls, ul)
+		}
+	}
+	return uls
 }
 
 // AppContainerMetrics - App Container Metrics
