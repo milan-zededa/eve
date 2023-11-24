@@ -70,8 +70,15 @@ func handleSyncOp(ctx *downloaderContext, key string,
 
 	dsPath := dsCtx.Dpath
 
+	// Check if secrets are (likely) required and yet not provided.
+	// This may be a temporary issue until ECDH key is established between the device
+	// and the controller.
+	secretsRequired := true
+	secretsMissing := dsCtx.APIKey == "" && dsCtx.Password == ""
+
 	switch dsCtx.TransportMethod {
 	case zconfig.DsType_DsContainerRegistry.String():
+		secretsRequired = false
 		auth = &zedUpload.AuthInput{
 			AuthType: "apikey",
 			Uname:    dsCtx.APIKey,
@@ -144,6 +151,7 @@ func handleSyncOp(ctx *downloaderContext, key string,
 		serverURL = dst.Fqdn
 
 	case zconfig.DsType_DsHttp.String(), zconfig.DsType_DsHttps.String(), "":
+		secretsRequired = false
 		auth = &zedUpload.AuthInput{
 			AuthType: "http",
 		}
@@ -316,6 +324,17 @@ func handleSyncOp(ctx *downloaderContext, key string,
 		errStr = logutils.NoSuitableAddrStr
 	}
 	if !cancelled {
+		if secretsRequired && secretsMissing {
+			// The issue with missing datastore secrets can be intermittent.
+			// Controller may publish datastore config without cipher block if ECDH
+			// key has not been yet established for the device.
+			// This is possible because device may ask for config before it publishes
+			// its own certificate.
+			// We should give the user some hint about this possibility.
+			errStr = fmt.Sprintf("%s\nPlease note that datastore %v secrets "+
+				"are not configured or not yet received from the controller",
+				errStr, dst.UUID)
+		}
 		log.Errorf("All source IP addresses failed. All errors:%s",
 			errStr)
 	}
