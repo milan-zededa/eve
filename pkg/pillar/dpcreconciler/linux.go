@@ -1647,35 +1647,35 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 		RuleLabel:   "SSH and Guacamole mark",
 		MatchOpts:   []string{"-p", "tcp", "--match", "multiport", "--dports", "22,4822"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_http_ssh_guacamole"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_http_ssh_guacamole")},
 		Description: "Mark ingress SSH and Guacamole traffic",
 	}
 	markVnc := iptables.Rule{
 		RuleLabel:   "VNC mark",
 		MatchOpts:   []string{"-p", "tcp", "--match", "multiport", "--dports", "5900:5999"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_vnc"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_vnc")},
 		Description: "Mark ingress VNC traffic",
 	}
 	markIcmpV4 := iptables.Rule{
 		RuleLabel:   "ICMP mark",
 		MatchOpts:   []string{"-p", "icmp"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_icmp"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_icmp")},
 		Description: "Mark ingress ICMP traffic",
 	}
 	markIcmpV6 := iptables.Rule{
 		RuleLabel:   "ICMPv6 traffic",
 		MatchOpts:   []string{"-p", "icmpv6"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_icmp"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_icmp")},
 		Description: "Mark ingress ICMPv6 traffic",
 	}
 	markDhcp := iptables.Rule{
 		RuleLabel:   "DHCP mark",
 		MatchOpts:   []string{"-p", "udp", "--dport", "bootps:bootpc"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_dhcp"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_dhcp")},
 		Description: "Mark ingress DHCP traffic",
 	}
 	// Allow kubernetes DNS replies from an external server.
@@ -1685,7 +1685,7 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 		RuleLabel:   "Incoming DNS replies",
 		MatchOpts:   []string{"-p", "udp", "--sport", "domain"},
 		Target:      "CONNMARK",
-		TargetOpts:  []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["in_dns"]},
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_dns")},
 		Description: "Incoming DNS replies (used to allow kubernetes DNS replies from external server)",
 	}
 
@@ -1712,7 +1712,7 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 		Table:     "mangle",
 		ForIPv6:   true,
 	}, nil)
-	ingressDefDrop := iptables.GetConnmark(0, iptables.DefaultDropAceID, true)
+	ingressDefDrop := iptables.GetConnmark(0, iptables.DefaultDropAceID, false, true)
 	ingressDefDropStr := strconv.FormatUint(uint64(ingressDefDrop), 10)
 	ingressDefDropRules := []iptables.Rule{
 		{
@@ -1806,7 +1806,7 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 		{
 			RuleLabel:  "Default egress mark",
 			Target:     "MARK",
-			TargetOpts: []string{"--set-mark", iptables.ControlProtocolMarkingIDMap["out_all"]},
+			TargetOpts: []string{"--set-mark", controlProtoMark("out_all")},
 		},
 		{
 			RuleLabel:  "Save egress mark",
@@ -1827,4 +1827,10 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 		intendedIPv6ACLs.PutItem(outputRule, nil)
 	}
 	return intendedACLs
+}
+
+func controlProtoMark(protoName string) string {
+	mark := iptables.GetConnmark(0, iptables.ControlProtocolMarkingIDMap[protoName],
+		false, false)
+	return strconv.FormatUint(uint64(mark), 10)
 }

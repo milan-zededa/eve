@@ -734,17 +734,23 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 			Table:    syscall.RT_TABLE_LOCAL,
 			Src:      r.getNISubnet(ni),
 			Dst:      bridgeIPHost,
+			Mark:     iptables.AceApp,
+			Mask:     iptables.AceApp,
 		}, nil)
 	}
 	intendedL3Cfg.PutItem(linux.IPRule{
 		Priority: devicenetwork.PbrNatOutPrio,
 		Table:    devicenetwork.NIBaseRTIndex + ni.bridge.BrNum,
 		Src:      r.getNISubnet(ni),
+		Mark:     iptables.AceApp,
+		Mask:     iptables.AceApp,
 	}, nil)
 	intendedL3Cfg.PutItem(linux.IPRule{
 		Priority: devicenetwork.PbrNatInPrio,
 		Table:    devicenetwork.NIBaseRTIndex + ni.bridge.BrNum,
 		Dst:      r.getNISubnet(ni),
+		Mark:     iptables.AceApp,
+		Mask:     iptables.AceApp,
 	}, nil)
 	// Add S-NAT iptables rule for the local network instance (only for IPv4).
 	if ni.config.Subnet.IP.To4() != nil {
