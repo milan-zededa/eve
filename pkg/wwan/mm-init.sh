@@ -20,10 +20,14 @@ enable_fcc_unlock() {
   # "Quectel EM05G Smart Gateway" (2c7c:0311) is compatible with the same
   # FCC unlock script as used for the regular "Quectel EM05G" (2c7c:030a).
   ln -sf "${SOURCE_DIR}2c7c:030a" "${TARGET_DIR}2c7c:0311"
+
+  # FCC unlock script for Quectel EM160R-GL.
+  ln -sf "${SOURCE_DIR}1eac" "${TARGET_DIR}1eac:1002"
 }
 
 echo "Loading kernel modules used by ModemManager"
-modprobe -a qcserial usb_wwan qmi_wwan cdc_wdm cdc_mbim cdc_acm
+modprobe -a qcserial usb_wwan qmi_wwan cdc_wdm cdc_mbim cdc_acm \
+            wwan mhi mhi_pci_generic mhi_wwan_ctrl mhi_wwan_mbim
 echo "Kernel modules are loaded"
 
 echo "Starting D-Bus daemon"
