@@ -28,7 +28,7 @@ require (
 	github.com/jaypipes/ghw v0.8.0
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.5.0
 	github.com/lf-edge/edge-containers v0.0.0-20240207093504-5dfda0619b80
-	github.com/lf-edge/eve-api/go v0.0.0-20240229195728-6180247abbc1
+	github.com/lf-edge/eve-api/go v0.0.0-20240322135714-a2b011fedf87
 	github.com/lf-edge/eve-libs v0.0.0-20240207103937-2c1dfb073c07
 	github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d
 	github.com/lf-edge/go-qemu v0.0.0-20231121152149-4c467eda0c56
@@ -213,3 +213,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
+
+replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20240404153753-27402b2f6ffa
