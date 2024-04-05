@@ -22,7 +22,9 @@ enable_fcc_unlock() {
   ln -sf "${SOURCE_DIR}2c7c:030a" "${TARGET_DIR}2c7c:0311"
 
   # FCC unlock script for Quectel EM160R-GL.
-  ln -sf "${SOURCE_DIR}1eac" "${TARGET_DIR}1eac:1002"
+  if [ -f /persist/fcc-unlock-mm ]; then
+    ln -sf "${SOURCE_DIR}1eac" "${TARGET_DIR}1eac:1002"
+  fi
 }
 
 echo "Loading kernel modules used by ModemManager"

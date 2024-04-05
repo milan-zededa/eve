@@ -5,7 +5,7 @@
 
 FROM lfedge/eve-alpine:29dc7661e9c3dcd0ec7ef9b98d2df58354d85fc0 as build
 ENV BUILD_PKGS meson ninja git libc-dev glib-dev make gcc dbus-dev libgudev-dev go
-ENV PKGS alpine-baselayout dbus glib udev libgudev
+ENV PKGS alpine-baselayout dbus glib udev libgudev libcrypto3
 RUN eve-alpine-deploy.sh
 
 ENV MM_VERSION=1.22.0
@@ -81,5 +81,9 @@ COPY --from=build /etc/dbus-1 /etc/dbus-1
 COPY --from=build /usr/share/dbus-1 /usr/share/dbus-1
 COPY --from=build /lib/udev/rules.d /lib/udev/rules.d
 
-COPY mm-init.sh /usr/bin/mm-init.sh
+COPY --chown=root:root --chmod=544 mm-init.sh /usr/bin/mm-init.sh
+COPY --chown=root:root --chmod=544 lenovo-fcc-unlock/libmbimtools.so /usr/lib/
+COPY --chown=root:root --chmod=544 lenovo-fcc-unlock/DPR_Fcc_unlock_service /opt/fcc_lenovo/
+COPY --chown=root:root --chmod=544 lenovo-fcc-unlock/1eac:1002 /usr/lib/ModemManager/fcc-unlock.d/
+
 CMD ["/usr/bin/mm-init.sh"]
