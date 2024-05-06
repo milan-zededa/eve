@@ -608,7 +608,7 @@ github.com/leodido/go-urn
 github.com/lf-edge/edge-containers/pkg/registry
 github.com/lf-edge/edge-containers/pkg/resolver
 github.com/lf-edge/edge-containers/pkg/tgz
-# github.com/lf-edge/eve-api/go v0.0.0-20240424223403-4feef58259f3
+# github.com/lf-edge/eve-api/go v0.0.0-20240517115539-b5a8cd6c001a => github.com/milan-zededa/eve-api/go v0.0.0-20240520090751-6e5d1eaed411
 ## explicit; go 1.20
 github.com/lf-edge/eve-api/go/attest
 github.com/lf-edge/eve-api/go/auth
@@ -1465,3 +1465,4 @@ sigs.k8s.io/structured-merge-diff/v4/value
 # sigs.k8s.io/yaml v1.3.0
 ## explicit; go 1.12
 sigs.k8s.io/yaml
+# github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20240520090751-6e5d1eaed411
