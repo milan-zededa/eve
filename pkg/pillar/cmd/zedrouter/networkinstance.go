@@ -67,6 +67,8 @@ func (z *zedrouter) getNIBridgeConfig(
 		IPAddress:  ipAddr,
 		Uplink:     z.getNIUplinkConfig(status),
 		IPConflict: status.IPConflict,
+		// TODO: detect when NI MTU is higher than uplink MTU.
+		MTU: status.MTU,
 	}
 }
 

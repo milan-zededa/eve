@@ -516,6 +516,7 @@ func (r *LinuxNIReconciler) getIntendedNIL2Cfg(niID uuid.UUID) dg.Graph {
 		CreatedByNIM: r.niBridgeIsCreatedByNIM(ni),
 		MACAddress:   bridgeMAC,
 		IPAddresses:  bridgeIPs,
+		MTU:          ni.bridge.MTU,
 	}, nil)
 	// For Switch NI also add the intended VLAN configuration.
 	// Here we put VLAN config only for the bridge itself and the uplink interface,
@@ -570,6 +571,7 @@ func (r *LinuxNIReconciler) getIntendedNIL2Cfg(niID uuid.UUID) dg.Graph {
 		Variant: linux.BridgePortVariant{
 			UplinkIfName: uplinkPhysIfName(ni.bridge.Uplink.IfName),
 		},
+		MTU: ni.bridge.MTU,
 	}, nil)
 	intendedL2Cfg.PutItem(linux.VLANPort{
 		BridgeIfName: ni.brIfName,
@@ -867,6 +869,14 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 	ni := r.nis[niID]
 	if ni.config.Type == types.NetworkInstanceTypeSwitch {
 		// Not running DHCP and DNS servers inside EVE for Switch network instances.
+		//
+		// TODO: How do we then propagate MTU to applications connected to switch NIs?
+		// For container apps, we could write per-interface MTU to the kernel cmdline
+		// and apply them from init-initrd script (e.g. "mtu=1500,1500,9000" for eth0, eth1
+		// and eth2, respectively). The only downside, is that while MTUs of VIFs connected
+		// to local NIs will be allowed to change in-runtime by use of DHCP lease renew
+		// (or IPv6 RA update), MTUs of switch VIFs would stay fixed after the shim-VM boot.
+		// However, I do not know how to propagate MTU of switch NI VIFs to VM applications.
 		return
 	}
 	_, bridgeIP, _, _, err := r.getBridgeAddrs(niID)
@@ -989,6 +999,7 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 		DNSServers:       ni.config.DnsServers,
 		NTPServers:       ntpServers,
 		PropagateRoutes:  propagateRoutes,
+		MTU:              ni.bridge.MTU,
 	}
 	// IPRange set above does not matter that much - every VIF is statically
 	// assigned IP address using a host file.
@@ -1118,6 +1129,7 @@ func (r *LinuxNIReconciler) getIntendedRadvdCfg(niID uuid.UUID) (items []dg.Item
 			IfName:  ni.brIfName,
 			ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
 		},
+		MTU: ni.bridge.MTU,
 	})
 	return items
 }
@@ -1236,6 +1248,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 		Variant: linux.BridgePortVariant{
 			VIFIfName: vif.hostIfName,
 		},
+		MTU: ni.bridge.MTU,
 	}, nil)
 	if ni.config.Type == types.NetworkInstanceTypeSwitch {
 		var vlanConfig linux.VLANConfig

@@ -59,7 +59,7 @@ github.com/lf-edge/eve-api/go/profile
 # github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d
 ## explicit; go 1.20
 github.com/lf-edge/eve/pkg/kube/cnirpc
-# github.com/lf-edge/eve/pkg/pillar v0.0.0-20240417234153-53dbc10640ca
+# github.com/lf-edge/eve/pkg/pillar v0.0.0-20240508124549-1f46aaeaeecc => ../../pillar
 ## explicit; go 1.21
 github.com/lf-edge/eve/pkg/pillar/agentbase
 github.com/lf-edge/eve/pkg/pillar/agentlog
@@ -183,3 +183,4 @@ google.golang.org/protobuf/types/known/timestamppb
 # gopkg.in/yaml.v2 v2.4.0
 ## explicit; go 1.15
 gopkg.in/yaml.v2
+# github.com/lf-edge/eve/pkg/pillar => ../../pillar

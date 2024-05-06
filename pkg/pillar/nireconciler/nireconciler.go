@@ -110,6 +110,9 @@ type NIBridge struct {
 	// In the future, we may improve isolation between NIs and uplinks using advanced
 	// policy-based routing or VRFs. This will enable conflicting NIs to remain functional.
 	IPConflict bool
+	// MTU : Maximum transmission unit size set for the bridge and all VIFs connected
+	// to it.
+	MTU uint16
 }
 
 // Uplink used by a network instance to provide external connectivity for applications.

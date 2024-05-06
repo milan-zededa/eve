@@ -514,6 +514,22 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 			}
 		}
 
+		// Parse and validate MTU settings.
+		mtu := apiConfigEntry.GetMtu()
+		switch {
+		case mtu != 0 && mtu < types.MinMTU:
+			err = fmt.Errorf("MTU %d configured for network instance %s is too small",
+				mtu, networkInstanceConfig.Key())
+			log.Error(err)
+			networkInstanceConfig.SetErrorNow(err.Error())
+		case mtu > types.MaxMTU:
+			err = fmt.Errorf("MTU %d configured for network instance %s is too large",
+				mtu, networkInstanceConfig.Key())
+			log.Error(err)
+			networkInstanceConfig.SetErrorNow(err.Error())
+		default:
+			networkInstanceConfig.MTU = uint16(mtu)
+		}
 		ctx.pubNetworkInstanceConfig.Publish(networkInstanceConfig.UUID.String(),
 			networkInstanceConfig)
 	}
@@ -1246,6 +1262,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			if network.Proxy != nil {
 				port.ProxyConfig = *network.Proxy
 			}
+			port.MTU = network.MTU
 		}
 	} else if isMgmt {
 		errStr := fmt.Sprintf("Port %s Configured as Management port without "+
@@ -1916,6 +1933,23 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 		nameToIPs = append(nameToIPs, nameToIP)
 	}
 	config.DNSNameToIPList = nameToIPs
+
+	// Parse and validate MTU settings.
+	mtu := netEnt.GetMtu()
+	switch {
+	case mtu != 0 && mtu < types.MinMTU:
+		err = fmt.Errorf("MTU %d configured for network %s is too small",
+			mtu, config.Key())
+		log.Error(err)
+		config.SetErrorNow(err.Error())
+	case mtu > types.MaxMTU:
+		err = fmt.Errorf("MTU %d configured for network %s is too large",
+			mtu, config.Key())
+		log.Error(err)
+		config.SetErrorNow(err.Error())
+	default:
+		config.MTU = uint16(mtu)
+	}
 	return config
 }
 
