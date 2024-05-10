@@ -127,6 +127,44 @@ func (z *zedrouter) checkNetworkInstanceIPConflicts(
 	return nil
 }
 
+func (z *zedrouter) checkNetworkInstanceMTUConflicts(
+	config types.NetworkInstanceConfig) (fallbackMTU uint16, err error) {
+	status := z.lookupNetworkInstanceStatus(config.Key())
+	if status == nil {
+		err = fmt.Errorf("failed to get status for network instance %s", config.Key())
+		return 0, err
+	}
+	uplink := z.getNIUplinkConfig(status)
+	if uplink.LogicalLabel == "" {
+		// Air-gapped
+		return 0, nil
+	}
+	if uplink.MTU == 0 {
+		// Not yet known?
+		z.log.Warnf("Missing MTU for uplink port %s", uplink.LogicalLabel)
+		return 0, nil
+	}
+	switch config.Type {
+	case types.NetworkInstanceTypeLocal:
+		if config.MTU > uplink.MTU {
+			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the local network "+
+				"instance is higher than the MTU (%d) of the associated port %s. "+
+				"Will use port's MTU instead.",
+				config.MTU, uplink.MTU, uplink.LogicalLabel)
+		}
+	case types.NetworkInstanceTypeSwitch:
+		if config.MTU != uplink.MTU {
+			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the switch network "+
+				"instance differs from the MTU (%d) of the associated port %s. "+
+				"Will use port's MTU instead.",
+				config.MTU, uplink.MTU, uplink.LogicalLabel)
+		}
+	default:
+		return 0, fmt.Errorf("network instance type %d is not supported", config.Type)
+	}
+	return 0, nil
+}
+
 func (z *zedrouter) validateAppNetworkConfig(appNetConfig types.AppNetworkConfig) error {
 	z.log.Functionf("AppNetwork(%s), check for duplicate port map acls",
 		appNetConfig.DisplayName)
@@ -207,7 +245,7 @@ func (z *zedrouter) checkNetworkReferencesFromApp(config types.AppNetworkConfig)
 			z.log.Error(err)
 			return false, err
 		}
-		if netInstStatus.HasError() {
+		if netInstStatus.HasError() && !netInstStatus.EligibleForActivate() {
 			err := fmt.Errorf(
 				"network instance %s needed by app %s/%s is in error state: %s",
 				adapterConfig.Network.String(), config.UUIDandVersion, config.DisplayName,

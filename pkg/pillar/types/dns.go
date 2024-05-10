@@ -210,7 +210,8 @@ func (status DeviceNetworkStatus) MostlyEqual(status2 DeviceNetworkStatus) bool 
 			p1.Alias != p2.Alias ||
 			p1.IsMgmt != p2.IsMgmt ||
 			p1.IsL3Port != p2.IsL3Port ||
-			p1.Cost != p2.Cost {
+			p1.Cost != p2.Cost ||
+			p1.MTU != p2.MTU {
 			return false
 		}
 		if p1.Dhcp != p2.Dhcp ||

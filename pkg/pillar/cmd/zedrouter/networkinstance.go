@@ -60,15 +60,18 @@ func (z *zedrouter) getNIBridgeConfig(
 			Mask: status.Subnet.Mask,
 		}
 	}
+	mtu := status.MTU
+	if status.MTUConflictErr.HasError() {
+		mtu = status.FallbackMTU
+	}
 	return nireconciler.NIBridge{
 		NI:         status.UUID,
 		BrNum:      status.BridgeNum,
 		MACAddress: status.BridgeMac,
 		IPAddress:  ipAddr,
 		Uplink:     z.getNIUplinkConfig(status),
-		IPConflict: status.IPConflict,
-		// TODO: detect when NI MTU is higher than uplink MTU.
-		MTU: status.MTU,
+		IPConflict: status.IPConflictErr.HasError(),
+		MTU:        mtu,
 	}
 }
 
@@ -90,6 +93,7 @@ func (z *zedrouter) getNIUplinkConfig(
 		LogicalLabel: port.Logicallabel,
 		IfName:       ifName,
 		IsMgmt:       port.IsMgmt,
+		MTU:          port.MTU,
 		DNSServers:   types.GetDNSServers(*z.deviceNetworkStatus, ifName),
 		NTPServers:   types.GetNTPServers(*z.deviceNetworkStatus, ifName),
 	}
@@ -98,66 +102,81 @@ func (z *zedrouter) getNIUplinkConfig(
 // Update NI status and set interface name of the selected uplink
 // referenced by a logical label.
 func (z *zedrouter) setSelectedUplink(uplinkLogicalLabel string,
-	status *types.NetworkInstanceStatus) (waitForUplink bool, err error) {
+	status *types.NetworkInstanceStatus) error {
 	if status.PortLogicalLabel == "" {
 		// Air-gapped
 		status.SelectedUplinkLogicalLabel = ""
 		status.SelectedUplinkIntfName = ""
-		return false, nil
+		return nil
 	}
 	status.SelectedUplinkLogicalLabel = uplinkLogicalLabel
 	if uplinkLogicalLabel == "" {
 		status.SelectedUplinkIntfName = ""
 		// This is potentially a transient state, wait for DPC update
 		// and uplink probing eventually finding a suitable uplink port.
-		return true, fmt.Errorf("no selected uplink port")
+		return fmt.Errorf("no selected uplink port")
 	}
 	ports := z.deviceNetworkStatus.GetPortsByLogicallabel(uplinkLogicalLabel)
 	switch len(ports) {
 	case 0:
-		err = fmt.Errorf("label of selected uplink (%s) does not match any port (%v)",
+		err := fmt.Errorf("label of selected uplink (%s) does not match any port (%v)",
 			uplinkLogicalLabel, ports)
 		// Wait for DPC update
-		return true, err
+		return err
 	case 1:
 		// OK
 	default:
-		err = fmt.Errorf("label of selected uplink matches multiple ports (%v)", ports)
-		return false, err
+		// Note: soon we will support NI with multiple ports.
+		err := fmt.Errorf("label of selected uplink matches multiple ports (%v)", ports)
+		return err
 	}
 	ifName := ports[0].IfName
 	status.SelectedUplinkIntfName = ifName
 	ifIndex, exists, _ := z.networkMonitor.GetInterfaceIndex(ifName)
 	if !exists {
 		// Wait for uplink interface to appear in the network stack.
-		return true, fmt.Errorf("missing uplink interface '%s'", ifName)
+		return fmt.Errorf("missing uplink interface '%s'", ifName)
 	}
 	if status.IsUsingUplinkBridge() {
 		_, ifMAC, _ := z.networkMonitor.GetInterfaceAddrs(ifIndex)
 		status.BridgeMac = ifMAC
 	}
-	return false, nil
+	return nil
 }
 
 // This function is called on DPC update or when UplinkProber changes uplink port
 // selected for network instance.
 func (z *zedrouter) doUpdateNIUplink(uplinkLogicalLabel string,
 	status *types.NetworkInstanceStatus, config types.NetworkInstanceConfig) {
-	waitForUplink, err := z.setSelectedUplink(uplinkLogicalLabel, status)
+	err := z.setSelectedUplink(uplinkLogicalLabel, status)
 	if err != nil {
 		z.log.Errorf("doUpdateNIUplink(%s) for %s failed: %v", uplinkLogicalLabel,
 			status.UUID, err)
-		status.SetErrorNow(err.Error())
+		status.UplinkErr.SetErrorNow(err.Error())
 		z.publishNetworkInstanceStatus(status)
 		return
+	}
+	// Re-check MTUs between the NI and the port.
+	fallbackMTU, conflictErr := z.checkNetworkInstanceMTUConflicts(config)
+	if conflictErr == nil && status.MTUConflictErr.HasError() {
+		// MTU conflict was resolved.
+		status.MTUConflictErr.ClearError()
+		status.FallbackMTU = 0
+	}
+	if conflictErr != nil &&
+		conflictErr.Error() != status.MTUConflictErr.Error {
+		// New MTU conflict arose or the error has changed.
+		z.log.Error(conflictErr)
+		status.MTUConflictErr.SetErrorNow(conflictErr.Error())
+		status.FallbackMTU = fallbackMTU
+		z.publishNetworkInstanceStatus(status)
 	}
 	if status.Activated {
 		z.doUpdateActivatedNetworkInstance(config, status)
 	}
-	if status.WaitingForUplink && !waitForUplink {
-		status.WaitingForUplink = false
-		status.ClearError()
-		if config.Activate && !status.Activated {
+	if status.UplinkErr.HasError() && err == nil {
+		status.UplinkErr.ClearError()
+		if config.Activate && !status.Activated && status.EligibleForActivate() {
 			z.doActivateNetworkInstance(config, status)
 			z.checkAndRecreateAppNetworks(status.UUID)
 		}
@@ -172,7 +191,7 @@ func (z *zedrouter) doActivateNetworkInstance(config types.NetworkInstanceConfig
 		z.runCtx, config, z.getNIBridgeConfig(status))
 	if err != nil {
 		z.log.Errorf("Failed to activate network instance %s: %v", status.UUID, err)
-		status.SetErrorNow(err.Error())
+		status.ReconcileErr.SetErrorNow(err.Error())
 		z.publishNetworkInstanceStatus(status)
 		return
 	}
@@ -200,7 +219,7 @@ func (z *zedrouter) doInactivateNetworkInstance(status *types.NetworkInstanceSta
 	niRecStatus, err := z.niReconciler.DelNI(z.runCtx, status.UUID)
 	if err != nil {
 		z.log.Errorf("Failed to deactivate network instance %s: %v", status.UUID, err)
-		status.SetErrorNow(err.Error())
+		status.ReconcileErr.SetErrorNow(err.Error())
 		z.publishNetworkInstanceStatus(status)
 		return
 	}
@@ -218,7 +237,7 @@ func (z *zedrouter) doUpdateActivatedNetworkInstance(config types.NetworkInstanc
 	if err != nil {
 		z.log.Errorf("Failed to update activated network instance %s: %v",
 			status.UUID, err)
-		status.SetErrorNow(err.Error())
+		status.ReconcileErr.SetErrorNow(err.Error())
 		z.publishNetworkInstanceStatus(status)
 		return
 	}
@@ -311,8 +330,9 @@ func (z *zedrouter) checkAllNetworkInstanceIPConflicts() {
 			continue
 		}
 		conflictErr := z.checkNetworkInstanceIPConflicts(niConfig)
-		if conflictErr == nil && niStatus.IPConflict {
+		if conflictErr == nil && niStatus.IPConflictErr.HasError() {
 			// IP conflict was resolved.
+			niStatus.IPConflictErr.ClearError()
 			if niStatus.Activated {
 				// Local NI was initially activated prior to the IP conflict.
 				// Subsequently, when the IP conflict arose, it was almost completely
@@ -320,8 +340,6 @@ func (z *zedrouter) checkAllNetworkInstanceIPConflicts() {
 				// unaffected. Now, it can be restored to full functionality.
 				z.log.Noticef("Updating NI %s (%s) now that IP conflict "+
 					"is not present anymore", niConfig.UUID, niConfig.DisplayName)
-				niStatus.IPConflict = false
-				niStatus.ClearError()
 				// This also publishes the new status.
 				z.doUpdateActivatedNetworkInstance(*niConfig, &niStatus)
 			} else {
@@ -335,11 +353,10 @@ func (z *zedrouter) checkAllNetworkInstanceIPConflicts() {
 				z.handleNetworkInstanceCreate(nil, niConfig.Key(), *niConfig)
 			}
 		}
-		if conflictErr != nil && !niStatus.IPConflict {
+		if conflictErr != nil && !niStatus.IPConflictErr.HasError() {
 			// New IP conflict arose.
 			z.log.Error(conflictErr)
-			niStatus.IPConflict = true
-			niStatus.SetErrorNow(conflictErr.Error())
+			niStatus.IPConflictErr.SetErrorNow(conflictErr.Error())
 			z.publishNetworkInstanceStatus(&niStatus)
 			if niStatus.Activated {
 				// Local NI is already activated. Instead of removing it and halting

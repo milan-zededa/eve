@@ -120,6 +120,7 @@ type Uplink struct {
 	LogicalLabel string
 	IfName       string
 	IsMgmt       bool
+	MTU          uint16
 	DNSServers   []net.IP
 	NTPServers   []net.IP
 }
@@ -128,6 +129,7 @@ type Uplink struct {
 func (u Uplink) Equal(u2 Uplink) bool {
 	return u.LogicalLabel == u2.LogicalLabel &&
 		u.IfName == u2.IfName &&
+		u.MTU == u2.MTU &&
 		generics.EqualSetsFn(u.DNSServers, u2.DNSServers, netutils.EqualIPs) &&
 		generics.EqualSetsFn(u.NTPServers, u2.NTPServers, netutils.EqualIPs)
 }
