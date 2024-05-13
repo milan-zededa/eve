@@ -144,20 +144,24 @@ func (z *zedrouter) checkNetworkInstanceMTUConflicts(
 		z.log.Warnf("Missing MTU for uplink port %s", uplink.LogicalLabel)
 		return 0, nil
 	}
+	niMTU := config.MTU
+	if niMTU == 0 {
+		niMTU = types.DefaultMTU
+	}
 	switch config.Type {
 	case types.NetworkInstanceTypeLocal:
-		if config.MTU > uplink.MTU {
+		if niMTU > uplink.MTU {
 			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the local network "+
 				"instance is higher than the MTU (%d) of the associated port %s. "+
 				"Will use port's MTU instead.",
-				config.MTU, uplink.MTU, uplink.LogicalLabel)
+				niMTU, uplink.MTU, uplink.LogicalLabel)
 		}
 	case types.NetworkInstanceTypeSwitch:
-		if config.MTU != uplink.MTU {
+		if niMTU != uplink.MTU {
 			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the switch network "+
 				"instance differs from the MTU (%d) of the associated port %s. "+
 				"Will use port's MTU instead.",
-				config.MTU, uplink.MTU, uplink.LogicalLabel)
+				niMTU, uplink.MTU, uplink.LogicalLabel)
 		}
 	default:
 		return 0, fmt.Errorf("network instance type %d is not supported", config.Type)

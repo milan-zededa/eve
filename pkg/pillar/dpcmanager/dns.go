@@ -70,6 +70,7 @@ func (m *DpcManager) updateDNS() {
 		// New errors are recorded from this function only when there is none yet
 		// (HasError() == false).
 		m.deviceNetStatus.Ports[ix].TestResults = port.TestResults
+		m.Log.Noticef("HEY! Port %s test results: %+v", port.Logicallabel, port.TestResults)
 		m.deviceNetStatus.Ports[ix].WirelessStatus.WType = port.WirelessCfg.WType
 		// If this is a cellular network connectivity, add status information
 		// obtained from the wwan service.
