@@ -1204,7 +1204,7 @@ func (z *zedrouter) publishNetworkInstanceMetricsAll(nms *types.NetworkMetrics) 
 	for _, ni := range niList {
 		status := ni.(types.NetworkInstanceStatus)
 		config := z.lookupNetworkInstanceConfig(status.Key())
-		if config == nil || !config.Activate {
+		if config == nil || !status.Activated {
 			// NI was deleted or is inactive - skip metrics publishing.
 			continue
 		}

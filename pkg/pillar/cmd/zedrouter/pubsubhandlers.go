@@ -86,6 +86,8 @@ func (z *zedrouter) handleDNSModify(ctxArg interface{}, key string,
 func (z *zedrouter) handleDNSImpl(ctxArg interface{}, key string,
 	statusArg interface{}) {
 
+	z.log.Noticef("HEY! handleDNSImpl BEGIN")
+	defer z.log.Noticef("HEY! handleDNSImpl END")
 	status := statusArg.(types.DeviceNetworkStatus)
 	if key != "global" {
 		z.log.Functionf("handleDNSImpl: ignoring %s", key)
@@ -251,7 +253,7 @@ func (z *zedrouter) handleNetworkInstanceCreate(ctxArg interface{}, key string,
 		}
 	}
 
-	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config); err != nil {
+	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config, &status); err != nil {
 		z.log.Error(err)
 		status.MTUConflictErr.SetErrorNow(err.Error())
 		status.FallbackMTU = fallbackMTU
@@ -397,7 +399,7 @@ func (z *zedrouter) handleNetworkInstanceModify(ctxArg interface{}, key string,
 		}
 	}
 
-	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config); err != nil {
+	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config, status); err != nil {
 		z.log.Error(err)
 		status.MTUConflictErr.SetErrorNow(err.Error())
 		status.FallbackMTU = fallbackMTU

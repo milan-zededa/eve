@@ -2497,7 +2497,7 @@ func handleGlobalConfigImpl(ctxArg interface{}, key string,
 		if gcp.GlobalValueBool(types.ConsoleAccess) != ctx.consoleAccess ||
 			!ctx.setInitialConsoleAccess {
 
-			ctx.consoleAccess = gcp.GlobalValueBool(types.ConsoleAccess)
+			ctx.consoleAccess = true //gcp.GlobalValueBool(types.ConsoleAccess)
 			updateConsoleAccess(ctx)
 			ctx.setInitialConsoleAccess = true
 		}

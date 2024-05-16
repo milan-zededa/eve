@@ -368,10 +368,12 @@ func (config *DevicePortConfig) DoSanitize(log *base.LogObject,
 
 // CountMgmtPorts returns the number of management ports
 // Exclude any broken ones with Dhcp = DhcpTypeNone
-func (config *DevicePortConfig) CountMgmtPorts() int {
+// Optionally exclude mgmt ports with invalid config
+func (config *DevicePortConfig) CountMgmtPorts(onlyValidConfig bool) int {
 	count := 0
 	for _, port := range config.Ports {
-		if port.IsMgmt && port.Dhcp != DhcpTypeNone {
+		if port.IsMgmt && port.Dhcp != DhcpTypeNone &&
+			!(onlyValidConfig && port.InvalidConfig) {
 			count++
 		}
 	}
@@ -448,7 +450,7 @@ func (config DevicePortConfig) IsDPCUntested() bool {
 // IsDPCUsable - checks whether something is invalid; no management IP
 // addresses means it isn't usable hence we return false if none.
 func (config DevicePortConfig) IsDPCUsable() bool {
-	mgmtCount := config.CountMgmtPorts()
+	mgmtCount := config.CountMgmtPorts(true)
 	return mgmtCount > 0
 }
 
@@ -524,11 +526,12 @@ type NetworkPortConfig struct {
 	Logicallabel string // SystemAdapter's name which is logical label in phyio
 	Alias        string // From SystemAdapter's alias
 	// NetworkUUID - UUID of the Network Object configured for the port.
-	NetworkUUID uuid.UUID
-	IsMgmt      bool  // Used to talk to controller
-	IsL3Port    bool  // True if port is applicable to operate on the network layer
-	Cost        uint8 // Zero is free
-	MTU         uint16
+	NetworkUUID   uuid.UUID
+	IsMgmt        bool  // Used to talk to controller
+	IsL3Port      bool  // True if port is applicable to operate on the network layer
+	InvalidConfig bool  // True if port config is not valid and should not be used
+	Cost          uint8 // Zero is free
+	MTU           uint16
 	DhcpConfig
 	ProxyConfig
 	L2LinkConfig

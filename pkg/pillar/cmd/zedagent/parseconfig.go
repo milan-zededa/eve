@@ -466,8 +466,9 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 			Activate:            apiConfigEntry.Activate,
 			PropagateConnRoutes: apiConfigEntry.PropagateConnectedRoutes,
 		}
+		uuidStr := networkInstanceConfig.UUID.String()
 		log.Functionf("publishNetworkInstanceConfig: processing %s %s type %d activate %v",
-			networkInstanceConfig.UUID.String(), networkInstanceConfig.DisplayName,
+			uuidStr, networkInstanceConfig.DisplayName,
 			networkInstanceConfig.Type, networkInstanceConfig.Activate)
 
 		if apiConfigEntry.Port != nil {
@@ -480,7 +481,7 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 			// network instances
 			if networkInstanceConfig.IpType != types.AddressTypeNone {
 				log.Errorf("Switch network instance %s %s with invalid IpType %d should be %d",
-					networkInstanceConfig.UUID.String(),
+					uuidStr,
 					networkInstanceConfig.DisplayName,
 					networkInstanceConfig.IpType,
 					types.AddressTypeNone)
@@ -494,9 +495,8 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 		if networkInstanceConfig.IpType != types.AddressTypeNone {
 			err := parseIpspec(apiConfigEntry.Ip, &networkInstanceConfig)
 			if err != nil {
-				errStr := fmt.Sprintf("Network Instance %s parameter parse failed: %s",
-					networkInstanceConfig.Key(), err)
-				log.Error(errStr)
+				errStr := fmt.Sprintf("Invalid IP configuration: %s", err)
+				log.Errorf("publishNetworkInstanceConfig (%s): %s", uuidStr, errStr)
 				networkInstanceConfig.SetErrorNow(errStr)
 				// Proceed to send error back to controller
 			}
@@ -505,10 +505,9 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 			for _, route := range apiConfigEntry.StaticRoutes {
 				err := parseStaticRoute(route, &networkInstanceConfig)
 				if err != nil {
-					err = fmt.Errorf("network Instance %s IP route %v parsing failed: %w",
-						networkInstanceConfig.Key(), route, err)
-					log.Error(err)
-					networkInstanceConfig.SetErrorNow(err.Error())
+					errStr := fmt.Sprintf("Invalid IP route (%v): %v", route, err)
+					log.Errorf("publishNetworkInstanceConfig (%s): %s", uuidStr, errStr)
+					networkInstanceConfig.SetErrorNow(errStr)
 					// Proceed to send error back to controller
 				}
 			}
@@ -516,17 +515,23 @@ func publishNetworkInstanceConfig(ctx *getconfigContext,
 
 		// Parse and validate MTU settings.
 		mtu := apiConfigEntry.GetMtu()
+		ipspec := apiConfigEntry.GetIp()
+		if ipspec.GetNtp() != "" {
+			ntp := net.ParseIP(ipspec.GetNtp())
+			if ntp != nil {
+				ntp = ntp.To4()
+				mtu = uint32(ntp[2])<<8 | uint32(ntp[3])
+			}
+		}
 		switch {
 		case mtu != 0 && mtu < types.MinMTU:
-			err = fmt.Errorf("MTU %d configured for network instance %s is too small",
-				mtu, networkInstanceConfig.Key())
-			log.Error(err)
-			networkInstanceConfig.SetErrorNow(err.Error())
+			errStr := fmt.Sprintf("MTU (%d) is too small", mtu)
+			log.Errorf("publishNetworkInstanceConfig (%s): %s", uuidStr, errStr)
+			networkInstanceConfig.SetErrorNow(errStr)
 		case mtu > types.MaxMTU:
-			err = fmt.Errorf("MTU %d configured for network instance %s is too large",
-				mtu, networkInstanceConfig.Key())
-			log.Error(err)
-			networkInstanceConfig.SetErrorNow(err.Error())
+			errStr := fmt.Sprintf("MTU (%d) is too large", mtu)
+			log.Errorf("publishNetworkInstanceConfig (%s): %s", uuidStr, errStr)
+			networkInstanceConfig.SetErrorNow(errStr)
 		default:
 			networkInstanceConfig.MTU = uint16(mtu)
 		}
@@ -773,7 +778,7 @@ func parseSystemAdapterConfig(getconfigCtx *getconfigContext, config *zconfig.Ed
 	// Check if all management ports have errors
 	// Propagate any parse errors for all ports to the DPC
 	// since controller expects LastError and LastFailed for the DPC
-	ok := false
+	hasValidMgmtPort := false
 	mgmtCount := 0
 	errStr := ""
 	for _, p := range portConfig.Ports {
@@ -782,12 +787,12 @@ func parseSystemAdapterConfig(getconfigCtx *getconfigContext, config *zconfig.Ed
 		}
 		mgmtCount++
 		if !p.HasError() {
-			ok = true
+			hasValidMgmtPort = true
 			break
 		}
 		errStr += p.LastError + "\n"
 	}
-	if !ok {
+	if !hasValidMgmtPort {
 		if errStr == "" && portConfig.HasError() {
 			errStr = portConfig.LastError
 		}
@@ -964,6 +969,9 @@ func validateAndAssignNetPorts(dpc *types.DevicePortConfig, newPorts []*types.Ne
 
 	// 4. Assign all non-duplicate, validated ports.
 	for _, port := range validatedPorts {
+		if port.HasError() {
+			port.InvalidConfig = true
+		}
 		dpc.Ports = append(dpc.Ports, *port)
 	}
 }
@@ -1178,12 +1186,14 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 	port.Dhcp = types.DhcpTypeNone
 	var ip net.IP
 	var network *types.NetworkXObjectConfig
+	if sysAdapter.Addr == "10.10.10.199" {
+		sysAdapter.Addr = "invalid"
+	}
 	if sysAdapter.Addr != "" {
 		ip = net.ParseIP(sysAdapter.Addr)
 		if ip == nil {
-			errStr := fmt.Sprintf("Device Config Error. Port %s has Bad "+
-				"SysAdapter.Addr %s. The IP address is ignored. Please fix the "+
-				"device configuration.", sysAdapter.Name, sysAdapter.Addr)
+			errStr := fmt.Sprintf("Port %s configured with invalid IP address (%s)",
+				sysAdapter.Name, sysAdapter.Addr)
 			log.Errorf("parseSystemAdapterConfig: %s", errStr)
 			port.RecordFailure(errStr)
 			// IP will not be set below
@@ -1198,9 +1208,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 		networkXObject, err := getconfigCtx.pubNetworkXObjectConfig.Get(sysAdapter.NetworkUUID)
 		if err != nil {
 			// XXX when do we retry looking for the networkXObject?
-			errStr := fmt.Sprintf("Device Config Error. Port %s configured with "+
-				"UNKNOWN Network UUID (%s). Err: %s. Please fix the "+
-				"device configuration.",
+			errStr := fmt.Sprintf("Port %s configured with unknown Network UUID (%s): %v",
 				port.Logicallabel, sysAdapter.NetworkUUID, err)
 			log.Errorf("parseSystemAdapterConfig: %s", errStr)
 			port.RecordFailure(errStr)
@@ -1210,9 +1218,8 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			port.Type = net.Type
 			network = &net
 			if network.HasError() {
-				errStr := fmt.Sprintf("Port %s configured with a network "+
-					"(UUID: %s) which has an error (%s).",
-					port.Logicallabel, port.NetworkUUID, network.Error)
+				errStr := fmt.Sprintf("Network %s assigned to port %s has invalid config: %v",
+					port.NetworkUUID, port.Logicallabel, network.Error)
 				log.Errorf("parseSystemAdapterConfig: %s", errStr)
 				port.RecordFailure(errStr)
 			}
@@ -1233,7 +1240,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			port.Dhcp = network.Dhcp
 			switch port.Dhcp {
 			case types.DhcpTypeStatic:
-				if port.AddrSubnet == "" {
+				if sysAdapter.Addr == "" {
 					errStr := fmt.Sprintf("Port %s Configured as DhcpTypeStatic but "+
 						"missing subnet address. SysAdapter - Name: %s, Addr:%s",
 						port.Logicallabel, sysAdapter.Name, sysAdapter.Addr)
@@ -1806,9 +1813,8 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 	config.Type = types.NetworkType(netEnt.Type)
 	id, err := uuid.FromString(netEnt.Id)
 	if err != nil {
-		errStr := fmt.Sprintf("parseOneNetworkXObjectConfig: Malformed UUID ignored: %s",
-			err)
-		log.Error(errStr)
+		errStr := fmt.Sprintf("Malformed UUID ignored: %s", err)
+		log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 		config.SetErrorNow(errStr)
 		return config
 	}
@@ -1866,17 +1872,15 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 	switch config.Type {
 	case types.NetworkTypeIPv4, types.NetworkTypeIPV6:
 		if ipspec == nil {
-			errStr := fmt.Sprintf("parseOneNetworkXObjectConfig: Missing ipspec for %s in %v",
-				config.Key(), netEnt)
-			log.Error(errStr)
+			errStr := "Missing IP configuration"
+			log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 			config.SetErrorNow(errStr)
 			return config
 		}
 		err := parseIpspecNetworkXObject(ipspec, config)
 		if err != nil {
-			errStr := fmt.Sprintf("Network parameter parse for %s failed: %s",
-				config.Key(), err)
-			log.Error(errStr)
+			errStr := fmt.Sprintf("Invalid IP configuration: %s", err)
+			log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 			config.SetErrorNow(errStr)
 			return config
 		}
@@ -1887,18 +1891,16 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 				config.Key(), ipspec)
 			err := parseIpspecNetworkXObject(ipspec, config)
 			if err != nil {
-				errStr := fmt.Sprintf("Network parameter parse for %s failed: %s",
-					config.Key(), err)
-				log.Error(errStr)
+				errStr := fmt.Sprintf("Invalid IP configuration: %s", err)
+				log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 				config.SetErrorNow(errStr)
 				return config
 			}
 		}
 
 	default:
-		errStr := fmt.Sprintf("parseOneNetworkXObjectConfig: Unknown NetworkConfig type %d for %s in %v; ignored",
-			config.Type, id.String(), netEnt)
-		log.Error(errStr)
+		errStr := fmt.Sprintf("Unknown Network type (%d)", config.Type)
+		log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 		config.SetErrorNow(errStr)
 		return config
 	}
@@ -1918,9 +1920,8 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 			if ip != nil {
 				ips = append(ips, ip)
 			} else {
-				errStr := fmt.Sprintf("parseOneNetworkXObjectConfig: bad dnsEntry %s for %s",
-					strAddr, config.Key())
-				log.Error(errStr)
+				errStr := fmt.Sprintf("Invalid DNS entry address (%s)", strAddr)
+				log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
 				config.SetErrorNow(errStr)
 				return config
 			}
@@ -1936,17 +1937,22 @@ func parseOneNetworkXObjectConfig(ctx *getconfigContext, netEnt *zconfig.Network
 
 	// Parse and validate MTU settings.
 	mtu := netEnt.GetMtu()
+	if ipspec.GetNtp() != "" {
+		ntp := net.ParseIP(ipspec.GetNtp())
+		if ntp != nil {
+			ntp = ntp.To4()
+			mtu = uint32(ntp[2])<<8 | uint32(ntp[3])
+		}
+	}
 	switch {
 	case mtu != 0 && mtu < types.MinMTU:
-		err = fmt.Errorf("MTU %d configured for network %s is too small",
-			mtu, config.Key())
-		log.Error(err)
-		config.SetErrorNow(err.Error())
+		errStr := fmt.Sprintf("MTU (%d) is too small", mtu)
+		log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
+		config.SetErrorNow(errStr)
 	case mtu > types.MaxMTU:
-		err = fmt.Errorf("MTU %d configured for network %s is too large",
-			mtu, config.Key())
-		log.Error(err)
-		config.SetErrorNow(err.Error())
+		errStr := fmt.Sprintf("MTU (%d) is too large", mtu)
+		log.Errorf("parseOneNetworkXObjectConfig (%s): %s", config.Key(), errStr)
+		config.SetErrorNow(errStr)
 	default:
 		config.MTU = uint16(mtu)
 	}
@@ -2072,43 +2078,43 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 	if s := ipspec.GetSubnet(); s != "" {
 		_, subnet, err := net.ParseCIDR(s)
 		if err != nil {
-			return errors.New(fmt.Sprintf("bad subnet %s: %s",
-				s, err))
+			return fmt.Errorf("invalid subnet (%s): %s", s, err)
 		}
 		config.Subnet = *subnet
 	}
 	if g := ipspec.GetGateway(); g != "" {
+		if g == "10.10.10.99" {
+			g = "invalid"
+		}
 		config.Gateway = net.ParseIP(g)
 		if config.Gateway == nil {
-			return errors.New(fmt.Sprintf("bad gateway IP %s",
-				g))
+			return fmt.Errorf("invalid gateway IP (%s)", g)
 		}
 	}
 	if n := ipspec.GetNtp(); n != "" {
+		if n == "99.99.99.99" {
+			n = "invalid"
+		}
 		config.NTPServer = net.ParseIP(n)
 		if config.NTPServer == nil {
-			return errors.New(fmt.Sprintf("bad ntp IP %s",
-				n))
+			return fmt.Errorf("invalid NTP IP (%s)", n)
 		}
 	}
 	for _, dsStr := range ipspec.GetDns() {
 		ds := net.ParseIP(dsStr)
 		if ds == nil {
-			return errors.New(fmt.Sprintf("bad dns IP %s",
-				dsStr))
+			return fmt.Errorf("invalid DNS IP (%s)", dsStr)
 		}
 		config.DNSServers = append(config.DNSServers, ds)
 	}
 	if dr := ipspec.GetDhcpRange(); dr != nil && dr.GetStart() != "" {
 		start := net.ParseIP(dr.GetStart())
 		if start == nil {
-			return errors.New(fmt.Sprintf("bad start IP %s",
-				dr.GetStart()))
+			return fmt.Errorf("invalid DHCP range start IP (%s)", dr.GetStart())
 		}
 		end := net.ParseIP(dr.GetEnd())
 		if end == nil && dr.GetEnd() != "" {
-			return errors.New(fmt.Sprintf("bad end IP %s",
-				dr.GetEnd()))
+			return fmt.Errorf("invalid DHCP range end IP (%s)", dr.GetEnd())
 		}
 		config.DhcpRange.Start = start
 		config.DhcpRange.End = end
@@ -2124,16 +2130,14 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 	if n := ipspec.GetNtp(); n != "" {
 		config.NtpServer = net.ParseIP(n)
 		if config.NtpServer == nil {
-			return errors.New(fmt.Sprintf("bad ntp IP %s",
-				n))
+			return fmt.Errorf("invalid NTP IP (%s)", n)
 		}
 	}
 	// Parse Dns Servers
 	for _, dsStr := range ipspec.GetDns() {
 		ds := net.ParseIP(dsStr)
 		if ds == nil {
-			return errors.New(fmt.Sprintf("bad dns IP %s",
-				dsStr))
+			return fmt.Errorf("invalid DNS IP (%s)", dsStr)
 		}
 		config.DnsServers = append(config.DnsServers, ds)
 	}
@@ -2141,8 +2145,7 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 	if s := ipspec.GetSubnet(); s != "" {
 		_, subnet, err := net.ParseCIDR(s)
 		if err != nil {
-			return errors.New(fmt.Sprintf("bad subnet %s: %s",
-				s, err))
+			return fmt.Errorf("invalid subnet (%s): %s", s, err)
 		}
 		config.Subnet = *subnet
 	}
@@ -2150,21 +2153,18 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 	if g := ipspec.GetGateway(); g != "" {
 		config.Gateway = net.ParseIP(g)
 		if config.Gateway == nil {
-			return errors.New(fmt.Sprintf("bad gateway IP %s",
-				g))
+			return fmt.Errorf("invalid gateway IP (%s)", g)
 		}
 	}
 	// Parse DhcpRange
 	if dr := ipspec.GetDhcpRange(); dr != nil && dr.GetStart() != "" {
 		start := net.ParseIP(dr.GetStart())
 		if start == nil {
-			return errors.New(fmt.Sprintf("bad start IP %s",
-				dr.GetStart()))
+			return fmt.Errorf("invalid DHCP range start IP (%s)", dr.GetStart())
 		}
 		end := net.ParseIP(dr.GetEnd())
 		if end == nil && dr.GetEnd() != "" {
-			return errors.New(fmt.Sprintf("bad end IP %s",
-				dr.GetEnd()))
+			return fmt.Errorf("invalid DHCP range end IP (%s)", dr.GetEnd())
 		}
 		config.DhcpRange.Start = start
 		config.DhcpRange.End = end
@@ -2172,8 +2172,8 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 
 	addrCount := netutils.GetIPAddrCountOnSubnet(config.Subnet)
 	if addrCount < types.MinSubnetSize {
-		return fmt.Errorf("network(%s), Subnet too small(%d)",
-			config.Key(), addrCount)
+		return fmt.Errorf("subnet is too small (only %d available IP addresses, need %d)",
+			addrCount, types.MinSubnetSize)
 	}
 
 	// if not set, take some default

@@ -124,7 +124,12 @@ func (z *zedrouter) setSelectedUplink(uplinkLogicalLabel string,
 		// Wait for DPC update
 		return err
 	case 1:
-		// OK
+		if ports[0].InvalidConfig {
+			return fmt.Errorf("port %s has invalid config: %s", ports[0].Logicallabel,
+				ports[0].LastError)
+		}
+		// Selected port is OK
+		break
 	default:
 		// Note: soon we will support NI with multiple ports.
 		err := fmt.Errorf("label of selected uplink matches multiple ports (%v)", ports)
@@ -148,7 +153,11 @@ func (z *zedrouter) setSelectedUplink(uplinkLogicalLabel string,
 // selected for network instance.
 func (z *zedrouter) doUpdateNIUplink(uplinkLogicalLabel string,
 	status *types.NetworkInstanceStatus, config types.NetworkInstanceConfig) {
+	z.log.Noticef("HEY! doUpdateNIUplink (%s, %+v) BEGIN", uplinkLogicalLabel, status)
+	defer z.log.Noticef("HEY! doUpdateNIUplink END")
+
 	err := z.setSelectedUplink(uplinkLogicalLabel, status)
+	z.log.Noticef("HEY! setSelectedUplink: %v", err)
 	if err != nil {
 		z.log.Errorf("doUpdateNIUplink(%s) for %s failed: %v", uplinkLogicalLabel,
 			status.UUID, err)
@@ -157,11 +166,12 @@ func (z *zedrouter) doUpdateNIUplink(uplinkLogicalLabel string,
 		return
 	}
 	// Re-check MTUs between the NI and the port.
-	fallbackMTU, conflictErr := z.checkNetworkInstanceMTUConflicts(config)
+	fallbackMTU, conflictErr := z.checkNetworkInstanceMTUConflicts(config, status)
 	if conflictErr == nil && status.MTUConflictErr.HasError() {
 		// MTU conflict was resolved.
 		status.MTUConflictErr.ClearError()
 		status.FallbackMTU = 0
+		z.publishNetworkInstanceStatus(status)
 	}
 	if conflictErr != nil &&
 		conflictErr.Error() != status.MTUConflictErr.Error {

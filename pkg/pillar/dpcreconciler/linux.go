@@ -783,7 +783,7 @@ func (r *LinuxDpcReconciler) updateCurrentRoutes(dpc types.DevicePortConfig) (ch
 		}
 	}
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -877,7 +877,7 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig) dg
 	// Intended content of /etc/resolv.conf
 	dnsServers := make(map[string][]net.IP)
 	for _, port := range dpc.Ports {
-		if !port.IsMgmt || port.IfName == "" {
+		if !port.IsMgmt || port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -924,6 +924,9 @@ func (r *LinuxDpcReconciler) getIntendedNetworkIO(dpc types.DevicePortConfig) dg
 func (r *LinuxDpcReconciler) rebuildMTUMap(dpc types.DevicePortConfig) {
 	r.intfMTU = make(map[string]uint16) // logical label -> MTU
 	for _, port := range dpc.Ports {
+		if port.InvalidConfig {
+			continue
+		}
 		portMTU := port.MTU
 		if portMTU == 0 {
 			portMTU = types.DefaultMTU
@@ -954,7 +957,7 @@ func (r *LinuxDpcReconciler) getIntendedPhysicalIfs(dpc types.DevicePortConfig) 
 	}
 	intendedIfs := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		switch port.L2Type {
@@ -1010,7 +1013,7 @@ func (r *LinuxDpcReconciler) getIntendedLogicalIO(dpc types.DevicePortConfig) dg
 	}
 	intendedIO := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		switch port.L2Type {
@@ -1084,7 +1087,7 @@ func (r *LinuxDpcReconciler) getIntendedAdapters(dpc types.DevicePortConfig) dg.
 	}
 	intendedAdapters := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if !port.IsL3Port || port.IfName == "" {
+		if !port.IsL3Port || port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		if port.WirelessCfg.WType == types.WirelessTypeCellular {
@@ -1128,7 +1131,7 @@ func (r *LinuxDpcReconciler) getIntendedSrcIPRules(dpc types.DevicePortConfig) d
 	}
 	intendedRules := dg.New(graphArgs)
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -1187,7 +1190,7 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig) dg.Gr
 		}
 	}
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -1257,7 +1260,7 @@ type portAddr struct {
 func (r *LinuxDpcReconciler) groupPortAddrs(dpc types.DevicePortConfig) map[string][]portAddr {
 	arpGroups := map[string][]portAddr{}
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		ifIndex, found, err := r.NetworkMonitor.GetInterfaceIndex(port.IfName)
@@ -1450,6 +1453,9 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 		Networks:          []types.WwanNetworkConfig{},
 	}
 	for _, port := range dpc.Ports {
+		if port.InvalidConfig {
+			continue
+		}
 		if port.WirelessCfg.WType != types.WirelessTypeCellular {
 			continue
 		}
@@ -1884,7 +1890,7 @@ func (r *LinuxDpcReconciler) getIntendedACLs(
 	// i.e. these rules are below protoMarkV4Rules/protoMarkV6Rules
 	var dropMarkRules []iptables.Rule
 	for _, port := range dpc.Ports {
-		if port.IfName == "" {
+		if port.IfName == "" || port.InvalidConfig {
 			continue
 		}
 		dropIngressRule := iptables.Rule{

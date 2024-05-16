@@ -127,14 +127,12 @@ func (z *zedrouter) checkNetworkInstanceIPConflicts(
 	return nil
 }
 
-func (z *zedrouter) checkNetworkInstanceMTUConflicts(
-	config types.NetworkInstanceConfig) (fallbackMTU uint16, err error) {
-	status := z.lookupNetworkInstanceStatus(config.Key())
-	if status == nil {
-		err = fmt.Errorf("failed to get status for network instance %s", config.Key())
-		return 0, err
-	}
+func (z *zedrouter) checkNetworkInstanceMTUConflicts(config types.NetworkInstanceConfig,
+	status *types.NetworkInstanceStatus) (fallbackMTU uint16, err error) {
+	z.log.Noticef("HEY! checkNetworkInstanceMTUConflicts BEGIN")
 	uplink := z.getNIUplinkConfig(status)
+	z.log.Noticef("HEY! checkNetworkInstanceMTUConflicts status=%+v uplink=%+v, NI MTU=%d",
+		status, uplink, config.MTU)
 	if uplink.LogicalLabel == "" {
 		// Air-gapped
 		return 0, nil
@@ -148,23 +146,12 @@ func (z *zedrouter) checkNetworkInstanceMTUConflicts(
 	if niMTU == 0 {
 		niMTU = types.DefaultMTU
 	}
-	switch config.Type {
-	case types.NetworkInstanceTypeLocal:
-		if niMTU > uplink.MTU {
-			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the local network "+
-				"instance is higher than the MTU (%d) of the associated port %s. "+
-				"Will use port's MTU instead.",
-				niMTU, uplink.MTU, uplink.LogicalLabel)
-		}
-	case types.NetworkInstanceTypeSwitch:
-		if niMTU != uplink.MTU {
-			return uplink.MTU, fmt.Errorf("MTU (%d) configured for the switch network "+
-				"instance differs from the MTU (%d) of the associated port %s. "+
-				"Will use port's MTU instead.",
-				niMTU, uplink.MTU, uplink.LogicalLabel)
-		}
-	default:
-		return 0, fmt.Errorf("network instance type %d is not supported", config.Type)
+	if niMTU != uplink.MTU {
+		z.log.Noticef("HEY! checkNetworkInstanceMTUConflicts - conflict detected!")
+		return uplink.MTU, fmt.Errorf("MTU (%d) configured for the switch network "+
+			"instance differs from the MTU (%d) of the associated port %s. "+
+			"Will use port's MTU instead.",
+			niMTU, uplink.MTU, uplink.LogicalLabel)
 	}
 	return 0, nil
 }
@@ -243,12 +230,6 @@ func (z *zedrouter) checkNetworkReferencesFromApp(config types.AppNetworkConfig)
 			// We use the AwaitNetworkInstance in AppNetworkStatus that is already present.
 			return false, err
 		}
-		if !netInstStatus.Activated {
-			err := fmt.Errorf("network instance %s needed by app %s/%s is not activated",
-				adapterConfig.Network.String(), config.UUIDandVersion, config.DisplayName)
-			z.log.Error(err)
-			return false, err
-		}
 		if netInstStatus.HasError() && !netInstStatus.EligibleForActivate() {
 			err := fmt.Errorf(
 				"network instance %s needed by app %s/%s is in error state: %s",
@@ -256,6 +237,12 @@ func (z *zedrouter) checkNetworkReferencesFromApp(config types.AppNetworkConfig)
 				netInstStatus.Error)
 			z.log.Error(err)
 			return true, err
+		}
+		if !netInstStatus.Activated {
+			err := fmt.Errorf("network instance %s needed by app %s/%s is not activated",
+				adapterConfig.Network.String(), config.UUIDandVersion, config.DisplayName)
+			z.log.Error(err)
+			return false, err
 		}
 	}
 	return false, nil
