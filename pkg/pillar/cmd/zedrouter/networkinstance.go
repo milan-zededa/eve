@@ -60,10 +60,6 @@ func (z *zedrouter) getNIBridgeConfig(
 			Mask: status.Subnet.Mask,
 		}
 	}
-	mtu := status.MTU
-	if status.MTUConflictErr.HasError() {
-		mtu = status.FallbackMTU
-	}
 	return nireconciler.NIBridge{
 		NI:         status.UUID,
 		BrNum:      status.BridgeNum,
@@ -71,7 +67,7 @@ func (z *zedrouter) getNIBridgeConfig(
 		IPAddress:  ipAddr,
 		Uplink:     z.getNIUplinkConfig(status),
 		IPConflict: status.IPConflictErr.HasError(),
-		MTU:        mtu,
+		MTU:        status.MTU,
 	}
 }
 
@@ -156,40 +152,51 @@ func (z *zedrouter) doUpdateNIUplink(uplinkLogicalLabel string,
 	z.log.Noticef("HEY! doUpdateNIUplink (%s, %+v) BEGIN", uplinkLogicalLabel, status)
 	defer z.log.Noticef("HEY! doUpdateNIUplink END")
 
-	err := z.setSelectedUplink(uplinkLogicalLabel, status)
-	z.log.Noticef("HEY! setSelectedUplink: %v", err)
-	if err != nil {
-		z.log.Errorf("doUpdateNIUplink(%s) for %s failed: %v", uplinkLogicalLabel,
-			status.UUID, err)
-		status.UplinkErr.SetErrorNow(err.Error())
+	// Update associated between the NI and the selected device port.
+	uplinkErr := z.setSelectedUplink(uplinkLogicalLabel, status)
+	z.log.Noticef("HEY! setSelectedUplink: %v", uplinkErr)
+	if uplinkErr == nil && status.UplinkErr.HasError() {
+		// Uplink issue was resolved.
+		status.UplinkErr.ClearError()
 		z.publishNetworkInstanceStatus(status)
-		return
 	}
+	if uplinkErr != nil &&
+		uplinkErr.Error() != status.UplinkErr.Error {
+		// New uplink issue arose or the error has changed.
+		z.log.Errorf("doUpdateNIUplink(%s) for %s failed: %v", uplinkLogicalLabel,
+			status.UUID, uplinkErr)
+		status.UplinkErr.SetErrorNow(uplinkErr.Error())
+		z.publishNetworkInstanceStatus(status)
+	}
+
 	// Re-check MTUs between the NI and the port.
-	fallbackMTU, conflictErr := z.checkNetworkInstanceMTUConflicts(config, status)
-	if conflictErr == nil && status.MTUConflictErr.HasError() {
+	fallbackMTU, mtuErr := z.checkNetworkInstanceMTUConflicts(config, status)
+	if mtuErr == nil && status.MTUConflictErr.HasError() {
 		// MTU conflict was resolved.
 		status.MTUConflictErr.ClearError()
-		status.FallbackMTU = 0
+		if config.MTU == 0 {
+			status.MTU = types.DefaultMTU
+		} else {
+			status.MTU = config.MTU
+		}
 		z.publishNetworkInstanceStatus(status)
 	}
-	if conflictErr != nil &&
-		conflictErr.Error() != status.MTUConflictErr.Error {
+	if mtuErr != nil &&
+		mtuErr.Error() != status.MTUConflictErr.Error {
 		// New MTU conflict arose or the error has changed.
-		z.log.Error(conflictErr)
-		status.MTUConflictErr.SetErrorNow(conflictErr.Error())
-		status.FallbackMTU = fallbackMTU
+		z.log.Error(mtuErr)
+		status.MTUConflictErr.SetErrorNow(mtuErr.Error())
+		status.MTU = fallbackMTU
 		z.publishNetworkInstanceStatus(status)
 	}
+
+	// Apply uplink/MTU changes in the network stack.
 	if status.Activated {
 		z.doUpdateActivatedNetworkInstance(config, status)
 	}
-	if status.UplinkErr.HasError() && err == nil {
-		status.UplinkErr.ClearError()
-		if config.Activate && !status.Activated && status.EligibleForActivate() {
-			z.doActivateNetworkInstance(config, status)
-			z.checkAndRecreateAppNetworks(status.UUID)
-		}
+	if config.Activate && !status.Activated && status.EligibleForActivate() {
+		z.doActivateNetworkInstance(config, status)
+		z.checkAndRecreateAppNetworks(status.UUID)
 	}
 	z.publishNetworkInstanceStatus(status)
 }

@@ -829,11 +829,13 @@ type NetworkInstanceStatus struct {
 	// or another NI.
 	IPConflictErr ErrorAndTime
 
+	// MTU configured for the network instance and app interfaces connected to it.
+	// This can differ from the configured MTU in case it is invalid or conficts
+	// with the device port MTU.
+	MTU uint16
 	// Error set when the MTU configured for NI is in conflict with the MTU configured
 	// for the associated port (e.g. NI MTU is higher than MTU of the uplink port).
 	MTUConflictErr ErrorAndTime
-	// MTU used instead of the configured MTU when there is a conflict.
-	FallbackMTU uint16
 
 	// Decided by local/remote probing
 	SelectedUplinkLogicalLabel string

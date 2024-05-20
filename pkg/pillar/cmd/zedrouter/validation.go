@@ -148,8 +148,8 @@ func (z *zedrouter) checkNetworkInstanceMTUConflicts(config types.NetworkInstanc
 	}
 	if niMTU != uplink.MTU {
 		z.log.Noticef("HEY! checkNetworkInstanceMTUConflicts - conflict detected!")
-		return uplink.MTU, fmt.Errorf("MTU (%d) configured for the switch network "+
-			"instance differs from the MTU (%d) of the associated port %s. "+
+		return uplink.MTU, fmt.Errorf("MTU (%d) configured for the network instance "+
+			"differs from the MTU (%d) of the associated port %s. "+
 			"Will use port's MTU instead.",
 			niMTU, uplink.MTU, uplink.LogicalLabel)
 	}

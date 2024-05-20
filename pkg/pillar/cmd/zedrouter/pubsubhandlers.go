@@ -256,7 +256,11 @@ func (z *zedrouter) handleNetworkInstanceCreate(ctxArg interface{}, key string,
 	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config, &status); err != nil {
 		z.log.Error(err)
 		status.MTUConflictErr.SetErrorNow(err.Error())
-		status.FallbackMTU = fallbackMTU
+		status.MTU = fallbackMTU
+	} else if config.MTU == 0 {
+		status.MTU = types.DefaultMTU
+	} else {
+		status.MTU = config.MTU
 	}
 
 	if config.Activate && status.EligibleForActivate() {
@@ -402,10 +406,11 @@ func (z *zedrouter) handleNetworkInstanceModify(ctxArg interface{}, key string,
 	if fallbackMTU, err := z.checkNetworkInstanceMTUConflicts(config, status); err != nil {
 		z.log.Error(err)
 		status.MTUConflictErr.SetErrorNow(err.Error())
-		status.FallbackMTU = fallbackMTU
+		status.MTU = fallbackMTU
+	} else if config.MTU == 0 {
+		status.MTU = types.DefaultMTU
 	} else {
-		status.MTUConflictErr.ClearError()
-		status.FallbackMTU = 0
+		status.MTU = config.MTU
 	}
 
 	// Handle changed activation status.
