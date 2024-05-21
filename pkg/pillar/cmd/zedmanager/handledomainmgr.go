@@ -132,7 +132,7 @@ func MaybeAddDomainConfig(ctx *zedmanagerContext,
 			dc.VifList[i] = adapter.VifInfo.VifConfig
 			mtuStrList[i] = strconv.Itoa(int(adapter.MTU))
 		}
-		if adapterCount > 0 {
+		if dc.IsOCIContainer() && adapterCount > 0 {
 			dc.ExtraArgs += " mtu=" + strings.Join(mtuStrList, ",")
 		}
 	}
