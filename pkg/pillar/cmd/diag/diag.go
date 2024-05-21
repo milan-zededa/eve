@@ -961,9 +961,9 @@ func printOutput(ctx *diagContext, caller string) {
 		printProxy(ctx, port, ifname)
 		if port.HasError() {
 			if port.InvalidConfig {
-				ctx.ph.Print("ERROR: %s: invalid config: %s", ifname, port.LastError)
+				ctx.ph.Print("ERROR: %s: invalid config: %s\n", ifname, port.LastError)
 			} else {
-				ctx.ph.Print("ERROR: %s: has error: %s", ifname, port.LastError)
+				ctx.ph.Print("ERROR: %s: has error: %s\n", ifname, port.LastError)
 			}
 		}
 

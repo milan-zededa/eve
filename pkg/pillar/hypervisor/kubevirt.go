@@ -252,6 +252,7 @@ func (ctx kubevirtContext) CreateVMIConfig(domainName string, config types.Domai
 	}
 
 	// Set Network
+	// TODO: MTU?
 	intfs := make([]v1.Interface, len(netSelections))
 	nads := make([]v1.Network, len(netSelections))
 
@@ -303,6 +304,7 @@ func (ctx kubevirtContext) CreateVMIConfig(domainName string, config types.Domai
 				scratchImage := "docker.io/lfedge/eve-external-boot-image:" + string(eveRelease)
 				kernelPath := "/kernel"
 				initrdPath := "/runx-initrd"
+				// TODO: mtu args
 
 				addKernelBootContainer(&vmi.Spec, scratchImage, kernelArgs, kernelPath, initrdPath)
 

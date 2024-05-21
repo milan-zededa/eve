@@ -121,6 +121,15 @@ func (c *PhysIfConfigurator) updateMTU(ifName string, mtu uint16) error {
 		c.Log.Error(err)
 		return err
 	}
+	if physLink.Type() == "bridge" {
+		// Most likely renamed to "k" + ifName by the Adapter.
+		physLink, err = netlink.LinkByName("k" + ifName)
+		if err != nil {
+			err = fmt.Errorf("failed to get physical interface k%s link: %v", ifName, err)
+			c.Log.Error(err)
+			return err
+		}
+	}
 	if physLink.Attrs().MTU != int(mtu) {
 		err = netlink.LinkSetMTU(physLink, int(mtu))
 		if err != nil {

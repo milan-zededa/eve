@@ -48,6 +48,7 @@ type Veth struct {
 	AppIfMAC net.HardwareAddr
 	// AppIPs : IP addresses assigned to Veth on the app side.
 	AppIPs []*net.IPNet
+	// TODO: MTU
 }
 
 // Name returns the physical interface name on the host side.

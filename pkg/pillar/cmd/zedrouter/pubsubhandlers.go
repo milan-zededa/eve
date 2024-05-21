@@ -407,10 +407,13 @@ func (z *zedrouter) handleNetworkInstanceModify(ctxArg interface{}, key string,
 		z.log.Error(err)
 		status.MTUConflictErr.SetErrorNow(err.Error())
 		status.MTU = fallbackMTU
-	} else if config.MTU == 0 {
-		status.MTU = types.DefaultMTU
 	} else {
-		status.MTU = config.MTU
+		status.MTUConflictErr.ClearError()
+		if config.MTU == 0 {
+			status.MTU = types.DefaultMTU
+		} else {
+			status.MTU = config.MTU
+		}
 	}
 
 	// Handle changed activation status.

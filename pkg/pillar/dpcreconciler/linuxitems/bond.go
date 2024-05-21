@@ -218,6 +218,16 @@ func (c *BondConfigurator) Modify(ctx context.Context, oldItem, newItem depgraph
 		c.Log.Error(err)
 		return err
 	}
+	if bondLink.Type() == "bridge" {
+		// Most likely renamed to "k" + ifName by the Adapter.
+		bondLink, err = netlink.LinkByName("k" + oldBondCfg.IfName)
+		if err != nil {
+			err = fmt.Errorf("failed to get bond interface k%s link: %v",
+				oldBondCfg.IfName, err)
+			c.Log.Error(err)
+			return err
+		}
+	}
 	if bondLink.Type() != "bond" {
 		err = fmt.Errorf("interface %s is not Bond", oldBondCfg.IfName)
 		c.Log.Error(err)

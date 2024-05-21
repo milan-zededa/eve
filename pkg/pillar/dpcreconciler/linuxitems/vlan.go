@@ -175,6 +175,16 @@ func (c *VlanConfigurator) Modify(_ context.Context, _, newItem depgraph.Item) (
 		c.Log.Error(err)
 		return err
 	}
+	if vlanLink.Type() == "bridge" {
+		// Most likely renamed to "k" + ifName by the Adapter.
+		vlanLink, err = netlink.LinkByName("k" + vlan.IfName)
+		if err != nil {
+			err = fmt.Errorf("failed to get VLAN sub-interface k%s link: %v",
+				vlan.IfName, err)
+			c.Log.Error(err)
+			return err
+		}
+	}
 	mtu := vlan.GetMTU()
 	if vlanLink.Attrs().MTU != int(mtu) {
 		err = netlink.LinkSetMTU(vlanLink, int(mtu))
