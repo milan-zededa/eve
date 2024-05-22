@@ -1162,6 +1162,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 						AppIfName: vif.PodVIF.GuestIfName,
 						AppIfMAC:  vif.GuestIfMAC,
 						AppIPs:    appIPs,
+						MTU:       ni.bridge.MTU,
 					},
 				},
 			}, nil)
