@@ -1204,8 +1204,8 @@ func (z *zedrouter) publishNetworkInstanceMetricsAll(nms *types.NetworkMetrics) 
 	for _, ni := range niList {
 		status := ni.(types.NetworkInstanceStatus)
 		config := z.lookupNetworkInstanceConfig(status.Key())
-		if config == nil || !status.Activated {
-			// NI was deleted or is inactive - skip metrics publishing.
+		if config == nil || (!status.Activated || status.IPConflictErr.HasError()) {
+			// NI was deleted or is inactive/dysfunctional - skip metrics publishing.
 			continue
 		}
 		netMetrics := z.createNetworkInstanceMetrics(&status, nms)
