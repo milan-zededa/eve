@@ -35,6 +35,7 @@ type NetworkPortStatus struct {
 	Alias          string // From SystemAdapter's alias
 	IsMgmt         bool   // Used to talk to controller
 	IsL3Port       bool   // True if port is applicable to operate on the network layer
+	InvalidConfig  bool   // True if port has invalid config and should not be used
 	Cost           uint8
 	Dhcp           DhcpType
 	Type           NetworkType // IPv4 or IPv6 or Dual stack
@@ -210,7 +211,9 @@ func (status DeviceNetworkStatus) MostlyEqual(status2 DeviceNetworkStatus) bool 
 			p1.Alias != p2.Alias ||
 			p1.IsMgmt != p2.IsMgmt ||
 			p1.IsL3Port != p2.IsL3Port ||
-			p1.Cost != p2.Cost {
+			p1.InvalidConfig != p2.InvalidConfig ||
+			p1.Cost != p2.Cost ||
+			p1.MTU != p2.MTU {
 			return false
 		}
 		if p1.Dhcp != p2.Dhcp ||
