@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/godbus/dbus/v5 v5.1.0
-	github.com/lf-edge/eve/pkg/pillar v0.0.0-20240417234153-53dbc10640ca
+	github.com/lf-edge/eve/pkg/pillar v0.0.0-20240508124549-1f46aaeaeecc
 	github.com/miekg/dns v1.1.55
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tatsushid/go-fastping v0.0.0-20160109021039-d7bb493dee3e
@@ -39,3 +39,5 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+replace github.com/lf-edge/eve/pkg/pillar => ../../pillar
