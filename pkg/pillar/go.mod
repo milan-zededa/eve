@@ -29,7 +29,7 @@ require (
 	github.com/jaypipes/ghw v0.8.0
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.5.0
 	github.com/lf-edge/edge-containers v0.0.0-20240207093504-5dfda0619b80
-	github.com/lf-edge/eve-api/go v0.0.0-20240607171551-ab08ae4a8124
+	github.com/lf-edge/eve-api/go v0.0.0-20240611150039-3fcdc06267ae
 	github.com/lf-edge/eve-libs v0.0.0-20240614221125-6913ec4213f9
 	github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d
 	github.com/lf-edge/go-qemu v0.0.0-20231121152149-4c467eda0c56
@@ -120,7 +120,7 @@ require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
@@ -249,3 +249,5 @@ replace (
 	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.26.3
 	k8s.io/sample-controller => k8s.io/sample-controller v0.26.3
 )
+
+replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20240719103207-035ccb06c345
