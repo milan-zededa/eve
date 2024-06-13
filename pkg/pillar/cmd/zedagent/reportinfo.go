@@ -645,7 +645,7 @@ func PublishDeviceInfoToZedCloud(ctx *zedagentContext, dest destinationBitset) {
 	// We report the snapshot capability despite the fact that we support snapshots only
 	// for file-based volumes. If a controller tries to make a snapshot of ZFS-based volume
 	// device returns a runtime error.
-	ReportDeviceInfo.ApiCapability = info.APICapability_API_CAPABILITY_NETWORK_INSTANCE_ROUTING
+	ReportDeviceInfo.ApiCapability = info.APICapability_API_CAPABILITY_ADAPTER_USER_LABELS
 
 	// Report if there is a local override of profile
 	if ctx.getconfigCtx.sideController.currentProfile !=
@@ -1005,9 +1005,9 @@ func encodeSystemAdapterInfo(ctx *zedagentContext) *info.SystemAdapterInfo {
 			}
 			if i == dpcl.CurrentIndex {
 				// For the currently used DPC we publish the status (DeviceNetworkStatus).
-				portStatus := deviceNetworkStatus.GetPortsByLogicallabel(p.Logicallabel)
-				if len(portStatus) == 1 {
-					dps.Ports[j] = encodeNetworkPortStatus(ctx, portStatus[0], p.NetworkUUID)
+				portStatus := deviceNetworkStatus.LookupPortByLogicallabel(p.Logicallabel)
+				if portStatus != nil {
+					dps.Ports[j] = encodeNetworkPortStatus(ctx, portStatus, p.NetworkUUID)
 					continue
 				}
 			}

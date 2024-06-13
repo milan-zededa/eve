@@ -320,9 +320,10 @@ type ACE struct {
 
 // ACEMatch determines which traffic is matched by a given ACE.
 // The Type can be "ip" or "host" (aka domain name), "eidset", "protocol",
-// "fport", or "lport" for now. The ip and host matches the remote IP/hostname.
+// "fport", "lport" or "adapter" for now. The "ip" and "host" matches the remote IP/hostname.
 // The host matching is suffix-matching thus zededa.net matches *.zededa.net.
-// XXX Need "interface"... e.g. "uplink" or "eth1"? Implicit in network used?
+// "adapter" matches devices ports by user-configured or EVE-assigned shared port
+// labels and applies the ACE only to flows transmitted through them.
 // For now the matches are bidirectional.
 // XXX Add directionality? Different rate limits in different directions?
 // Value is always a string.
@@ -454,7 +455,7 @@ type NetworkInstanceMetrics struct {
 	Type           NetworkInstanceType
 	BridgeName     string
 	NetworkMetrics NetworkMetrics
-	ProbeMetrics   ProbeMetrics
+	ProbeMetrics   []ProbeMetrics
 	VlanMetrics    VlanMetrics
 }
 
@@ -464,19 +465,25 @@ type VlanMetrics struct {
 	VlanCounts    map[uint32]uint32
 }
 
-// ProbeMetrics - NI probe metrics
+// ProbeMetrics - metrics published for a NI multipath route with probing-based
+// selection of the output port.
 type ProbeMetrics struct {
-	SelectedUplinkIntf string             // the uplink interface that probing picked
+	// Address of the destination network for which probing is used to select
+	// the output port.
+	DstNetwork string
+	// Logical label of the currently selected output port for the route.
+	SelectedPort       string
+	SelectedPortIfName string             // interface name of the port that probing picked
 	RemoteEndpoints    []string           // remote IP/URL addresses used for probing
 	LocalPingIntvl     uint32             // local ping interval in seconds
 	RemotePingIntvl    uint32             // remote probing interval in seconds
-	UplinkCount        uint32             // number of possible uplink interfaces
-	IntfProbeStats     []ProbeIntfMetrics // per dom0 intf uplink probing metrics
+	PortCount          uint32             // number of ports included in probing
+	IntfProbeStats     []ProbeIntfMetrics // metrics for all ports included in probing
 }
 
-// ProbeIntfMetrics - per dom0 network uplink interface probing
+// ProbeIntfMetrics - probe metrics for a device port (reported for a given NI)
 type ProbeIntfMetrics struct {
-	IntfName        string   // dom0 uplink interface name
+	IntfName        string   // interface name of the probed device port
 	NexthopIPs      []net.IP // interface local next-hop address(es) used for probing
 	NexthopUP       bool     // Is local next-hop in UP status
 	RemoteUP        bool     // Is remote endpoint in UP status
@@ -647,9 +654,11 @@ type NetworkInstanceConfig struct {
 	// Activate - Activate the config.
 	Activate bool
 
-	// PortLogicalLabel - references port(s) from DevicePortConfig.
-	// Can be a specific logicallabel for an interface, or a tag like "uplink"
-	PortLogicalLabel string
+	// PortLabel references port(s) from DevicePortConfig to use for external
+	// connectivity.
+	// Can be a specific logicallabel matching a single port, or a shared label,
+	// such as "uplink", potentially matching multiple device ports.
+	PortLabel string
 
 	// IP configuration for the Application
 	IpType          AddressType
@@ -675,6 +684,67 @@ type NetworkInstanceConfig struct {
 type IPRoute struct {
 	DstNetwork *net.IPNet
 	Gateway    net.IP
+	// Output device port for the routed traffic.
+	// Either a single NI port referenced by its name (SystemAdapter.Name, aka logical label)
+	// or an adapter shared-label matching zero or more NI ports (multipath routing).
+	// Not used when gateway references one of the applications connected to the NI.
+	OutputPortLabel string
+	// Probe remote endpoint to determine connectivity status of each port and pick one
+	// with a working connectivity (and known gateway IP) for the route (preferring
+	// the currently used one if any).
+	// Provides automatic fail-over between ports.
+	// If OutputPortLabel is not defined or references only a single port (e.g. directly
+	// by the logical label), probing is skipped (nothing to fail-over to anyway).
+	PortProbe NIPortProbe
+	// When EVE is deciding which port to use for multipath route and multiple ports have
+	// working connectivity (or probing is disabled), port can be selected based on the cost
+	// If this option is enabled, EVE will prefer ports with lower costs.
+	PreferLowerCost bool
+	// When EVE is deciding which port to use for multipath route and there are multiple
+	// candidates among cellular modems, it might make sense to consider the current
+	// cellular network signal strength. If this option is enabled, EVE will prefer
+	// cellular ports with better signal (only among cellular ports).
+	PreferStrongerWwanSignal bool
+}
+
+// ConnectivityProbeMethod -  method to use to determine the connectivity status of a port.
+type ConnectivityProbeMethod uint8
+
+const (
+	// ConnectivityProbeMethodNone : connectivity probing is disabled.
+	ConnectivityProbeMethodNone ConnectivityProbeMethod = iota
+	// ConnectivityProbeMethodICMP : use ICMP ping against the probed endpoint to determine
+	// the connectivity status.
+	ConnectivityProbeMethodICMP
+	// ConnectivityProbeMethodTCP : try to establish TCP connection with the probed endpoint
+	// to determine the connectivity status.
+	ConnectivityProbeMethodTCP
+)
+
+// ConnectivityProbe : configuration for user-defined connectivity-testing probe.
+type ConnectivityProbe struct {
+	// Method to use to determine the connectivity status.
+	Method ConnectivityProbeMethod
+	// ProbeHost is either IP or hostname.
+	ProbeHost string
+	// ProbePort is required for L4 probing methods (e.g. CUSTOM_PROBE_METHOD_TCP).
+	ProbePort uint16
+}
+
+// NIPortProbe is used to determine connectivity status of a port to decide if it is suitable
+// for the default route of a network instance.
+type NIPortProbe struct {
+	// EVE uses ICMP ping against the port's gateway IP to determine connectivity status.
+	// User can disable this probe method. This is typically needed when the gateway router
+	// is configured to drop/ignore ICMP pings and therefore this probe would return false
+	// negatives.
+	EnabledGwPing bool
+	// Ports exceeding this cost will have the gateway probing disabled to reduce
+	// traffic generated by probing (only less-frequent custom_probe will be performed).
+	GwPingMaxCost uint8
+	// User-defined method to use to determine the port connectivity status.
+	// Zedrouter runs this additionally to gateway pings (unless EnabledGwPing is false).
+	UserDefinedProbe ConnectivityProbe
 }
 
 // IsDefaultRoute returns true if this is a default route, i.e. matches all destinations.
@@ -753,47 +823,27 @@ func (config *NetworkInstanceConfig) IsIPv6() bool {
 // Even if a network instance is eligible for probing as determined by this method,
 // the actual process of connectivity probing may still be inactive if there are
 // no uplink ports available that match the label.
+// TODO: remove this
 func (config *NetworkInstanceConfig) WithUplinkProbing() bool {
 	switch config.Type {
 	case NetworkInstanceTypeLocal:
-		return IsSharedPortLabel(config.PortLogicalLabel)
+		return IsEveDefinedPortLabel(config.PortLabel)
 	default:
 		return false
 	}
 }
 
-// IsUsingUplinkBridge returns true if the network instance is using the bridge
-// created (by NIM) for the uplink port, instead of creating its own bridge.
-func (config *NetworkInstanceConfig) IsUsingUplinkBridge() bool {
+// IsUsingPortBridge returns true if the network instance is using the bridge
+// created (by NIM) for a device port, instead of creating its own bridge.
+func (config *NetworkInstanceConfig) IsUsingPortBridge() bool {
 	switch config.Type {
 	case NetworkInstanceTypeSwitch:
-		airGapped := config.PortLogicalLabel == ""
+		// TODO: what if matches no ports
+		airGapped := config.PortLabel == ""
 		return !airGapped
 	default:
 		return false
 	}
-}
-
-const (
-	// UplinkLabel references all management interfaces.
-	UplinkLabel = "uplink"
-	// FreeUplinkLabel references all management interfaces with 0 cost.
-	FreeUplinkLabel = "freeuplink"
-)
-
-// IsSharedPortLabel : returns true if the logical label references multiple
-// ports.
-// Currently used labels are:
-//   - "uplink": any management interface
-//   - "freeuplink": any management interface with 0 cost
-func IsSharedPortLabel(label string) bool {
-	switch label {
-	case UplinkLabel:
-		return true
-	case FreeUplinkLabel:
-		return true
-	}
-	return false
 }
 
 type ChangeInProgressType int32
@@ -840,8 +890,17 @@ type NetworkInstanceStatus struct {
 	MTUConflictErr ErrorAndTime
 
 	// Decided by local/remote probing
-	SelectedUplinkLogicalLabel string
-	SelectedUplinkIntfName     string
+	SelectedUplinkLogicalLabel string // TODO: remove
+	SelectedUplinkIntfName     string // TODO: remove
+
+	// Labels of device ports used for external connectivity.
+	// The list is empty for air-gapped network instances.
+	Ports []string
+	// List of NTP servers published to applications connected to this network instance.
+	// This includes the NTP server from the NI config (if any) and all NTP servers
+	// associated with ports used by the network instance for external connectivity.
+	NTPServers []net.IP
+	IPRoutes   []IPRouteInfo
 
 	// True if uplink probing is running
 	RunningUplinkProbing bool
@@ -855,6 +914,21 @@ type NetworkInstanceStatus struct {
 	// Final error reported for the NetworkInstance to the controller.
 	// It is a combination of all possible errors stored across *Err attributes.
 	ErrorAndTime
+}
+
+// IPRouteInfo contains info about a single IP route.
+// It is published to controller as part of ZInfoNetworkInstance.
+type IPRouteInfo struct {
+	DstNetwork *net.IPNet
+	Gateway    net.IP
+	// Logical label of the output device port for the routed traffic.
+	// Empty if the gateway is IP address of one of the applications.
+	// In that case, GatewayApp is defined instead.
+	OutputPort string
+	// UUID of the application used as the gateway for the route.
+	// Empty if the gateway is external (not one of the apps but outside the device).
+	// In that case, OutputPort is defined instead.
+	GatewayApp uuid.UUID
 }
 
 // LogCreate :

@@ -375,7 +375,7 @@ func TestGetPortByIfName(t *testing.T) {
 	}
 	for testname, test := range testMatrix {
 		t.Logf("Running test case %s", testname)
-		value := test.deviceNetworkStatus.GetPortByIfName(test.port)
+		value := test.deviceNetworkStatus.LookupPortByIfName(test.port)
 		assert.Equal(t, test.expectedValue, *value)
 	}
 }

@@ -729,7 +729,7 @@ func (n *nim) handleDPCFileModify(_ interface{}, key string, configArg, _ interf
 
 func (n *nim) handleDPCImpl(key string, configArg interface{}, fromFile bool) {
 	dpc := configArg.(types.DevicePortConfig)
-	dpc.DoSanitize(n.Log, true, true, key, true, true)
+	dpc.DoSanitize(n.Log, true, true, key, true, true, true)
 	if fromFile {
 		// Use sha to determine if file has already been ingested
 		filename := filepath.Join(types.TmpDirname, "DevicePortConfig",
@@ -759,7 +759,7 @@ func (n *nim) handleDPCImpl(key string, configArg interface{}, fromFile bool) {
 
 func (n *nim) handleDPCDelete(_ interface{}, key string, configArg interface{}) {
 	dpc := configArg.(types.DevicePortConfig)
-	dpc.DoSanitize(n.Log, false, true, key, true, true)
+	dpc.DoSanitize(n.Log, false, true, key, true, true, true)
 	n.dpcManager.DelDPC(dpc)
 }
 
@@ -908,7 +908,7 @@ func (n *nim) ingestDevicePortConfigFile(oldDirname string, newDirname string, n
 		return
 	}
 	key := strings.TrimSuffix(name, ".json")
-	dpc.DoSanitize(n.Log, true, true, key, true, true)
+	dpc.DoSanitize(n.Log, true, true, key, true, true, true)
 
 	// Use sha to determine if file has already been ingested
 	basename := filepath.Base(filename)
@@ -1030,7 +1030,7 @@ func (n *nim) makeLastResortDPC() (types.DevicePortConfig, error) {
 			},
 		}
 		dns := n.dpcManager.GetDNS()
-		portStatus := dns.GetPortByIfName(ifName)
+		portStatus := dns.LookupPortByIfName(ifName)
 		if portStatus != nil {
 			port.WirelessCfg = portStatus.WirelessCfg
 		}
@@ -1089,7 +1089,7 @@ func (n *nim) processInterfaceChange(ifChange netmonitor.IfChange) {
 		return
 	}
 	includePort := n.includeLastResortPort(ifChange.Attrs)
-	port := n.lastResort.GetPortByIfName(ifChange.Attrs.IfName)
+	port := n.lastResort.LookupPortByIfName(ifChange.Attrs.IfName)
 	if port == nil && includePort {
 		n.publishLastResortDPC(fmt.Sprintf("interface %s should be included",
 			ifChange.Attrs.IfName))
