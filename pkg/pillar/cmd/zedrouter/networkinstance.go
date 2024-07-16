@@ -144,8 +144,7 @@ func (z *zedrouter) updateNIPorts(status *types.NetworkInstanceStatus) (
 		netutils.EqualIPs)
 	status.NTPServers = newNTPServers
 	if status.PortLabel != "" && len(status.Ports) == 0 {
-		// This is potentially a transient state, wait for DPC update
-		// and uplink probing eventually finding a suitable uplink port.
+		// This is potentially a transient state, wait for DNS update.
 		return changed, fmt.Errorf("no port is matching label '%s'", status.PortLabel)
 	}
 	for _, port := range newPorts {
@@ -206,16 +205,20 @@ func (z *zedrouter) updateNIRoutes(status *types.NetworkInstanceStatus,
 				PreferStrongerWwanSignal: false,
 			})
 		default:
-			newRoutes = append(newRoutes, types.IPRouteConfig{
-				DstNetwork:      anyDst,
-				OutputPortLabel: status.PortLabel,
-				PortProbe: types.NIPortProbe{
-					EnabledGwPing: true,
-					GwPingMaxCost: 0,
-				},
-				PreferLowerCost:          true,
-				PreferStrongerWwanSignal: false,
-			})
+			// XXX We could improve this condition and check if there are multiple
+			// ports which actually have gateway IP assigned.
+			if len(status.Ports) > 1 {
+				newRoutes = append(newRoutes, types.IPRouteConfig{
+					DstNetwork:      anyDst,
+					OutputPortLabel: status.PortLabel,
+					PortProbe: types.NIPortProbe{
+						EnabledGwPing: true,
+						GwPingMaxCost: 0,
+					},
+					PreferLowerCost:          true,
+					PreferStrongerWwanSignal: false,
+				})
+			}
 		}
 	}
 	// Remove or update existing routes.

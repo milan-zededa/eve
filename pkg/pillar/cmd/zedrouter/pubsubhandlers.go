@@ -133,6 +133,12 @@ func (z *zedrouter) handleDNSImpl(ctxArg interface{}, key string,
 			niStatus.PortErr.SetErrorNow(portErr.Error())
 		}
 
+		if changedPorts {
+			// Changing the number of ports may affect if a multi-path default route
+			// is needed or not.
+			_ = z.updateNIRoutes(&niStatus, false)
+		}
+
 		// Re-check MTUs between the NI and the selected ports.
 		mtuToUse, mtuErr := z.checkNetworkInstanceMTUConflicts(*niConfig, &niStatus)
 		niStatus.MTU = mtuToUse
