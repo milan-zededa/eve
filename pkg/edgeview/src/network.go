@@ -50,6 +50,9 @@ type intfIP struct {
 	recvBytes   int64
 }
 
+// Used as a constant.
+var emptyUUID = uuid.UUID{}
+
 func runNetwork(netw string) {
 	opts, err := checkOpts(netw, netopts)
 	if err != nil {
@@ -186,17 +189,18 @@ func doAppNet(status, appstr string, isSummary bool) string {
 		fmt.Printf("\n = bridge: %s, VIF: %s, VIF IP: %v, VIF MAC: %s\n",
 			item.Bridge, item.Vif, item.AllocatedIPv4Addr, item.Mac)
 
-		// TODO
-		if niStatus.SelectedUplinkLogicalLabel != "" {
-			var uplinkIPs []net.IP
-			port := deviceNetStatus.GetPortsByLogicallabel(niStatus.SelectedUplinkLogicalLabel)
-			if len(port) == 1 {
-				for _, addrInfo := range port[0].AddrInfoList {
-					uplinkIPs = append(uplinkIPs, addrInfo.Addr)
+		if len(niStatus.Ports) > 0 {
+			for _, portLL := range niStatus.Ports {
+				var portIPs []net.IP
+				port := deviceNetStatus.LookupPortByLogicallabel(portLL)
+				if port != nil {
+					for _, addrInfo := range port.AddrInfoList {
+						portIPs = append(portIPs, addrInfo.Addr)
+					}
+					fmt.Printf("\n - port: %s, IPs: %v\n",
+						portLL, portIPs)
 				}
 			}
-			fmt.Printf("\n - uplink port: %s, IPs: %v\n",
-				niStatus.SelectedUplinkLogicalLabel, uplinkIPs)
 		}
 
 		if isSummary {
@@ -272,18 +276,38 @@ func doAppNet(status, appstr string, isSummary bool) string {
 				niStatus.DhcpRange.Start, niStatus.DhcpRange.End)
 			fmt.Printf("   DNS servers: %v\n", niStatus.DnsServers)
 		}
-		fmt.Printf("   current uplink: %s (interface: %s)\n",
-			niStatus.SelectedUplinkLogicalLabel, niStatus.SelectedUplinkIntfName)
-		if niStatus.RunningUplinkProbing {
-			for _, p := range niMetrics.ProbeMetrics.IntfProbeStats {
-				upStatus := "DOWN"
-				if p.NexthopUP && p.RemoteUP {
-					upStatus = "UP"
+		for _, route := range niStatus.CurrentRoutes {
+			dstNet := route.DstNetwork.String()
+			if route.GatewayApp != emptyUUID {
+				fmt.Printf("   - route dst: %s, gw app: %s\n",
+					route.DstNetwork, route.GatewayApp)
+			} else {
+				fmt.Printf("   - route dst: %s, port: %s\n",
+					dstNet, route.OutputPort)
+			}
+			for _, routeStatus := range niStatus.IntendedRoutes {
+				if routeStatus.DstNetwork.String() != dstNet {
+					continue
 				}
-				fmt.Printf("    %s probe status: %s, "+
-					"local success: %d, remote success: %d, remote latency: %d msec\n",
-					p.IntfName, upStatus, p.NexthopUPCnt, p.RemoteUPCnt,
-					p.LatencyToRemote)
+				if !routeStatus.RunningPortProbing {
+					continue
+				}
+				for _, probeMetrics := range niMetrics.ProbeMetrics {
+					if probeMetrics.DstNetwork != dstNet {
+						continue
+					}
+					for _, intfMetrics := range probeMetrics.IntfProbeStats {
+						upStatus := "DOWN"
+						if intfMetrics.NexthopUP && intfMetrics.RemoteUP {
+							upStatus = "UP"
+						}
+						fmt.Printf("       %s probe status: %s, "+
+							"local success: %d, remote success: %d, remote latency: %d msec\n",
+							intfMetrics.IntfName, upStatus, intfMetrics.NexthopUPCnt,
+							intfMetrics.RemoteUPCnt, intfMetrics.LatencyToRemote)
+					}
+					break
+				}
 			}
 		}
 		fmt.Printf("\n")

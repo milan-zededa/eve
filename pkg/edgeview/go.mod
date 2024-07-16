@@ -2,8 +2,6 @@ module github.com/lf-edge/eve/pkg/edgeview
 
 go 1.21
 
-toolchain go1.21.8
-
 require (
 	github.com/coreos/go-semver v0.3.1
 	github.com/gorilla/websocket v1.5.0
