@@ -186,6 +186,7 @@ func doAppNet(status, appstr string, isSummary bool) string {
 		fmt.Printf("\n = bridge: %s, VIF: %s, VIF IP: %v, VIF MAC: %s\n",
 			item.Bridge, item.Vif, item.AllocatedIPv4Addr, item.Mac)
 
+		// TODO
 		if niStatus.SelectedUplinkLogicalLabel != "" {
 			var uplinkIPs []net.IP
 			port := deviceNetStatus.GetPortsByLogicallabel(niStatus.SelectedUplinkLogicalLabel)
