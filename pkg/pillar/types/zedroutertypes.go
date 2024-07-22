@@ -675,6 +675,16 @@ type NetworkInstanceConfig struct {
 	PropagateConnRoutes bool
 	StaticRoutes        []IPRouteConfig
 
+	// Enable flow logging for this network instance.
+	// If enabled, EVE periodically captures metadata about all application TCP and UDP flows,
+	// as well DNS queries.
+	// By default, this feature is disabled. This is because it may potentially produce
+	// a large amount of data, which is then uploaded to the controller. Another drawback
+	// of flow-logging is that the iptables rules that EVE installs for network instances
+	// are considerably more complicated because of this feature and thus introduce
+	// additional packet processing overhead.
+	EnableFlowlog bool
+
 	// Any errors from the parser
 	// ErrorAndTime provides SetErrorNow() and ClearError()
 	ErrorAndTime

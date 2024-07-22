@@ -66,6 +66,17 @@ func (lc *LinuxCollector) collectFlows() (flows []types.IPFlow) {
 	var timeoutedFlows []flowRec
 	var totalFlow int
 
+	var flowlogEnabled bool
+	for _, niInfo := range lc.nis {
+		if niInfo.config.EnableFlowlog {
+			flowlogEnabled = true
+			break
+		}
+	}
+	if !flowlogEnabled {
+		return nil
+	}
+
 	// Get IPv4/v6 conntrack table flows
 	protocols := [2]netlink.InetFamily{syscall.AF_INET, syscall.AF_INET6}
 	for _, proto := range protocols {
@@ -89,6 +100,11 @@ func (lc *LinuxCollector) collectFlows() (flows []types.IPFlow) {
 
 	// Sort flows by VIFs.
 	for _, niInfo := range lc.nis {
+		if !niInfo.config.EnableFlowlog {
+			niInfo.ipv4DNSReqs = nil
+			niInfo.ipv6DNSReqs = nil
+			continue
+		}
 		var dnsReqs []dnsReq
 		dnsReqs = append(dnsReqs, niInfo.ipv4DNSReqs...)
 		dnsReqs = append(dnsReqs, niInfo.ipv6DNSReqs...)
@@ -476,7 +492,7 @@ func (lc *LinuxCollector) processCapturedPacket(
 			}
 			return lc.processDADProbe(niInfo, packet)
 		}
-		if dnslayer != nil {
+		if dnslayer != nil && niInfo.config.EnableFlowlog {
 			lc.processDNSPacketInfo(niInfo, packet)
 		}
 	} else if niInfo.config.Type == types.NetworkInstanceTypeSwitch &&
