@@ -469,6 +469,7 @@ var (
 	ni1Config = types.NetworkInstanceConfig{
 		UUIDandVersion: ni1UUID,
 		DisplayName:    "ni1",
+		PortLabel:      "ethernet0",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV4,
 		Subnet:         deref(ipAddressWithPrefix("10.10.10.0/24")),
@@ -506,6 +507,7 @@ var (
 	ni2Config = types.NetworkInstanceConfig{
 		UUIDandVersion: ni2UUID,
 		DisplayName:    "ni2",
+		PortLabel:      "ethernet1",
 		Type:           types.NetworkInstanceTypeSwitch,
 		IpType:         types.AddressTypeNone,
 	}
@@ -529,6 +531,7 @@ var (
 	ni3Config = types.NetworkInstanceConfig{
 		UUIDandVersion: ni3UUID,
 		DisplayName:    "ni3",
+		PortLabel:      "ethernet2",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV6,
 		Subnet:         deref(ipAddressWithPrefix("2001::1111:0000/112")),
@@ -573,6 +576,7 @@ var (
 	ni4Config = types.NetworkInstanceConfig{
 		UUIDandVersion: ni4UUID,
 		DisplayName:    "ni4",
+		PortLabel:      "ethernet2",
 		Type:           types.NetworkInstanceTypeSwitch,
 		IpType:         types.AddressTypeNone,
 	}
@@ -596,6 +600,7 @@ var (
 	ni5Config = types.NetworkInstanceConfig{
 		UUIDandVersion: ni5UUID,
 		DisplayName:    "ni5",
+		PortLabel:      "shopfloor",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV4,
 		Subnet:         deref(ipAddressWithPrefix("10.10.20.0/24")),
