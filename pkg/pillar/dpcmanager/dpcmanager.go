@@ -350,9 +350,13 @@ func (m *DpcManager) run(ctx context.Context) {
 				}
 				m.Log.Noticef("Crucial port %s changed", ifName)
 				newAttrs := ev.Attrs
-				m.dpcVerify.crucialIfs[ifName] = newAttrs
 				prevAttrs, known := m.dpcVerify.crucialIfs[ifName]
-				if !known ||
+				if ev.Deleted {
+					delete(m.dpcVerify.crucialIfs, ifName)
+				} else {
+					m.dpcVerify.crucialIfs[ifName] = newAttrs
+				}
+				if !known || ev.Added || ev.Deleted ||
 					prevAttrs.AdminUp != newAttrs.AdminUp ||
 					prevAttrs.LowerUp != newAttrs.LowerUp ||
 					prevAttrs.Enslaved != newAttrs.Enslaved ||

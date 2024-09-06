@@ -3191,7 +3191,10 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 			return changed, err
 		}
 	}
-	if changed && ib.KeepInHost && ib.UsedByUUID == nilUUID && ib.IsPCIBack {
+	// Try to bring the port back from PCIBack if it was newly added to the device
+	// network configuration or if the previous attempt failed.
+	if (changed || ib.Error != "") &&
+		ib.KeepInHost && ib.UsedByUUID == nilUUID && ib.IsPCIBack {
 		log.Functionf("updatePortAndPciBackIoMember(%d, %s, %s) take back from pciback",
 			ib.Type, ib.Phylabel, ib.AssignmentGroup)
 		if ib.PciLong != "" {
@@ -3205,9 +3208,17 @@ func updatePortAndPciBackIoMember(ctx *domainContext, ib *types.IoBundle, isPort
 				return changed, err
 			}
 			if ib.IsPort {
-				// Seems like like no risk for race; when we return
+				// Seems like no risk for race; when we return
 				// from above the driver has been attached and
 				// any ifname has been registered.
+				// Actually, we have seen rare cases where it took longer for the driver
+				// to initialize the port. When that happens, PciLongToIfname will fail
+				// and IsPCIBack will stay set to true. But once the interface appears,
+				// we will get DNS update with IfIndex>0. The DNS pubsub callback will
+				// then trigger this function again and ib.IsPCIBack will be updated
+				// to false. It is important to set IsPCIBack properly because NIM
+				// does not configure ports which are reported by domainmgr to be in
+				// PCIBack.
 				found, ifname := types.PciLongToIfname(log, ib.PciLong)
 				if !found {
 					err = fmt.Errorf("adapter %s (group %s type %d) PCI ID %s not found after released by hypervisor",

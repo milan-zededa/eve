@@ -81,15 +81,21 @@ func (m *DpcManager) updateDNS() {
 				m.deviceNetStatus.Ports[ix].WirelessStatus.Cellular = *wwanNetStatus
 			}
 		}
-		// Do not try to get state data for interface which is in PCIback.
+		var isPCIBack bool
 		ioBundle := m.adapters.LookupIoBundleLogicallabel(port.Logicallabel)
 		if ioBundle != nil && ioBundle.IsPCIBack {
+			isPCIBack = true
 			err := fmt.Errorf("port %s is in PCIBack", port.Logicallabel)
 			m.Log.Warnf("updateDNS: %v", err)
 			if !m.deviceNetStatus.Ports[ix].HasError() {
 				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
 			}
-			continue
+			// Continue and try to get state data even for interface which is
+			// (supposedly) in PCIBack. Sometimes it takes longer to release
+			// port from PCIBack and IsPCIBack will incorrectly remain set
+			// to true by domainmgr. NIM has to nudge domainmgr to re-check
+			// the port status by publishing the (updated) interface index,
+			// which reveals if the interface is present or not.
 		}
 		if port.IfName == "" {
 			err := fmt.Errorf("port %s is missing interface name", port.Logicallabel)
@@ -103,13 +109,20 @@ func (m *DpcManager) updateDNS() {
 		// Get interface state data from the network stack.
 		ifindex, exists, err := m.NetworkMonitor.GetInterfaceIndex(port.IfName)
 		if !exists || err != nil {
-			err = fmt.Errorf("interface %s is missing", port.IfName)
-			m.Log.Warnf("updateDNS: %v", err)
-			if !m.deviceNetStatus.Ports[ix].HasError() {
-				m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+			if !isPCIBack {
+				err = fmt.Errorf("interface %s is missing", port.IfName)
+				m.Log.Warnf("updateDNS: %v", err)
+				if !m.deviceNetStatus.Ports[ix].HasError() {
+					m.deviceNetStatus.Ports[ix].RecordFailure(err.Error())
+				}
 			}
 			continue
 		}
+		if isPCIBack {
+			m.Log.Warnf("port %s is not actually in PCIBack, domainmgr should "+
+				"update the status of the IOBundle", port.Logicallabel)
+		}
+		m.deviceNetStatus.Ports[ix].IfIndex = ifindex
 		ifAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifindex)
 		if err != nil {
 			m.Log.Warnf(

@@ -33,6 +33,7 @@ type NetworkPortStatus struct {
 	IfName       string
 	Phylabel     string // Physical name set by controller/model
 	Logicallabel string
+	IfIndex      int // zero if the interface does not exist
 	// Unlike the logicallabel, which is defined in the device model and unique
 	// for each port, these user-configurable "shared" labels are potentially
 	// assigned to multiple ports so that they can be used all together with
@@ -219,6 +220,7 @@ func (status DeviceNetworkStatus) MostlyEqual(status2 DeviceNetworkStatus) bool 
 		if p1.IfName != p2.IfName ||
 			p1.Phylabel != p2.Phylabel ||
 			p1.Logicallabel != p2.Logicallabel ||
+			p1.IfIndex != p2.IfIndex ||
 			!generics.EqualSets(p1.SharedLabels, p2.SharedLabels) ||
 			p1.Alias != p2.Alias ||
 			p1.IsMgmt != p2.IsMgmt ||
