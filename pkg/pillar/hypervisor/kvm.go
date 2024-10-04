@@ -350,14 +350,6 @@ const qemuDiskTemplate = `
 {{end}}`
 
 const qemuNetTemplate = `
-[device "pci.{{.PCIId}}"]
-  driver = "pcie-root-port"
-  port = "1{{.PCIId}}"
-  chassis = "{{.PCIId}}"
-  bus = "pcie.0"
-  multifunction = "on"
-  addr = "{{printf "0x%x" .PCIId}}"
-
 [netdev "hostnet{{.NetID}}"]
   type = "tap"
   ifname = "{{.Vif}}"
@@ -369,7 +361,6 @@ const qemuNetTemplate = `
   driver = "{{.Driver}}"
   netdev = "hostnet{{.NetID}}"
   mac = "{{.Mac}}"
-  bus = "pci.{{.PCIId}}"
   addr = "0x0"
 {{- if and (eq .Driver "virtio-net-pci") (ne .MTU 0) }}
   host_mtu = "{{.MTU}}"
