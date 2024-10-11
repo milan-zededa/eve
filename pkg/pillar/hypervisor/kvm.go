@@ -372,6 +372,7 @@ const qemuNetTemplate = `
   br = "{{.Bridge}}"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net{{.NetID}}"]
   driver = "{{.Driver}}"

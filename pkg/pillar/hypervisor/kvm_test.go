@@ -322,6 +322,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -344,6 +345,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -608,6 +610,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -630,6 +633,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -861,6 +865,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -883,6 +888,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -1350,6 +1356,7 @@ func domConfigArm64() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -1372,6 +1379,7 @@ func domConfigArm64() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -1647,6 +1655,7 @@ func domConfigAmd64FML() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -1669,6 +1678,7 @@ func domConfigAmd64FML() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -1948,6 +1958,7 @@ func domConfigAmd64Legacy() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "e1000"
@@ -1970,6 +1981,7 @@ func domConfigAmd64Legacy() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "e1000"
@@ -2232,6 +2244,7 @@ func domConfigAmd64() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -2254,6 +2267,7 @@ func domConfigAmd64() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
@@ -2518,6 +2532,7 @@ func domConfigContainerVNC() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net0"]
   driver = "virtio-net-pci"
@@ -2540,6 +2555,7 @@ func domConfigContainerVNC() string {
   br = "bn0"
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
+  vhost = "on"
 
 [device "net1"]
   driver = "virtio-net-pci"
