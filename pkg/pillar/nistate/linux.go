@@ -239,7 +239,7 @@ func (lc *LinuxCollector) StartCollectingForNI(
 		return fmt.Errorf("%s: NI %s is already included in state data collecting",
 			LogAndErrPrefix, niConfig.UUID)
 	}
-	pcapCtx, cancelPCAP := context.WithCancel(context.Background())
+	_, cancelPCAP := context.WithCancel(context.Background())
 	ni := &niInfo{
 		config:          niConfig,
 		bridge:          br,
@@ -250,8 +250,8 @@ func (lc *LinuxCollector) StartCollectingForNI(
 		ni.vifs = append(ni.vifs, &vifInfo{AppVIF: vif})
 	}
 	lc.nis[niConfig.UUID] = ni
-	ni.pcapWG.Add(1)
-	go lc.sniffDNSandDHCP(pcapCtx, &ni.pcapWG, br, niConfig.Type, enableARPSnoop)
+	//ni.pcapWG.Add(1)
+	//go lc.sniffDNSandDHCP(pcapCtx, &ni.pcapWG, br, niConfig.Type, enableARPSnoop)
 	lc.log.Noticef("%s: Started collecting state data for NI %v "+
 		"(br: %+v, vifs: %+v)", LogAndErrPrefix, niConfig.UUID, br, vifs)
 	return nil
@@ -286,12 +286,12 @@ func (lc *LinuxCollector) UpdateCollectingForNI(
 	ni.vifs = newVifs
 	if ni.arpSnoopEnabled != enableARPSnoop {
 		// Restart packet capture with changed BPF filter.
-		ni.cancelPCAP()
-		ni.pcapWG.Wait()
-		pcapCtx, cancelPCAP := context.WithCancel(context.Background())
-		ni.cancelPCAP = cancelPCAP
-		ni.pcapWG.Add(1)
-		go lc.sniffDNSandDHCP(pcapCtx, &ni.pcapWG, ni.bridge, niConfig.Type, enableARPSnoop)
+		//ni.cancelPCAP()
+		//ni.pcapWG.Wait()
+		//pcapCtx, cancelPCAP := context.WithCancel(context.Background())
+		//ni.cancelPCAP = cancelPCAP
+		//ni.pcapWG.Add(1)
+		//go lc.sniffDNSandDHCP(pcapCtx, &ni.pcapWG, ni.bridge, niConfig.Type, enableARPSnoop)
 		ni.arpSnoopEnabled = enableARPSnoop
 	}
 	lc.log.Noticef("%s: Updated state collecting for NI %v "+
@@ -307,9 +307,9 @@ func (lc *LinuxCollector) StopCollectingForNI(niID uuid.UUID) error {
 	if _, exists := lc.nis[niID]; !exists {
 		return ErrUnknownNI{NI: niID}
 	}
-	ni := lc.nis[niID]
-	ni.cancelPCAP()
-	ni.pcapWG.Wait()
+	//ni := lc.nis[niID]
+	//ni.cancelPCAP()
+	//ni.pcapWG.Wait()
 	delete(lc.nis, niID)
 	lc.log.Noticef("%s: Stopped collecting state data for NI %v", LogAndErrPrefix, niID)
 	return nil
