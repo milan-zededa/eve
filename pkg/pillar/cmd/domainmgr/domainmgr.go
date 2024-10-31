@@ -691,12 +691,14 @@ func getReservedCPUsNum() (int, error) {
 
 func publishProcessesHandler(domainCtx *domainContext) {
 	start := time.Now()
-	metrics, pids := gatherProcessMetricList(domainCtx)
-	for _, m := range metrics {
-		publishProcessMetric(domainCtx, &m)
-	}
-	unpublishRemovedPids(domainCtx, domainCtx.pids, pids)
-	domainCtx.pids = pids
+	/*
+		metrics, pids := gatherProcessMetricList(domainCtx)
+		for _, m := range metrics {
+			publishProcessMetric(domainCtx, &m)
+		}
+		unpublishRemovedPids(domainCtx, domainCtx.pids, pids)
+		domainCtx.pids = pids
+	*/
 	domainCtx.ps.CheckMaxTimeTopic(agentName, "publishProcesses", start,
 		warningTime, errorTime)
 }
