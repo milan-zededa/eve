@@ -940,7 +940,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddBoolItem(IgnoreMemoryCheckForApps, false)
 	configItemSpecMap.AddBoolItem(IgnoreDiskCheckForApps, false)
 	configItemSpecMap.AddBoolItem(AllowLogFastupload, false)
-	configItemSpecMap.AddBoolItem(DisableDHCPAllOnesNetMask, false)
+	configItemSpecMap.AddBoolItem(DisableDHCPAllOnesNetMask, true)
 	configItemSpecMap.AddBoolItem(ProcessCloudInitMultiPart, false)
 	configItemSpecMap.AddBoolItem(ConsoleAccess, true) // Controller likely default to false
 	configItemSpecMap.AddBoolItem(VncShimVMAccess, false)
