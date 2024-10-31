@@ -1701,6 +1701,14 @@ func (r *LinuxDpcReconciler) getIntendedFilterRules(gcp types.ConfigItemValueMap
 	}
 	inputV4Rules = append(inputV4Rules, dhcpRule)
 
+	pprofRule := iptables.Rule{
+		RuleLabel:   "Allow PPROF",
+		MatchOpts:   []string{"-p", "tcp", "--dport", "6543"},
+		Target:      "ACCEPT",
+		Description: "Allow access to the PPROF HTTP server",
+	}
+	inputV4Rules = append(inputV4Rules, pprofRule)
+
 	// Allow all ICMP traffic to enter the device from outside.
 	icmpRule := iptables.Rule{
 		RuleLabel:   "Allow ICMP",

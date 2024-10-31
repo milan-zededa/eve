@@ -32,7 +32,7 @@ var (
 	psiCollectorCancel  context.CancelFunc
 )
 
-var listenAddress = "localhost:6543"
+var listenAddress = ":6543"
 
 func roundToMb(b uint64) uint64 {
 	kb := (b + 512) / 1024
