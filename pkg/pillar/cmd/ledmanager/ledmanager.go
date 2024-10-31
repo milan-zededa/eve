@@ -593,10 +593,13 @@ func InitForceDiskCmd(ledName string) string {
 // It assumes the init function has determined a diskRepeatCount and a disk.
 func ExecuteForceDiskCmd(deviceNetworkStatus *types.DeviceNetworkStatus,
 	diskDevice string, blinkCount types.LedBlinkCount) {
-	for i := 0; i < int(blinkCount); i++ {
-		doForceDiskBlink(diskDevice)
-		time.Sleep(200 * time.Millisecond)
-	}
+	/*
+		for i := 0; i < int(blinkCount); i++ {
+			doForceDiskBlink(diskDevice)
+			time.Sleep(200 * time.Millisecond)
+		}
+
+	*/
 }
 
 // doForceDiskBlink assumes the init function has determined a diskRepeatCount
