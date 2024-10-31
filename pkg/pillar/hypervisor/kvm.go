@@ -365,6 +365,9 @@ const qemuNetTemplate = `
   script = "/etc/xen/scripts/qemu-ifup"
   downscript = "no"
   vhost = "on"
+{{- if and (eq .Driver "virtio-net-pci") (gt .Queues 1) }}
+  queues = "{{.Queues}}"
+{{- end}}
 
 [device "net{{.NetID}}"]
   driver = "{{.Driver}}"
@@ -374,6 +377,10 @@ const qemuNetTemplate = `
   addr = "0x0"
 {{- if and (eq .Driver "virtio-net-pci") (ne .MTU 0) }}
   host_mtu = "{{.MTU}}"
+{{- end}}
+{{- if and (eq .Driver "virtio-net-pci") (gt .Queues 1) }}
+  mq = "on"
+  vectors = "{{.Vectors}}"
 {{- end}}
 `
 
@@ -990,6 +997,7 @@ func (ctx KvmContext) CreateDomConfig(domainName string,
 		Driver           string
 		Mac, Bridge, Vif string
 		MTU              uint16
+		Queues, Vectors  int
 	}{PCIId: diskContext.PCIId, NetID: 0}
 	t, _ = template.New("qemuNet").Parse(qemuNetTemplate)
 	for _, net := range config.VifList {
@@ -1002,6 +1010,14 @@ func (ctx KvmContext) CreateDomConfig(domainName string,
 			netContext.Driver = "virtio-net-pci"
 		}
 		netContext.MTU = net.MTU
+		// Configure one RX and one TX queue for every vCPU.
+		netContext.Queues = config.VCpus
+		// Formula for the number of MSI-X vectors:
+		//  - one vector for every RX queue
+		//  - one vector for every TX queue
+		//  - one for configuration purposes
+		//  - one for possible VQ (vector quantization) control
+		netContext.Vectors = 2*netContext.Queues + 2
 		if err := t.Execute(file, netContext); err != nil {
 			return logError("can't write to config file %s (%v)", file.Name(), err)
 		}
