@@ -36,8 +36,7 @@ func exampleDnsmasqParams() genericitems.Dnsmasq {
 	dnsmasq.ListenIf.IfName = "br0"
 	_, subnet, _ := net.ParseCIDR("10.0.0.0/24")
 	dnsmasq.DHCPServer = genericitems.DHCPServer{
-		Subnet:         subnet,
-		AllOnesNetmask: true,
+		Subnet: subnet,
 		IPRange: genericitems.IPRange{
 			FromIP: net.IP{10, 0, 0, 2},
 			ToIP:   net.IP{10, 0, 0, 123},
@@ -202,23 +201,6 @@ func TestCreateDnsmasqConfigWithoutGateway(t *testing.T) {
 
 	dhcpRangeRex := "(?m)^dhcp-range=10.0.0.2,10.0.0.123,255.255.255.0,60m$"
 	ok, err = regexp.MatchString(dhcpRangeRex, config)
-	if err != nil {
-		panic(err)
-	}
-	if !ok {
-		t.Fatalf("expected to match '%s', but got '%s'", dhcpRangeRex, config)
-	}
-}
-
-func TestCreateDnsmasqConfigWithDisabledAllOnesNetmask(t *testing.T) {
-	t.Parallel()
-
-	dnsmasq := exampleDnsmasqParams()
-	dnsmasq.DHCPServer.AllOnesNetmask = false
-	config := createDnsmasqConfig(dnsmasq)
-
-	dhcpRangeRex := "(?m)^dhcp-range=10.0.0.2,10.0.0.123,255.255.255.0,60m$"
-	ok, err := regexp.MatchString(dhcpRangeRex, config)
 	if err != nil {
 		panic(err)
 	}

@@ -207,7 +207,6 @@ func TestNewConfigItemSpecMap(t *testing.T) {
 		SyslogLogLevel,
 		KernelLogLevel,
 		FmlCustomResolution,
-		DisableDHCPAllOnesNetMask,
 		ProcessCloudInitMultiPart,
 		NetDumpEnable,
 		NetDumpTopicMaxCount,
