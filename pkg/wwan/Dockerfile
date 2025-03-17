@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 FROM lfedge/eve-alpine:0f2e0da38e30753c68410727a6cc269e57ff74f2 AS build
-ENV BUILD_PKGS meson ninja git libc-dev glib-dev make gcc udev dbus-dev libgudev-dev go
+ENV BUILD_PKGS meson ninja git libc-dev glib-dev make gcc udev dbus-dev libgudev-dev go cmake
 ENV PKGS alpine-baselayout dbus glib kmod-dev libgudev
 RUN eve-alpine-deploy.sh
 
@@ -14,6 +14,7 @@ ENV LIBQMI_VERSION=1.34.0
 ENV LIBQRTR_VERSION=1.2.2
 ENV PICOCOM_COMMIT=1acf1ddabaf3576b4023c4f6f09c5a3e4b086fb8
 ENV LENOVO_WWAN_UNLOCK_COMMIT=1c0753d709f0efa57575c5a7491bc5456417b073
+ENV LPAC_VERSION=v2.2.1
 
 ADD --keep-git-dir=true https://github.com/linux-mobile-broadband/libqrtr-glib.git#${LIBQRTR_VERSION} /libqrtr
 WORKDIR /libqrtr
@@ -58,6 +59,12 @@ RUN mkdir -p /out/opt/lenovo/ && \
     cp DPR_Fcc_unlock_service /out/opt/lenovo/ && chmod 544 /out/opt/lenovo/DPR_Fcc_unlock_service
 COPY --chown=root:root --chmod=500 fcc-unlock /out/usr/lib/ModemManager/fcc-unlock.d
 
+ADD --keep-git-dir=true https://github.com/estkme-group/lpac.git#${LPAC_VERSION} /lpac
+WORKDIR /lpac
+RUN cmake -DLPAC_WITH_APDU_PCSC=OFF -DLPAC_WITH_HTTP_CURL=OFF \
+          -DLPAC_WITH_APDU_MBIM=ON -DLPAC_WITH_APDU_QMI=ON -DLPAC_WITH_APDU_AT=ON . && \
+    make && make install
+
 RUN strip /usr/bin/*cli /usr/libexec/*proxy
 
 RUN mkdir -p /var/run/dbus/
@@ -91,6 +98,8 @@ COPY --from=build /etc/dbus-1 /etc/dbus-1
 COPY --from=build /usr/share/dbus-1 /usr/share/dbus-1
 COPY --from=build /bin/udevadm /bin/udevadm
 COPY --from=build /lib/udev/rules.d /lib/udev/rules.d
+
+COPY --from=build /usr/local/bin/lpac /usr/local/bin/lpac
 
 COPY mm-init.sh /usr/bin/mm-init.sh
 CMD ["/usr/bin/mm-init.sh"]
