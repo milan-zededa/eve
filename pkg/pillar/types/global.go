@@ -256,6 +256,12 @@ const (
 	EnableARPSnoop GlobalSettingKey = "network.switch.enable.arpsnoop"
 	// WwanQueryVisibleProviders : periodically query visible cellular service providers
 	WwanQueryVisibleProviders GlobalSettingKey = "wwan.query.visible.providers"
+	// WwanModemRecoveryWatchdog : trigger watchdog when cellular modem crashes and fails to recover.
+	WwanModemRecoveryWatchdog GlobalSettingKey = "wwan.modem.recovery.watchdog"
+	// WwanModemRecoveryReloadDrivers : reload QMI/MBIM/MHI drivers when cellular modem crashes
+	// and fails to recover. This occurs before the watchdog mechanism is triggered (if enabled
+	// by WwanModemRecoveryWatchdog).
+	WwanModemRecoveryReloadDrivers GlobalSettingKey = "wwan.modem.recovery.watchdog"
 
 	// TriState Items
 	// NetworkFallbackAnyEth global setting key
@@ -949,6 +955,8 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddBoolItem(VncShimVMAccess, false)
 	configItemSpecMap.AddBoolItem(EnableARPSnoop, true)
 	configItemSpecMap.AddBoolItem(WwanQueryVisibleProviders, false)
+	configItemSpecMap.AddBoolItem(WwanModemRecoveryWatchdog, false)
+	configItemSpecMap.AddBoolItem(WwanModemRecoveryReloadDrivers, false)
 	configItemSpecMap.AddBoolItem(NetworkLocalLegacyMACAddress, false)
 	configItemSpecMap.AddBoolItem(MemoryMonitorEnabled, false)
 

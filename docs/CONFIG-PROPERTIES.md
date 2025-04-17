@@ -65,6 +65,8 @@
 | wwan.query.visible.providers | bool | false | enable to periodically (once per hour) query the set of visible cellular service providers and publish them under WirelessStatus (for every modem) |
 | network.local.legacy.mac.address | bool | false | enables legacy MAC address generation for local network instances for those EVE nodes where changing MAC addresses in applications will lead to incorrect network configuration |
 | memory-monitor.enabled | boolean | false | Enable external memory monitoring and memory pressure events handling |
+| wwan.modem.recovery.watchdog | boolean | false | Enable watchdog for cellular modems. If a modem crashes and fails to recover, the device will automatically reboot.|
+| wwan.modem.recovery.reload.drivers | boolean | false | If a modem crashes and fails to recover, EVE will attempt to reload the MBIM/QMI/MHI drivers as a recovery step. This occurs before the watchdog mechanism is triggered (if enabled). |
 
 In addition, there can be per-agent settings.
 The Per-agent settings begin with "agent.*agentname*.*setting*"
