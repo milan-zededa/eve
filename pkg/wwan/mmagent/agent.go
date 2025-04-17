@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -34,21 +36,22 @@ import (
 )
 
 const (
-	agentName              = "wwan"
-	errorTime              = 3 * time.Minute
-	warningTime            = 40 * time.Second
-	wdTouchPeriod          = 25 * time.Second
-	mmStartTimeout         = time.Minute
-	metricsPublishPeriod   = time.Minute
-	retryPeriod            = 1 * time.Minute
-	suspendReconcilePeriod = retryPeriod >> 1
-	connProbePeriod        = 5 * time.Minute
-	defRouteBaseMetric     = 65000
-	icmpProbeMaxRTT        = time.Second
-	icmpProbeMaxAttempts   = 3
-	tcpProbeTimeout        = 5 * time.Second
-	dnsProbeTimeout        = 5 * time.Second
-	scanProvidersPeriod    = time.Hour
+	agentName               = "wwan"
+	errorTime               = 3 * time.Minute
+	warningTime             = 40 * time.Second
+	wdTouchPeriod           = 25 * time.Second
+	mmStartTimeout          = time.Minute
+	metricsPublishPeriod    = time.Minute
+	retryPeriod             = 1 * time.Minute
+	suspendReconcilePeriod  = retryPeriod >> 1
+	connProbePeriod         = 5 * time.Minute
+	defRouteBaseMetric      = 65000
+	icmpProbeMaxRTT         = time.Second
+	icmpProbeMaxAttempts    = 3
+	tcpProbeTimeout         = 5 * time.Second
+	dnsProbeTimeout         = 5 * time.Second
+	scanProvidersPeriod     = time.Hour
+	reloadModemDriversAfter = 2 * time.Minute
 )
 
 const (
@@ -104,10 +107,12 @@ type MMAgent struct {
 	locPublishPeriod  time.Duration
 	locTrackingModem  string // selected modem for location tracking (DBus path)
 	scanProviders     bool
+	reloadDrivers     bool
+	modemWatchdog     bool
 
 	// config, state data and metrics collected for every cellular modem
-	modemInfo     map[string]*ModemInfo // key: DBus path
-	missingModems []types.WwanNetworkConfig
+	modemInfo     map[string]*ModemInfo    // key: DBus path
+	missingModems map[string]*missingModem // key: logical label
 
 	// True when modem metrics have been updated and should be published
 	metricsUpdated bool
@@ -142,6 +147,17 @@ type ModemInfo struct {
 	suspendedReconcileUntil time.Time
 }
 
+// Represents a modem with user-provided configuration that is currently
+// missing from the system - either due to a crash, being unplugged, or never
+// having been present in the system.
+type missingModem struct {
+	config         types.WwanNetworkConfig
+	lastSeenAt     time.Time           // zero if never seen
+	physAddrs      types.WwanPhysAddrs // stores the last known physical addresses
+	driverReloaded bool                // true if driver-reload was already attempted
+	remove         bool                // used inside applyWwanConfig to mark missingModem entry for removal
+}
+
 // IsManaged : modem configured by EVE controller is denoted as "managed".
 func (m *ModemInfo) IsManaged() bool {
 	return m.config.LogicalLabel != ""
@@ -162,6 +178,7 @@ func (a *MMAgent) Init() (err error) {
 		agentbase.WithArguments(arguments), agentbase.WithPidFile(),
 		agentbase.WithWatchdog(a.ps, warningTime, errorTime))
 	a.modemInfo = make(map[string]*ModemInfo)
+	a.missingModems = make(map[string]*missingModem)
 	if err = a.ensureDir(WwanResolvConfDir); err != nil {
 		return err
 	}
@@ -396,6 +413,24 @@ func (a *MMAgent) Run(ctx context.Context) error {
 			if statusChanged {
 				a.publishWwanStatus()
 			}
+			if a.reloadDrivers {
+				for _, modem := range a.missingModems {
+					if modem.driverReloaded {
+						// Already reloaded. We make one attempt at most.
+						continue
+					}
+					if modem.lastSeenAt.IsZero() {
+						// This modem was never present.
+						continue
+					}
+					if time.Since(modem.lastSeenAt) < reloadModemDriversAfter {
+						// Give modem and drivers more time to recover.
+						continue
+					}
+					a.reloadModemDrivers(modem)
+					modem.driverReloaded = true
+				}
+			}
 
 		case <-probeTicker.C:
 			a.probeConnectivity()
@@ -420,6 +455,9 @@ func (a *MMAgent) Run(ctx context.Context) error {
 				if _, err := a.mmClient.GetMMVersion(); err != nil {
 					a.log.Warnf("Failed to get MM version (process crashed?): %v", err)
 				}
+			}
+			if a.modemWatchdog {
+				a.touchWatchdogFiles()
 			}
 		}
 
@@ -540,6 +578,18 @@ func (a *MMAgent) applyGlobalConfig(config types.ConfigItemValueMap) {
 			a.publishWwanStatus()
 		}
 	}
+	a.reloadDrivers = a.globalConfig.GlobalValueBool(types.WwanModemRecoveryReloadDrivers)
+	modemWatchdog := a.globalConfig.GlobalValueBool(types.WwanModemRecoveryWatchdog)
+	if a.modemWatchdog != modemWatchdog {
+		a.modemWatchdog = modemWatchdog
+		if a.modemWatchdog {
+			// Watchdog for modems was just enabled.
+			a.registerWatchdogFiles()
+		} else {
+			// Watchdog for modems was just disabled.
+			a.unregisterWatchdogFiles()
+		}
+	}
 	a.gcInitialized = true
 }
 
@@ -547,6 +597,10 @@ func (a *MMAgent) applyWwanConfig(config types.WwanConfig) {
 	a.log.Noticef("Applying wwan config, DPC: %s/%v, RS config timestamp: %v",
 		config.DPCKey, config.DPCTimestamp, config.RSConfigTimestamp)
 	resumeMonitoring := a.mmClient.PauseModemMonitoring()
+	if a.modemWatchdog {
+		// We recreate the set of watchdog files below.
+		a.unregisterWatchdogFiles()
+	}
 	for _, modem := range a.modemInfo {
 		modem.prevConfig = modem.config
 		modem.config = types.WwanNetworkConfig{}
@@ -555,7 +609,10 @@ func (a *MMAgent) applyWwanConfig(config types.WwanConfig) {
 	a.dpcTimestamp = config.DPCTimestamp
 	a.rsConfigTimestamp = config.RSConfigTimestamp
 	a.radioSilence = config.RadioSilence
-	a.missingModems = nil
+	// Mark-and-Sweep for the missingModems maps.
+	for _, missingModem := range a.missingModems {
+		missingModem.remove = true
+	}
 	// Associate config with ModemInfo.
 	for _, modemConfig := range config.Networks {
 		var foundModem bool
@@ -567,8 +624,25 @@ func (a *MMAgent) applyWwanConfig(config types.WwanConfig) {
 			}
 		}
 		if !foundModem {
-			a.missingModems = append(a.missingModems, modemConfig)
+			_, alreadyWasMissing := a.missingModems[modemConfig.LogicalLabel]
+			if !alreadyWasMissing {
+				a.log.Noticef("We have a new missing modem: %s", modemConfig.LogicalLabel)
+				a.missingModems[modemConfig.LogicalLabel] = &missingModem{}
+			}
+			// Preserve lastSeenAt, usesMHIDriver and driverReloaded field values.
+			a.missingModems[modemConfig.LogicalLabel].config = modemConfig
+			a.missingModems[modemConfig.LogicalLabel].remove = false
 		}
+	}
+	// Remove no longer missing/configured modems.
+	for logicalLabel, missingModem := range a.missingModems {
+		if missingModem.remove {
+			delete(a.missingModems, logicalLabel)
+		}
+	}
+	// Recreate watchdog files for the new config.
+	if a.modemWatchdog {
+		a.registerWatchdogFiles()
 	}
 	// Determine which modem to use for location tracking if enabled.
 	if a.locTrackingModem != "" &&
@@ -753,22 +827,24 @@ func (a *MMAgent) processModemNotif(notif mmdbus.Notification) {
 
 // Check if we already have config for this modem inside the missingModems slice.
 func (a *MMAgent) findConfigForNewModem(modem *ModemInfo) {
-	for i, config := range a.missingModems {
-		if !a.configMatchesModem(config, modem) {
+	for logicalLabel, missingModem := range a.missingModems {
+		if !a.configMatchesModem(missingModem.config, modem) {
 			continue
 		}
-		modem.config = config
+		modem.config = missingModem.config
 		a.log.Noticef("Associated modem at path %s with logical label %s",
 			modem.Path, modem.config.LogicalLabel)
 		modem.decryptedUsername, modem.decryptedPassword, modem.decryptError =
-			a.decryptAPCredentials(&config.AccessPoint)
+			a.decryptAPCredentials(&modem.config.AccessPoint)
 		if modem.decryptError != nil {
 			a.log.Errorf("Failed to decrypt username/password for modem %s (%s): %v",
 				modem.config.LogicalLabel, modem.Path, modem.decryptError)
 		}
-		// Remove entry from missingModems.
-		a.missingModems[i] = a.missingModems[len(a.missingModems)-1]
-		a.missingModems = a.missingModems[:len(a.missingModems)-1]
+		if a.modemWatchdog && missingModem.lastSeenAt.IsZero() {
+			// First time seeing this modem - start the watchdog.
+			a.registerWatchdogFile(logicalLabel)
+		}
+		delete(a.missingModems, logicalLabel)
 		// Check if we should start location tracking on this modem.
 		if a.locTrackingModem == "" && modem.config.LocationTracking {
 			a.locTrackingModem = modem.Path
@@ -780,7 +856,13 @@ func (a *MMAgent) findConfigForNewModem(modem *ModemInfo) {
 func (a *MMAgent) handleRemovedModem(modem *ModemInfo) {
 	delete(a.modemInfo, modem.Path)
 	if modem.IsManaged() {
-		a.missingModems = append(a.missingModems, modem.config)
+		a.missingModems[modem.config.LogicalLabel] = &missingModem{
+			config:         modem.config,
+			lastSeenAt:     time.Now(),
+			physAddrs:      modem.Status.PhysAddrs,
+			driverReloaded: false,
+		}
+		a.log.Noticef("We have a new missing modem: %s", modem.config.LogicalLabel)
 	}
 	if a.locTrackingModem == modem.Path {
 		// This removed modem was used for location tracking.
@@ -1341,6 +1423,169 @@ func (a *MMAgent) removeIPSettings(modem *ModemInfo) error {
 	return nil
 }
 
+func (a *MMAgent) registerWatchdogFiles() {
+	for _, modem := range a.modemInfo {
+		if modem.IsManaged() {
+			a.registerWatchdogFile(modem.config.LogicalLabel)
+		}
+	}
+	// Register watchdog for modems that were previously seen but then disappeared.
+	for logicalLabel, modem := range a.missingModems {
+		if !modem.lastSeenAt.IsZero() {
+			a.registerWatchdogFile(logicalLabel)
+		}
+	}
+}
+
+func (a *MMAgent) registerWatchdogFile(modemLogicalLabel string) {
+	filename := fmt.Sprintf("/run/watchdog/file/wwan-modem-%s.touch", modemLogicalLabel)
+	a.log.Noticef("Registering watchdog file %s", filename)
+	file, err := os.Create(filename)
+	if err != nil {
+		a.log.Errorf("Failed to register watchdog file %s: %v", filename, err)
+		return
+	}
+	file.Close()
+}
+
+func (a *MMAgent) unregisterWatchdogFiles() {
+	for _, modem := range a.modemInfo {
+		if modem.IsManaged() {
+			a.unregisterWatchdogFile(modem.config.LogicalLabel)
+		}
+	}
+	for logicalLabel, modem := range a.missingModems {
+		if !modem.lastSeenAt.IsZero() {
+			a.unregisterWatchdogFile(logicalLabel)
+		}
+	}
+}
+
+func (a *MMAgent) unregisterWatchdogFile(modemLogicalLabel string) {
+	filename := fmt.Sprintf("/run/watchdog/file/wwan-modem-%s.touch", modemLogicalLabel)
+	a.log.Noticef("Unregistering watchdog file %s", filename)
+	err := os.Remove(filename)
+	if err != nil {
+		a.log.Errorf("Failed to unregister watchdog file %s: %v", filename, err)
+	}
+	filename = fmt.Sprintf("/run/wwan-modem-%s.touch", modemLogicalLabel)
+	err = os.Remove(filename)
+	if err != nil {
+		a.log.Errorf("Failed to remove watchdog file %s: %v", filename, err)
+	}
+}
+
+func (a *MMAgent) touchWatchdogFiles() {
+	for _, modem := range a.modemInfo {
+		if modem.IsManaged() {
+			a.touchWatchdogFile(modem.config.LogicalLabel)
+		}
+	}
+}
+
+func (a *MMAgent) touchWatchdogFile(modemLogicalLabel string) {
+	filename := fmt.Sprintf("/run/wwan-modem-%s.touch", modemLogicalLabel)
+	a.log.Noticef("Touching watchdog file %s", filename)
+	_, err := os.Stat(filename)
+	if err != nil {
+		file, err := os.Create(filename)
+		if err != nil {
+			a.log.Errorf("Failed to create watchdog file %s: %v", filename, err)
+			return
+		}
+		file.Close()
+	}
+	_, err = os.Stat(filename)
+	if err != nil {
+		a.log.Errorf("Failed to stat watchdog file %s: %v", filename, err)
+		return
+	}
+	now := time.Now()
+	err = os.Chtimes(filename, now, now)
+	if err != nil {
+		a.log.Errorf("Failed to touch watchdog file %s: %v", filename, err)
+		return
+	}
+}
+
+func (a *MMAgent) reloadModemDrivers(modem *missingModem) {
+	// 1. Unbind the drivers from the modem.
+	var driverSysPath, portAddr string
+	if modem.physAddrs.USB == "" {
+		portAddr = modem.physAddrs.PCI
+		driverSysPath = "/sys/bus/pci/drivers/mhi-pci-generic"
+	} else {
+		// Note that USB paths in /sys/bus/usb have format <bus>-<port>
+		portAddr = strings.ReplaceAll(modem.physAddrs.USB, ":", "-")
+		driverSysPath = "/sys/bus/usb/drivers/usb"
+	}
+	unbindFilePath := filepath.Join(driverSysPath, "unbind")
+	a.log.Noticef("Unbinding %s from driver %s", portAddr, driverSysPath)
+	file, err := os.OpenFile(unbindFilePath, os.O_WRONLY, 0200)
+	// Continue even in case of failures.
+	if err != nil {
+		a.log.Errorf("Failed to open file %s: %v", unbindFilePath, err)
+	} else {
+		_, err = file.WriteString(portAddr)
+		if err != nil {
+			a.log.Errorf("Failed to unbind %s from driver %s: %v",
+				portAddr, driverSysPath, err)
+		}
+		file.Close()
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// 2. Unload the kernel modules.
+	var kernelModules []string
+	if modem.physAddrs.USB == "" {
+		kernelModules = []string{"mhi_wwan_mbim", "mhi_wwan_ctrl"}
+	} else {
+		kernelModules = []string{"cdc_mbim", "qmi_wwan", "cdc_wdm"}
+	}
+	a.log.Noticef("Unloading kernel modules: %v", kernelModules)
+	args := append([]string{"-r"}, kernelModules...)
+	cmdRemove := exec.Command("modprobe", args...)
+	if output, err := cmdRemove.CombinedOutput(); err != nil {
+		// modprobe often returns exit status 1 even when it successfully removes modules,
+		// typically because they were in use at the time. We log the error for visibility
+		// but proceed with reloading regardless.
+		a.log.Errorf("Unloading kernel modules %v returned a non-zero exit code: %s (%v)",
+			kernelModules, output, err)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// 3. Reload the kernel modules.
+	a.log.Noticef("Reloading kernel modules: %v", kernelModules)
+	args = append([]string{"-a"}, kernelModules...)
+	cmdAdd := exec.Command("modprobe", args...)
+	if output, err := cmdAdd.CombinedOutput(); err != nil {
+		a.log.Errorf("Failed to reload modules %v: %s (%v)", kernelModules,
+			output, err)
+		return
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// 4. Bind the drivers back to the modem.
+	bindFilePath := filepath.Join(driverSysPath, "bind")
+	a.log.Noticef("Binding %s to driver %s", portAddr, driverSysPath)
+	file, err = os.OpenFile(bindFilePath, os.O_WRONLY, 0200)
+	if err != nil {
+		a.log.Errorf("Failed to open file %s: %v", bindFilePath, err)
+		return
+	}
+	defer file.Close()
+	_, err = file.WriteString(portAddr)
+	if err != nil {
+		a.log.Errorf("Failed to bind %s to driver %s: %v",
+			portAddr, driverSysPath, err)
+		return
+	}
+	a.log.Noticef("Modem %s drivers reloaded successfully", modem.config.LogicalLabel)
+}
+
 func (a *MMAgent) getResolvConfFilename(modem *ModemInfo) string {
 	return path.Join(WwanResolvConfDir, modem.Status.PhysAddrs.Interface+".dhcp")
 }
@@ -1406,8 +1651,8 @@ func (a *MMAgent) publishWwanStatus() {
 	}
 	for _, missingModem := range a.missingModems {
 		wwanStatus.Networks = append(wwanStatus.Networks, types.WwanNetworkStatus{
-			LogicalLabel: missingModem.LogicalLabel,
-			PhysAddrs:    missingModem.PhysAddrs,
+			LogicalLabel: missingModem.config.LogicalLabel,
+			PhysAddrs:    missingModem.config.PhysAddrs,
 			ConfigError:  "modem not found",
 		})
 	}
