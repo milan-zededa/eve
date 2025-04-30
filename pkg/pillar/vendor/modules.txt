@@ -676,7 +676,7 @@ github.com/leodido/go-urn
 github.com/lf-edge/edge-containers/pkg/registry
 github.com/lf-edge/edge-containers/pkg/resolver
 github.com/lf-edge/edge-containers/pkg/tgz
-# github.com/lf-edge/eve-api/go v0.0.0-20250502212418-fc1e3bad8f0f
+# github.com/lf-edge/eve-api/go v0.0.0-20250502212418-fc1e3bad8f0f => github.com/milan-zededa/eve-api/go v0.0.0-20250506074433-9be094ed89c2
 ## explicit; go 1.20
 github.com/lf-edge/eve-api/go/attest
 github.com/lf-edge/eve-api/go/auth
@@ -1818,3 +1818,4 @@ tags.cncf.io/container-device-interface/specs-go
 # k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.26.3
 # k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.26.3
 # k8s.io/sample-controller => k8s.io/sample-controller v0.26.3
+# github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20250506074433-9be094ed89c2

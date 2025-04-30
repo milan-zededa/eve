@@ -285,3 +285,5 @@ replace (
 	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.26.3
 	k8s.io/sample-controller => k8s.io/sample-controller v0.26.3
 )
+
+replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20250506074433-9be094ed89c2
