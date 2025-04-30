@@ -30,6 +30,8 @@ func getEncryptionBlock(
 	decBlock.CellularNetAttachPassword = zconfigDecBlockPtr.CellularNetAttachPassword
 	decBlock.ProtectedUserData = zconfigDecBlockPtr.ProtectedUserData
 	decBlock.ClusterToken = zconfigDecBlockPtr.ClusterToken
+	decBlock.ESIM.SmDpPlusAddress = zconfigDecBlockPtr.EsimProfileProvisioning.SmDpPlusAddress
+	decBlock.ESIM.ActivationCode = zconfigDecBlockPtr.EsimProfileProvisioning.ActivationCode
 	return decBlock
 }
 

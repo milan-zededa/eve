@@ -946,17 +946,34 @@ func encodeCellModuleInfo(wwanModule types.WwanCellModule) *info.ZCellularModule
 func encodeSimCards(cellModule string, wwanSimCards []types.WwanSimCard) (simCards []*info.ZSimcardInfo) {
 	for _, simCard := range wwanSimCards {
 		simCards = append(simCards, &info.ZSimcardInfo{
-			Name:           simCard.Name,
-			CellModuleName: cellModule,
-			Imsi:           simCard.IMSI,
-			Iccid:          simCard.ICCID,
-			Type:           info.SimType(simCard.Type),
-			State:          simCard.State,
-			SlotNumber:     uint32(simCard.SlotNumber),
-			SlotActivated:  simCard.SlotActivated,
+			Name:              simCard.Name,
+			CellModuleName:    cellModule,
+			Imsi:              simCard.IMSI,
+			Iccid:             simCard.ICCID,
+			Type:              info.SimType(simCard.Type),
+			State:             simCard.State,
+			SlotNumber:        uint32(simCard.SlotNumber),
+			SlotActivated:     simCard.SlotActivated,
+			SimActivationMode: encodeSimActivationMode(simCard.ActivationMode),
 		})
 	}
 	return simCards
+}
+
+func encodeSimActivationMode(mode types.SimActivationMode) evecommon.SimActivationMode {
+	switch mode {
+	case types.SimActivationModeUnspecified:
+		return evecommon.SimActivationMode_SIM_ACTIVATION_MODE_UNSPECIFIED
+	case types.SimActivationModeDeactivated:
+		return evecommon.SimActivationMode_SIM_ACTIVATION_MODE_DEACTIVATED
+	case types.SimActivationModeStandby:
+		return evecommon.SimActivationMode_SIM_ACTIVATION_MODE_STANDBY
+	case types.SimActivationModeActive:
+		return evecommon.SimActivationMode_SIM_ACTIVATION_MODE_ACTIVE
+	default:
+		log.Errorf("Invalid SIM activation mode: %v", mode)
+	}
+	return evecommon.SimActivationMode_SIM_ACTIVATION_MODE_UNSPECIFIED
 }
 
 func encodeCellProvider(wwanProvider types.WwanProvider) (provider *info.ZCellularProvider) {

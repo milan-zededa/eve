@@ -104,8 +104,10 @@ type WwanNetworkConfig struct {
 	LogicalLabel string
 	// Physical address of the cellular modem.
 	PhysAddrs WwanPhysAddrs
-	// Configuration of the activated Access point.
-	AccessPoint CellularAccessPoint
+	// Configuration for one or more Access points (to support Multi-SIM modes).
+	// For the time being, EVE supports only single-active SIM card (and any number of
+	// standby cards).
+	AccessPoints []CellularAccessPoint
 	// Proxies configured for the cellular network.
 	Proxies []ProxyEntry
 	// Probe used to detect broken connection.
@@ -177,7 +179,10 @@ func (wnc WwanNetworkConfig) Equal(wnc2 WwanNetworkConfig) bool {
 		wnc.PhysAddrs != wnc2.PhysAddrs {
 		return false
 	}
-	if !wnc.AccessPoint.Equal(wnc2.AccessPoint) {
+	if !generics.EqualSetsFn(wnc.AccessPoints, wnc2.AccessPoints,
+		func(ap1, ap2 CellularAccessPoint) bool {
+			return ap1.Equal(ap2)
+		}) {
 		return false
 	}
 	if !generics.EqualLists(wnc.Proxies, wnc2.Proxies) {
@@ -382,10 +387,15 @@ type WwanSimCard struct {
 	// Guaranteed to be unique across all modems and their SIM slots attached
 	// to the edge node.
 	Name string
-	// SIM slot number which this WwanSimCard instance describes.
+	// SIM slot number. Note that WwanSimCard info is also published for empty SIM slots.
+	// Even an eSIM module has a slot number assigned, which is shared by all its eSIM
+	// profiles (virtual SIM cards).
 	SlotNumber uint8
 	// True if this SIM slot is activated, i.e. the inserted SIM card (if any) can be used
 	// to connect to a cellular network.
+	// Note: eSIM profiles (virtual SIM cards) share the same slot number assigned to
+	// the eSIM module. To determine which eSIM profile is active, refer to ActivationMode
+	// of each profile's WwanSimCard info.
 	SlotActivated bool
 	// Integrated Circuit Card Identifier.
 	// Empty if no SIM card is inserted into the slot or if the SIM card is not recognized.
@@ -400,6 +410,8 @@ type WwanSimCard struct {
 	// between QMI and MBIM protocols (used to control cellular modules) and there is
 	// no 1:1 mapping between them.
 	State string
+	// Report how the SIM card is used in the context of multi-SIM operation.
+	ActivationMode SimActivationMode
 }
 
 // SimType : type of the SIM card.
@@ -413,6 +425,24 @@ const (
 	SimTypePhysical
 	// SimTypeEmbedded : embedded SIM card (eSIM).
 	SimTypeEmbedded
+)
+
+// SimActivationMode defines how the SIM card is used in the context of multi-SIM operation.
+type SimActivationMode int32
+
+const (
+	// SimActivationModeUnspecified : activation mode not specified
+	// (e.g. because older EVE does not recognize SimActivationMode).
+	SimActivationModeUnspecified SimActivationMode = iota
+	// SimActivationModeDeactivated : SIM card is not activated.
+	SimActivationModeDeactivated
+	// SimActivationModeStandby : SIM card is in the standby mode (aka backup).
+	// SIM card is present and recognized by the device but is not actively being used
+	// for data connectivity. Instead, it remains in a passive listening state,
+	// ready to be switched to an active state when needed.
+	SimActivationModeStandby
+	// SimActivationModeActive : SIM card is activated and used for data connectivity.
+	SimActivationModeActive
 )
 
 // WwanProvider contains information about a cellular connectivity provider.

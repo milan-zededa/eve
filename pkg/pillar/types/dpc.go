@@ -815,22 +815,37 @@ type CellNetPortConfig struct {
 // CellularAccessPoint contains config parameters for connecting to a cellular network.
 type CellularAccessPoint struct {
 	// SIM card slot to which this configuration applies.
-	// 0 - unspecified (apply to currently activated or the only available)
+	// 0 - unspecified
 	// 1 - config for SIM card in the first slot
 	// 2 - config for SIM card in the second slot
 	// etc.
+	// If unspecified, the configuration is matched to the SIM card by ICCID
+	// (see SIMIccid field below).
+	// If only one CellularAccessPoint is defined in CellNetPortConfig, both SIMSlot
+	// and SIMIccid may be omitted. In that case, EVE will apply this config to whatever
+	// SIM card or eSIM profile is already activated. And if the activated SIM slot
+	// is empty but another slot has a SIM card inserted, EVE will automatically switch
+	// to the slot with a card present.
 	SIMSlot uint8
-	// If true, then this configuration is currently activated.
-	Activated bool
+	// ICCID of the SIM card this configuration applies to.
+	// Can be used alongside or instead of SIMSlot to match the SIM card.
+	// Especially useful for matching virtual eSIM profiles, since SIMSlot may refer
+	// to the eSIM module's slot number but cannot select a specific profile.
+	SIMIccid string
+	// Role of the SIM matched by this configuration in the context of multi-SIM operation.
+	SIMActivationMode SimActivationMode
 	// Access Point Network for the default bearer.
 	APN string
 	// The IP addressing type to use for the default bearer.
 	IPType WwanIPType
 	// Authentication protocol used for the default bearer.
 	AuthProtocol WwanAuthProtocol
-	// Encrypted user credentials for the default bearer and/or the attach bearer
-	// (when required).
-	EncryptedCredentials CipherBlockStatus
+	// Cipher data may contain:
+	//  - user credentials for the default bearer
+	//  - user credentials for the attach bearer
+	//  - SM-DP+ address and activation code for installing a new eSIM profile
+	//    (used only if ProvisionESIMProfile is enabled)
+	CipherData CipherBlockStatus
 	// The set of cellular network operators that modem should preferably try to register
 	// and connect into.
 	// Network operator should be referenced by PLMN (Public Land Mobile Network) code.
@@ -846,16 +861,22 @@ type CellularAccessPoint struct {
 	AttachIPType WwanIPType
 	// Authentication protocol used for the attach bearer.
 	AttachAuthProtocol WwanAuthProtocol
+	// Instead of matching CellularAccessPoint to an existing SIM card, provision
+	// a new eSIM profile (virtual SIM card) using SM-DP+ address and activation code
+	// sent from the controller inside the cipher block.
+	ProvisionESIMProfile bool
 }
 
 // Equal compares two instances of CellularAccessPoint for equality.
 func (ap CellularAccessPoint) Equal(ap2 CellularAccessPoint) bool {
 	if ap.SIMSlot != ap2.SIMSlot ||
-		ap.Activated != ap2.Activated ||
+		ap.SIMIccid != ap2.SIMIccid ||
+		ap.SIMActivationMode != ap2.SIMActivationMode ||
 		ap.APN != ap2.APN ||
 		ap.IPType != ap2.IPType ||
 		ap.AuthProtocol != ap2.AuthProtocol ||
-		!ap.EncryptedCredentials.Equal(ap2.EncryptedCredentials) {
+		!ap.CipherData.Equal(ap2.CipherData) ||
+		ap.ProvisionESIMProfile != ap2.ProvisionESIMProfile {
 		return false
 	}
 	if !generics.EqualLists(ap.PreferredPLMNs, ap2.PreferredPLMNs) ||

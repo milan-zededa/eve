@@ -607,8 +607,8 @@ func makeDPC(key string, timePrio time.Time, intfs selectedIntfs) types.DevicePo
 				CellularV2: types.CellNetPortConfig{
 					AccessPoints: []types.CellularAccessPoint{
 						{
-							APN:       "apn",
-							Activated: true,
+							APN:               "apn",
+							SIMActivationMode: types.SimActivationModeActive,
 						},
 					},
 					LocationTracking: true,

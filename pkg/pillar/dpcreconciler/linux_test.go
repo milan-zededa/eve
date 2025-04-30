@@ -621,8 +621,8 @@ func TestWireless(test *testing.T) {
 					CellularV2: types.CellNetPortConfig{
 						AccessPoints: []types.CellularAccessPoint{
 							{
-								APN:       "my-apn",
-								Activated: true,
+								APN:               "my-apn",
+								SIMActivationMode: types.SimActivationModeActive,
 							},
 						},
 					},

@@ -1510,28 +1510,23 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 			}
 		}
 		var (
-			accessPoint      *types.CellularAccessPoint
+			accessPoints     []types.CellularAccessPoint
 			probeCfg         types.WwanProbe
 			locationTracking bool
 		)
-		for _, ap := range port.WirelessCfg.CellularV2.AccessPoints {
-			if ap.Activated {
-				accessPoint = &ap
-				break
-			}
-		}
-		if accessPoint != nil {
+		if len(port.WirelessCfg.CellularV2.AccessPoints) > 0 {
 			// CellularV2 is being used.
+			accessPoints = port.WirelessCfg.CellularV2.AccessPoints
 			probeCfg = port.WirelessCfg.CellularV2.Probe
 			locationTracking = port.WirelessCfg.CellularV2.LocationTracking
 		} else {
 			if len(port.WirelessCfg.Cellular) > 0 {
 				// Old and now deprecated Cellular config is being used.
 				cellCfg := port.WirelessCfg.Cellular[0]
-				accessPoint = &types.CellularAccessPoint{
-					Activated: true,
-					APN:       cellCfg.APN,
-				}
+				accessPoints = append(accessPoints, types.CellularAccessPoint{
+					SIMActivationMode: types.SimActivationModeActive,
+					APN:               cellCfg.APN,
+				})
 				probeCfg.Disable = cellCfg.DisableProbe
 				if cellCfg.ProbeAddr != "" {
 					probeCfg.UserDefinedProbe.Method = types.ConnectivityProbeMethodICMP
@@ -1556,7 +1551,7 @@ func (r *LinuxDpcReconciler) getIntendedWwanConfig(dpc types.DevicePortConfig,
 		network := types.WwanNetworkConfig{
 			LogicalLabel:     port.Logicallabel,
 			PhysAddrs:        physAddress,
-			AccessPoint:      *accessPoint,
+			AccessPoints:     accessPoints,
 			Proxies:          port.Proxies,
 			Probe:            probeCfg,
 			MTU:              port.MTU,

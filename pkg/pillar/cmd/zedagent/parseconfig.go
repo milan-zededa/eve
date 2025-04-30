@@ -2186,11 +2186,32 @@ func parseNetworkWirelessConfig(ctx *getconfigContext,
 		for _, accessPoint := range cellNetConfig.AccessPoints {
 			var ap types.CellularAccessPoint
 			ap.APN = accessPoint.Apn
+			if ap.APN == "" {
+				// This field is mandatory.
+				return wconfig, errors.New("undefined APN")
+			}
 			ap.SIMSlot = uint8(accessPoint.SimSlot)
-			// By default (ActivatedSimSlot is not defined), any configured Access Point
-			// should be activated.
-			ap.Activated = cellNetConfig.ActivatedSimSlot == 0 ||
-				cellNetConfig.ActivatedSimSlot == accessPoint.SimSlot
+			ap.SIMIccid = accessPoint.SimIccid
+			ap.SIMActivationMode, err = parseSimActivationMode(accessPoint.SimActivationMode)
+			if err != nil {
+				return wconfig, err
+			}
+			if ap.SIMActivationMode == types.SimActivationModeUnspecified {
+				if cellNetConfig.ActivatedSimSlot != 0 {
+					// ActivatedSimSlot is deprecated, but we will continue reading it
+					// for backward compatibility when SIMActivationMode is undefined.
+					if cellNetConfig.ActivatedSimSlot == accessPoint.SimSlot {
+						ap.SIMActivationMode = types.SimActivationModeActive
+					} else {
+						ap.SIMActivationMode = types.SimActivationModeDeactivated
+					}
+				} else if len(cellNetConfig.AccessPoints) == 1 {
+					// With only one AccessPoint config and unspecified activation mode,
+					// EVE automatically activates whichever SIM card/slot is matched
+					// by the config.
+					ap.SIMActivationMode = types.SimActivationModeActive
+				}
+			}
 			ap.AuthProtocol, err = parseCellularAuthProtocol(accessPoint.AuthProtocol)
 			if err != nil {
 				return wconfig, err
@@ -2227,9 +2248,11 @@ func parseNetworkWirelessConfig(ctx *getconfigContext,
 			if err != nil {
 				return wconfig, err
 			}
+			ap.ProvisionESIMProfile = accessPoint.ProvisionEsimProfile
 			if ap.AuthProtocol != types.WwanAuthProtocolNone ||
-				ap.AttachAuthProtocol != types.WwanAuthProtocolNone {
-				ap.EncryptedCredentials, err = parseCipherBlock(
+				ap.AttachAuthProtocol != types.WwanAuthProtocolNone ||
+				ap.ProvisionESIMProfile {
+				ap.CipherData, err = parseCipherBlock(
 					ctx, key, accessPoint.GetCipherData())
 				if err != nil {
 					return wconfig, err
@@ -2240,8 +2263,8 @@ func parseNetworkWirelessConfig(ctx *getconfigContext,
 		// For backward compatibility.
 		if len(cellNetConfig.AccessPoints) == 0 && cellNetConfig.APN != "" {
 			ap := types.CellularAccessPoint{
-				Activated: true,
-				APN:       cellNetConfig.APN,
+				SIMActivationMode: types.SimActivationModeActive,
+				APN:               cellNetConfig.APN,
 			}
 			wconfig.CellularV2.AccessPoints = append(wconfig.CellularV2.AccessPoints, ap)
 		}
@@ -2333,6 +2356,23 @@ func parseCellularIPType(
 	default:
 		return types.WwanIPTypeUnspecified, fmt.Errorf(
 			"unrecognized cellular IP type: %+v", ipType)
+	}
+}
+
+func parseSimActivationMode(
+	mode zevecommon.SimActivationMode) (types.SimActivationMode, error) {
+	switch mode {
+	case zevecommon.SimActivationMode_SIM_ACTIVATION_MODE_UNSPECIFIED:
+		return types.SimActivationModeUnspecified, nil
+	case zevecommon.SimActivationMode_SIM_ACTIVATION_MODE_DEACTIVATED:
+		return types.SimActivationModeDeactivated, nil
+	case zevecommon.SimActivationMode_SIM_ACTIVATION_MODE_STANDBY:
+		return types.SimActivationModeStandby, nil
+	case zevecommon.SimActivationMode_SIM_ACTIVATION_MODE_ACTIVE:
+		return types.SimActivationModeActive, nil
+	default:
+		return types.SimActivationModeUnspecified, fmt.Errorf(
+			"unrecognized SIM activation mode: %v", mode)
 	}
 }
 
