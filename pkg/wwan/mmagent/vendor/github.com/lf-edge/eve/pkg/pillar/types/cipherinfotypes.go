@@ -148,18 +148,34 @@ func (status *CipherBlockStatus) Equal(status2 CipherBlockStatus) bool {
 // api/proto/config/acipherinfo.proto - EncryptionBlock
 // Always need to keep these two consistent.
 type EncryptionBlock struct {
-	DsAPIKey     string
-	DsPassword   string
-	WifiUserName string // If the authentication type is EAP
-	WifiPassword string
+	DsAPIKey          string
+	DsPassword        string
+	WifiUserName      string // If the authentication type is EAP
+	WifiPassword      string
+	ProtectedUserData string
+	ClusterToken      string
+	User              zcommon.EncryptionBlockUser
+	EncryptedData     string
+
 	// Credentials for the cellular default bearer:
 	CellularNetUsername string
 	CellularNetPassword string
 	// Credentials for the cellular attach bearer:
 	CellularNetAttachUsername string
 	CellularNetAttachPassword string
-	ProtectedUserData         string
-	ClusterToken              string
-	User                      zcommon.EncryptionBlockUser
-	EncryptedData             string
+	// eSIM profile provisioning
+	ESIM ESIMProfileProvisioning
+}
+
+// ESIMProfileProvisioning contains arguments for eSIM profile provisioning.
+type ESIMProfileProvisioning struct {
+	// This is the address (often a URL or FQDN) of the Subscription Manager Data
+	// Preparation+ (SM-DP+) server, which is responsible for securely downloading
+	// and managing the eSIM profile onto the device.
+	SmDpPlusAddress string
+	// A unique code that identifies the specific eSIM profile to be downloaded.
+	// This code is used by the device to request the appropriate profile from
+	// the SM-DP+ server.
+	// It is for one-time use only.
+	ActivationCode string
 }

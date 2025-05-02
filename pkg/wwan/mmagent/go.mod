@@ -6,7 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/godbus/dbus/v5 v5.1.0
-	github.com/lf-edge/eve/pkg/pillar v0.0.0-20250504151246-ec39e287817b
+	github.com/lf-edge/eve/pkg/pillar v0.0.0-20250505195146-0b0114aca7f5
 	github.com/miekg/dns v1.1.55
 	github.com/sirupsen/logrus v1.9.3
 	github.com/tatsushid/go-fastping v0.0.0-20160109021039-d7bb493dee3e
@@ -115,3 +115,5 @@ require (
 // However, between these separate PRs, wwan would be broken due to incompatibility
 // between pillar and mmagent.
 replace github.com/lf-edge/eve/pkg/pillar => ../../pillar
+
+replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20250506074433-9be094ed89c2
