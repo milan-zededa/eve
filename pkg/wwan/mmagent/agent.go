@@ -25,6 +25,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/pubsub/socketdriver"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
+	"github.com/lf-edge/eve/pkg/pillar/utils/generics"
 	"github.com/lf-edge/eve/pkg/wwan/mmagent/mmdbus"
 	"github.com/miekg/dns"
 	"github.com/sirupsen/logrus"
@@ -128,6 +129,8 @@ type ModemInfo struct {
 	appliedIPSettings types.WwanIPSettings
 	// Last applied user-configured MTU.
 	appliedUserMTU uint16
+	// Decrypted user credentials and/or eSIM provisioning arguments.
+	decryptedData map[string]types.EncryptionBlock // key: APN
 	// Decrypted username and password to use for the default bearer.
 	// (decrypted from Config.AccessPoint.EncryptedCredentials).
 	decryptedUsername string
@@ -606,7 +609,10 @@ func (a *MMAgent) applyWwanConfig(config types.WwanConfig) {
 			// Previously unmanaged modem now has configuration.
 			rescanProviders = append(rescanProviders, modem.Path)
 		}
-		if !modem.config.AccessPoint.Equal(modem.prevConfig.AccessPoint) {
+		if !generics.EqualListsFn(modem.config.AccessPoints, modem.prevConfig.AccessPoints,
+			func(ap1, ap2 types.CellularAccessPoint) bool {
+				return ap1.Equal(ap2)
+			}) {
 			a.decryptCredentials(modem)
 			forceReconnect = true
 		}
