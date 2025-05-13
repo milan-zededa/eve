@@ -50,8 +50,8 @@ type LinuxNetworkMonitor struct {
 	ifNameToIndex  map[string]int
 	ifIndexToAttrs map[int]IfAttrs
 	ifIndexToAddrs map[int]ifAddrs
-	ifIndexToDNS   map[int]DNSInfo
-	ifIndexToDHCP  map[int]DHCPInfo
+	ifIndexToDNS   map[int][]DNSInfo
+	ifIndexToDHCP  map[int][]DHCPInfo
 	ifIndexToGWs   map[int][]net.IP
 }
 
@@ -80,8 +80,8 @@ func (m *LinuxNetworkMonitor) initCache() {
 	m.ifNameToIndex = make(map[string]int)
 	m.ifIndexToAttrs = make(map[int]IfAttrs)
 	m.ifIndexToAddrs = make(map[int]ifAddrs)
-	m.ifIndexToDNS = make(map[int]DNSInfo)
-	m.ifIndexToDHCP = make(map[int]DHCPInfo)
+	m.ifIndexToDNS = make(map[int][]DNSInfo)
+	m.ifIndexToDHCP = make(map[int][]DHCPInfo)
 	m.ifIndexToGWs = make(map[int][]net.IP)
 }
 
@@ -209,7 +209,7 @@ func (m *LinuxNetworkMonitor) GetInterfaceAddrs(ifIndex int) ([]*net.IPNet, net.
 
 // GetInterfaceDNSInfo returns DNS info for the interface obtained
 // from resolv.conf file.
-func (m *LinuxNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) (info DNSInfo, err error) {
+func (m *LinuxNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) (info []DNSInfo, err error) {
 	m.cacheLock.Lock()
 	defer m.cacheLock.Unlock()
 	if !m.initialized {
@@ -223,15 +223,17 @@ func (m *LinuxNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) (info DNSInfo, er
 		return info, err
 	}
 	ifName := attrs.IfName
-	resolvConf := devicenetwork.IfnameToResolvConf(ifName)
-	if resolvConf == "" {
+	resolvConfFiles := devicenetwork.IfnameToResolvConf(ifName)
+	if len(resolvConfFiles) == 0 {
 		// Interface without IP is expected to not have resolv.conf file.
 		// We should be therefore careful about the log level here to avoid
 		// many log messages.
 		m.Log.Functionf("No resolv.conf for %s", ifName)
 		return info, nil
 	}
-	info = m.parseDNSInfo(resolvConf)
+	for _, resolvConfFile := range resolvConfFiles {
+		info = append(info, m.parseDNSInfo(resolvConfFile))
+	}
 	m.ifIndexToDNS[ifIndex] = info
 	return info, nil
 }
@@ -240,14 +242,19 @@ func (m *LinuxNetworkMonitor) parseDNSInfo(resolvConf string) (info DNSInfo) {
 	info.ResolvConfPath = resolvConf
 	dc := netclone.DnsReadConfig(resolvConf)
 	for _, server := range dc.Servers {
-		// Might have port number
-		s := strings.Split(server, ":")
-		ip := net.ParseIP(s[0])
+		// Split into host and port (handles IPv6 addresses correctly)
+		host, _, err := net.SplitHostPort(server)
+		if err != nil {
+			// If no port, assume the entire string is the host
+			host = server
+		}
+		ip := net.ParseIP(host)
 		if ip == nil {
 			m.Log.Warnf("failed to parse %s", server)
 			continue
 		}
 		info.DNSServers = append(info.DNSServers, ip)
+		info.ForIPv6 = ip.To4() == nil
 	}
 	for _, dn := range dc.Search {
 		info.Domains = append(info.Domains, dn)
@@ -257,7 +264,7 @@ func (m *LinuxNetworkMonitor) parseDNSInfo(resolvConf string) (info DNSInfo) {
 
 // GetInterfaceDHCPInfo returns DHCP info for the interface obtained
 // from dhcpcd.
-func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info DHCPInfo, err error) {
+func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info []DHCPInfo, err error) {
 	m.cacheLock.Lock()
 	defer m.cacheLock.Unlock()
 	if !m.initialized {
@@ -271,53 +278,106 @@ func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info DHCPInfo, 
 		return info, err
 	}
 	ifName := attrs.IfName
-	// XXX Getting error -1 unless we add argument -4.
-	// XXX Add IPv6 support.
-	m.Log.Functionf("Calling dhcpcd -U -4 %s\n", ifName)
-	stdoutStderr, err := base.Exec(m.Log, "dhcpcd", "-U", "-4", ifName).CombinedOutput()
+	v4Info, err1 := m.getDHCPInfo(ifName, false)
+	if err1 == nil && !v4Info.IsEmpty() {
+		info = append(info, v4Info)
+	}
+	v6Info, err2 := m.getDHCPInfo(ifName, true)
+	if err2 == nil && !v6Info.IsEmpty() {
+		info = append(info, v6Info)
+	}
+	if err1 == nil || err2 == nil {
+		m.ifIndexToDHCP[ifIndex] = info
+		return info, nil
+	}
+	if err1 != nil {
+		return info, err1
+	}
+	return info, err2
+}
+
+func (m *LinuxNetworkMonitor) getDHCPInfo(
+	ifName string, forIPv6 bool) (info DHCPInfo, err error) {
+	versionArg := "-4"
+	if forIPv6 {
+		versionArg = "-6"
+		info.ForIPv6 = true
+	}
+	m.Log.Functionf("Calling dhcpcd -U %s %s", versionArg, ifName)
+	cmd := base.Exec(m.Log, "dhcpcd", "-U", versionArg, ifName)
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
 	if err != nil {
-		if strings.Contains(string(stdoutStderr), "dhcp_dump: No such file or directory") {
-			// DHCP is not configured for this interface. Return empty DHCPInfo.
-			err = nil
-		} else {
-			err = fmt.Errorf("dhcpcd -U failed: %s: %s", string(stdoutStderr), err)
+		if strings.Contains(output, "dhcpcd is not running") ||
+			strings.Contains(output, "dhcp_dump: No such file or directory") {
+			// DHCP is not configured for this interface and IP version.
+			// Return empty DHCPInfo.
+			return info, nil
 		}
+		err = fmt.Errorf("dhcpcd -U %s failed: %s: %s", versionArg, output, err)
 		return
 	}
-	m.Log.Tracef("dhcpcd -U got %v\n", string(stdoutStderr))
-	lines := strings.Split(string(stdoutStderr), "\n")
+	m.Log.Tracef("dhcpcd -U %s got %v", versionArg, output)
+	lines := strings.Split(output, "\n")
 	var masklen int
 	var subnet net.IP
+
+	/* TODO: IPv6 looks like this:
+
+	$ dhcpcd -U -6 eth0
+	no such user dhcpcd
+	reason=ROUTERADVERT
+	interface=eth0
+	protocol=ra
+	nd1_from=fe80::c225:2fff:fea2:dc73
+	nd1_acquired=1190
+	nd1_now=1199
+	nd1_hoplimit=64
+	nd1_flags=O
+	nd1_lifetime=1800
+	nd1_prefix_information1_length=64
+	nd1_prefix_information1_flags=LA
+	nd1_prefix_information1_vltime=2592000
+	nd1_prefix_information1_pltime=604800
+	nd1_prefix_information1_prefix=2a0c:c500:a81e:5400::
+	nd1_mtu=1500
+	nd1_source_address=c0252fa2dc73
+	nd1_rdnss1_lifetime=900
+	nd1_rdnss1_servers=2a0c:c500:a8ca::de 2a0c:c500:a8ca::d5
+	nd1_addr1=2a0c:c500:a81e:5400:7d61:3555:b4aa:6199/64
+
+	*/
+
 	for _, line := range lines {
 		items := strings.Split(line, "=")
 		if len(items) != 2 {
 			continue
 		}
-		m.Log.Tracef("Got <%s> <%s>\n", items[0], items[1])
+		m.Log.Tracef("Got <%s> <%s>", items[0], items[1])
 		switch items[0] {
 		case "network_number":
 			network := trimQuotes(items[1])
-			m.Log.Functionf("GetDhcpInfo(%s) network_number %s\n", ifName,
-				network)
+			m.Log.Functionf("getDHCPInfo(%s,%s) network_number %s",
+				ifName, versionArg, network)
 			ip := net.ParseIP(network)
 			if ip == nil {
-				m.Log.Errorf("Failed to parse %s\n", network)
+				m.Log.Errorf("Failed to parse %s", network)
 				continue
 			}
 			subnet = ip
 		case "subnet_cidr":
 			str := trimQuotes(items[1])
-			m.Log.Functionf("GetDhcpInfo(%s) subnet_cidr %s\n", ifName,
-				str)
+			m.Log.Functionf("getDHCPInfo(%s,%s) subnet_cidr %s",
+				ifName, versionArg, str)
 			masklen, err = strconv.Atoi(str)
 			if err != nil {
-				m.Log.Errorf("Failed to parse masklen %s\n", str)
+				m.Log.Errorf("Failed to parse masklen %s", str)
 				continue
 			}
 		case "ntp_servers":
 			str := trimQuotes(items[1])
-			m.Log.Functionf("GetDhcpInfo(%s) ntp_servers %s\n", ifName,
-				str)
+			m.Log.Functionf("getDHCPInfo(%s,%s) ntp_servers %s",
+				ifName, versionArg, str)
 			servers := strings.Split(str, " ")
 			for _, server := range servers {
 				ip := net.ParseIP(server)
@@ -328,7 +388,6 @@ func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info DHCPInfo, 
 		}
 	}
 	info.Subnet = &net.IPNet{IP: subnet, Mask: net.CIDRMask(masklen, 32)}
-	m.ifIndexToDHCP[ifIndex] = info
 	return info, nil
 }
 
@@ -543,11 +602,13 @@ func (m *LinuxNetworkMonitor) watcher() {
 				event := DNSInfoChange{
 					IfIndex: ifIndex,
 				}
-				if dnsChange.Op != fsnotify.Remove {
-					event.Info = m.parseDNSInfo(dnsChange.Name)
+				// Re-load nameservers from all resolv.conf files.
+				resolvConfFiles := devicenetwork.IfnameToResolvConf(ifName)
+				for _, resolvConfFile := range resolvConfFiles {
+					event.Info = append(event.Info, m.parseDNSInfo(resolvConfFile))
 				}
 				m.cacheLock.Lock()
-				if dnsChange.Op == fsnotify.Remove {
+				if len(event.Info) == 0 {
 					delete(m.ifIndexToDNS, ifIndex)
 				} else {
 					m.ifIndexToDNS[ifIndex] = event.Info

@@ -262,15 +262,23 @@ func (m *DpcManager) getDHCPInfo(port *types.NetworkPortStatus) error {
 		return fmt.Errorf("getDHCPInfo: failed to get index for interface %s: %v",
 			port.IfName, err)
 	}
-	dhcpInfo, err := m.NetworkMonitor.GetInterfaceDHCPInfo(ifIndex)
+	dhcpInfoList, err := m.NetworkMonitor.GetInterfaceDHCPInfo(ifIndex)
 	if err != nil {
 		return fmt.Errorf("getDHCPInfo: failed to get DHCP info for interface %s: %v",
 			port.IfName, err)
 	}
-	if dhcpInfo.Subnet != nil {
-		port.Subnet = *dhcpInfo.Subnet
+	preferIPv6 := port.Type == types.NetworkTypeIPV6 ||
+		port.Type == types.NetworkTypeIpv6Only
+	for _, dhcpInfo := range dhcpInfoList {
+		if dhcpInfo.Subnet != nil {
+			// We have only one Subnet field to report.
+			// With dual-stack we pick the subnet for the preferred IP version.
+			if len(port.Subnet.IP) == 0 || dhcpInfo.ForIPv6 == preferIPv6 {
+				port.Subnet = *dhcpInfo.Subnet
+			}
+		}
+		port.DhcpNtpServers = append(port.DhcpNtpServers, dhcpInfo.NtpServers...)
 	}
-	port.DhcpNtpServers = dhcpInfo.NtpServers
 	return nil
 }
 
@@ -283,15 +291,22 @@ func (m *DpcManager) getDNSInfo(port *types.NetworkPortStatus) error {
 		return fmt.Errorf("getDNSInfo: failed to get index for interface %s: %v",
 			port.IfName, err)
 	}
-	dnsInfo, err := m.NetworkMonitor.GetInterfaceDNSInfo(ifIndex)
+	dnsInfoList, err := m.NetworkMonitor.GetInterfaceDNSInfo(ifIndex)
 	if err != nil {
 		return fmt.Errorf("getDNSInfo: failed to get DNS info for interface %s: %v",
 			port.IfName, err)
 	}
-	port.DNSServers = dnsInfo.DNSServers
-	// XXX just pick first since have one DomainName slot
-	if len(dnsInfo.Domains) > 0 {
-		port.DomainName = dnsInfo.Domains[0]
+	preferIPv6 := port.Type == types.NetworkTypeIPV6 ||
+		port.Type == types.NetworkTypeIpv6Only
+	for _, dnsInfo := range dnsInfoList {
+		port.DNSServers = append(port.DNSServers, dnsInfo.DNSServers...)
+		if len(dnsInfo.Domains) > 0 {
+			// We have only one DomainName field to report.
+			// With dual-stack we pick the domain name for the preferred IP version.
+			if port.DomainName == "" || dnsInfo.ForIPv6 == preferIPv6 {
+				port.DomainName = dnsInfo.Domains[0]
+			}
+		}
 	}
 	return nil
 }

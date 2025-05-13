@@ -32,10 +32,12 @@ type NetworkMonitor interface {
 	// to the given interface.
 	GetInterfaceAddrs(ifIndex int) ([]*net.IPNet, net.HardwareAddr, error)
 	// GetInterfaceDNSInfo : get DNS information associated with the given interface.
-	GetInterfaceDNSInfo(ifIndex int) (DNSInfo, error)
+	// Function returns one entry for every resolv.conf file generated for the interface.
+	GetInterfaceDNSInfo(ifIndex int) ([]DNSInfo, error)
 	// GetInterfaceDHCPInfo : get DHCP information associated with the given interface.
 	// This information should be retrieved from the DHCP client.
-	GetInterfaceDHCPInfo(ifIndex int) (DHCPInfo, error)
+	// Returns entries separately for IPv4 and IPv6.
+	GetInterfaceDHCPInfo(ifIndex int) ([]DHCPInfo, error)
 	// GetInterfaceDefaultGWs : return a list of IP addresses of default gateways
 	// used by the given interface. Includes both statically configured GWs as well as
 	// those assigned by DHCP.
@@ -130,7 +132,7 @@ func (e IfChange) Equal(e2 IfChange) bool {
 // DNSInfoChange : DNS information for interface has changed.
 type DNSInfoChange struct {
 	IfIndex int
-	Info    DNSInfo
+	Info    []DNSInfo
 }
 
 func (e DNSInfoChange) isNetworkEvent() {}
@@ -178,10 +180,17 @@ type DNSInfo struct {
 	ResolvConfPath string
 	Domains        []string
 	DNSServers     []net.IP
+	ForIPv6        bool
 }
 
 // DHCPInfo : DHCP information associated with an interface.
 type DHCPInfo struct {
 	Subnet     *net.IPNet
 	NtpServers []net.IP
+	ForIPv6    bool
+}
+
+// IsEmpty return true if DHCPInfo is empty/unset.
+func (info DHCPInfo) IsEmpty() bool {
+	return info.Subnet == nil && len(info.NtpServers) == 0
 }
