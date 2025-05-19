@@ -825,7 +825,7 @@ func (n *nim) handleDPCImpl(key string, configArg interface{}, fromFile bool) {
 	}
 	// Lastresort DPC is allowed to be forcefully used only until NIM receives
 	// any (proper) network configuration.
-	if dpc.Key != dpcmanager.LastResortKey {
+	if dpc.Key != dpcmanager.LastResortKey && dpc.IsDPCUsable() {
 		n.forceLastResort = false
 		n.reevaluateLastResortDPC()
 	}
@@ -1083,8 +1083,16 @@ func (n *nim) reevaluateLastResortDPC() {
 			if !enabledByConfig {
 				reason = "lastresort forcefully enabled"
 			}
+			// TODO: do this only if
+			//  - we do not have lastresort or it (the set of interfaces) has changed, AND
+			//  - lastresort is explicitly enabled, OR
+			//  - there is no DPC available (for at least X seconds)
 			n.publishLastResortDPC(reason)
 		} else {
+			// TODO: do this only if:
+			//  - we actually have lastresort
+			//  - lastresort is not explicitly created
+			//  - we have at least one DPC which worked at least once
 			n.removeLastResortDPC()
 		}
 	}
