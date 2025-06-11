@@ -66,6 +66,7 @@ type Route struct {
 	Dst     *net.IPNet
 	Gw      net.IP
 	Table   int
+	// TODO: add family
 	// Network-stack specific data.
 	Data interface{}
 }

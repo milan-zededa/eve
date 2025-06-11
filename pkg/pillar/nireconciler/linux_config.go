@@ -296,6 +296,7 @@ const (
 
 const (
 	metadataSrvIP = "169.254.169.254"
+	// TODO: add IPv6 address(es) for metadata server
 )
 
 // NIToSGName returns the name of the subgraph encapsulating the entire configuration
@@ -509,6 +510,7 @@ func (r *LinuxNIReconciler) getIntendedBlackholeCfg() dg.Graph {
 		},
 		OutputIf: dummyIfRef,
 	}, nil)
+	// TODO: the same rule for IPv6
 	intendedBlackholeCfg.PutItem(linux.IPRule{
 		Priority: blackholePrio,
 		Table:    blackholeRT,
@@ -522,6 +524,7 @@ func (r *LinuxNIReconciler) getIntendedBlackholeCfg() dg.Graph {
 	// and not routed by EVE escape this IP rule and would otherwise continue
 	// in their path even if marked for dropping.
 	dropMark := fmt.Sprintf("%d/%d", iptables.AceDropAction, iptables.AceActionMask)
+	// TODO: add the same rule for IPv6
 	intendedBlackholeCfg.PutItem(iptables.Rule{
 		RuleLabel: "Drop blackholed traffic",
 		Table:     "mangle",
@@ -753,6 +756,7 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		for _, rt := range routes {
 			var haveStaticRoute bool
 			for _, staticRt := range ni.bridge.StaticRoutes {
+				// TODO: make sure that default routes are of the same family
 				if rt.IsDefaultRoute() && staticRt.IsDefaultRoute() {
 					haveStaticRoute = true
 					break
@@ -809,6 +813,7 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		}
 		var outputIf generic.NetworkIf
 		if isAppGW {
+			// TODO: unreachable
 			outputIf = generic.NetworkIf{
 				IfName:  ni.brIfName,
 				ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
@@ -893,6 +898,7 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		Dst:      r.getNISubnet(ni),
 	}, nil)
 	// Add S-NAT iptables rules for the local network instance (only for IPv4).
+	// TODO: Do this also for IPv6 (?)
 	if ni.config.Subnet.IP.To4() != nil {
 		if ni.config.Type == types.NetworkInstanceTypeLocal {
 			for _, port := range ni.bridge.Ports {
@@ -1054,7 +1060,10 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 		// No IP address for the metadata server to listen on.
 		return nil
 	}
+	// TODO: merge IP and port properly
 	srvAddr := fmt.Sprintf("%s:%d", bridgeIP.IP.String(), 80)
+	// TODO: Add such rules also for IPv6 metadata addresses.
+	//       Actually add only for the IP family matching the NI subnet.
 	if bridgeIP.IP.To4() != nil {
 		items = append(items, iptables.Rule{
 			RuleLabel: fmt.Sprintf("Redirection rule for metadata server of NI: %s",
@@ -1071,6 +1080,7 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 		})
 	}
 	if r.niBridgeIsCreatedByNIM(ni.config, ni.bridge) {
+		// TODO: Add the same also for IPv6
 		items = append(items, iptables.Rule{
 			RuleLabel: fmt.Sprintf("Block access to metadata server from outside "+
 				"for L2 NI %s", ni.config.UUID),
@@ -1130,10 +1140,12 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 			withDefaultRoute = true
 		}
 	}
+	// TODO: this comment is obsolete. Instead "combine NTP servers from all NI ports"
 	// Combine NTP servers assigned to the port(s) together with those statically
 	// configured for the network instance.
 	ntpServerIPs := make([]net.IP, 0)
 	for _, port := range ni.bridge.Ports {
+		// TODO: Take only IPs of the same family as NI subnet
 		ntpServerIPs = append(ntpServerIPs, port.NTPServers...)
 	}
 	generics.FilterDuplicatesFn(ntpServerIPs, netutils.EqualIPs)
@@ -1185,6 +1197,7 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 		}
 	}
 	// Use DHCP to propagate connected IP routes.
+	// TODO: We will do this also for IPv6
 	if ni.config.PropagateConnRoutes && bridgeIP != nil {
 		for _, port := range ni.bridge.Ports {
 			ifIndex, found, err := r.netMonitor.GetInterfaceIndex(port.IfName)
@@ -1202,6 +1215,7 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 				}
 			}
 			for _, portIP := range portIPs {
+				// TODO: match the NI IP family
 				if portIP.IP.To4() == nil {
 					continue
 				}
@@ -1226,10 +1240,12 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 		GatewayIP:        gatewayIP,
 		WithDefaultRoute: withDefaultRoute,
 		DomainName:       ni.config.DomainName,
-		DNSServers:       ni.config.DnsServers,
-		NTPServers:       ntpServerIPs,
-		PropagateRoutes:  propagateRoutes,
-		MTU:              ni.bridge.MTU,
+		// TODO: Should we filter this to IP version?
+		//       Or already prepare Dnsmasq for dual-stack?
+		DNSServers:      ni.config.DnsServers,
+		NTPServers:      ntpServerIPs,
+		PropagateRoutes: propagateRoutes,
+		MTU:             ni.bridge.MTU,
 	}
 	// IPRange set above does not matter that much - every VIF is statically
 	// assigned IP address using a host file.
@@ -1261,6 +1277,7 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 		ListenIP: listenIP,
 	}
 	for _, port := range ni.bridge.Ports {
+		// TODO: make sure that IP version matches. Or already prepare Dnsmasq for dual-stack?
 		for _, dnsSrv := range port.DNSServers {
 			dnsCfg.UpstreamServers = append(dnsCfg.UpstreamServers,
 				generic.UpstreamDNSServer{
@@ -1272,6 +1289,8 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 				})
 		}
 	}
+	// TODO: filter/sort by IP version
+	//       Or let Dnsmasq to filter it on their own? (I do not like that)
 	for _, staticEntry := range ni.config.DnsNameToIPList {
 		dnsCfg.StaticEntries = append(dnsCfg.StaticEntries, generic.HostnameToIPs{
 			Hostname: staticEntry.HostName,
@@ -1421,6 +1440,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnCfg(niID uuid.UUID,
 			}, nil)
 			// Gateways not covered by IP subnets should be routed explicitly
 			// using connected routes.
+			// TODO: obsolete comment and most likely obsolete code
 			// Note that by default, DHCP servers of local network instances
 			// are intentionally configured to grant IP leases with /32 mask,
 			// so these connected routes are needed.
@@ -1658,6 +1678,7 @@ func (r *LinuxNIReconciler) getNISubnet(ni *niInfo) *net.IPNet {
 }
 
 // Check if network instance has default route.
+// TODO: Add "ipv6 bool" and check only routes of the same family
 func (r *LinuxNIReconciler) niHasDefRoute(ni *niInfo) bool {
 	for _, rt := range ni.bridge.StaticRoutes {
 		if rt.IsDefaultRoute() {

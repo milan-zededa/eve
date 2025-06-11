@@ -878,6 +878,7 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig,
 		Description: "Global configuration",
 	}
 	intendedCfg := dg.New(graphArgs)
+	// TODO: add this for IPv6 as well
 	// Move IP rule that matches local destined packets below network instance rules.
 	intendedCfg.PutItem(linux.IPRule{
 		Priority: devicenetwork.PbrLocalDestPrio,
@@ -1252,7 +1253,7 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig,
 			intendedRoutes.PutItem(linux.Route{
 				Route: netlink.Route{
 					LinkIndex: ifIndex,
-					Family:    netlink.FAMILY_V4,
+					Family:    netlink.FAMILY_V4, // TODO: determine this from the cluster IP prefix
 					Scope:     netlink.SCOPE_UNIVERSE,
 					Protocol:  unix.RTPROT_STATIC,
 					Type:      unix.RTN_UNICAST,

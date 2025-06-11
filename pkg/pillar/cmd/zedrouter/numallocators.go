@@ -98,11 +98,11 @@ func (z *zedrouter) initNumberAllocators() {
 	}
 	for _, item := range pubAppNetworkStatus.GetAll() {
 		status := item.(types.AppNetworkStatus)
-		var unets []types.AppNetAdapterConfig
-		for _, unet := range status.AppNetAdapterList {
-			unets = append(unets, unet.AppNetAdapterConfig)
+		var adapters []types.AppNetAdapterConfig
+		for _, adapter := range status.AppNetAdapterList {
+			adapters = append(adapters, adapter.AppNetAdapterConfig)
 		}
-		err = z.allocateAppIntfNums(status.UUIDandVersion.UUID, unets)
+		err = z.allocateAppIntfNums(status.UUIDandVersion.UUID, adapters)
 		if err != nil {
 			z.log.Errorf(
 				"failed to sync AppInterfaceToNum with AppNetworkStatus for app %s-%s: %v",
@@ -164,8 +164,8 @@ func (z *zedrouter) delAppIntfAllocator(netInstID uuid.UUID) error {
 
 // Allocate numbers for all interfaces of a given app.
 func (z *zedrouter) allocateAppIntfNums(appID uuid.UUID,
-	unets []types.AppNetAdapterConfig) error {
-	for _, adapterConfig := range unets {
+	adapters []types.AppNetAdapterConfig) error {
+	for _, adapterConfig := range adapters {
 		netInstID := adapterConfig.Network
 		ifIdx := adapterConfig.IfIdx
 		withStaticIP := adapterConfig.AppIPAddr != nil

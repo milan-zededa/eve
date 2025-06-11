@@ -268,6 +268,7 @@ func checkClientIPMsg(msg string) bool {
 	if strings.HasPrefix(msg, clientIPMsg) {
 		msgs := strings.SplitN(msg, clientIPMsg, 2)
 		if len(msgs) == 2 {
+			// TODO: properly split to support IPv6
 			addrPort := strings.Split(msgs[1], ":")
 			if net.ParseIP(addrPort[0]) == nil {
 				log.Errorf("received invalid IP %v", msg)
@@ -311,6 +312,7 @@ func getBasics() {
 	}
 
 	ips := []string{}
+	// TODO: Add IPv6 global-unicast addresses
 	for _, i := range allUPIntfIPv4() {
 		if strings.HasPrefix(i.intfName, "bn") {
 			continue

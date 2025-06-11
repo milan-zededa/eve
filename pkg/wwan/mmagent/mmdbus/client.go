@@ -824,6 +824,7 @@ func (c *Client) getBearerIPSettings(bearerObj dbus.BusObject) (
 		ipLen = net.IPv6len
 	}
 	if value, ok := ipConfig["method"].Value().(uint32); ok {
+		// TODO: add support for IPv6 SLAAC+DHCPv6?
 		if value != BearerIPMethodStatic {
 			err = fmt.Errorf("connected to bearer %s using unsupported method: %d",
 				bearerObj.Path(), value)

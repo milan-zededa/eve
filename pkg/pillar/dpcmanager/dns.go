@@ -59,6 +59,7 @@ func (m *DpcManager) updateDNS() {
 		// Set fields from the config...
 		m.deviceNetStatus.Ports[ix].Dhcp = port.Dhcp
 		m.deviceNetStatus.Ports[ix].Type = port.Type
+		// TODO get rid of this Subnet
 		_, subnet, _ := net.ParseCIDR(port.AddrSubnet)
 		if subnet != nil {
 			m.deviceNetStatus.Ports[ix].Subnet = *subnet
@@ -217,6 +218,7 @@ func (m *DpcManager) updateGeo() {
 			if ai.Addr.IsLinkLocalUnicast() {
 				continue
 			}
+			// TODO: count for the same IP version?
 			numDNSServers := types.CountDNSServers(m.deviceNetStatus, port.IfName)
 			if numDNSServers == 0 {
 				continue
@@ -247,6 +249,7 @@ func (m *DpcManager) updateGeo() {
 	}
 }
 
+// TODO: turn this into getNTPInfo
 func (m *DpcManager) getDHCPInfo(port *types.NetworkPortStatus) error {
 	if port.Dhcp != types.DhcpTypeClient {
 		return nil

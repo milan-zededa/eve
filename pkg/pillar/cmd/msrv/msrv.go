@@ -60,6 +60,10 @@ const SignerMaxSize = 65535
 // DiagMaxSize is the max returned size for diag
 const DiagMaxSize = 65535
 
+// TODO: we need IPv6 counterpart to 169.254.
+//       - for example fe80::a9fe:a9fe : https://specs.openstack.org/openstack/neutron-specs/specs/ussuri/metadata-add-ipv6-support.html
+//       - or fd00:ec2::254 : https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instancedata-data-retrieval.html
+
 // MetaDataServerIP is IP of meta data server
 const MetaDataServerIP = "169.254.169.254"
 
@@ -679,6 +683,7 @@ func (msrv *Msrv) MakeMetadataHandler() http.Handler {
 
 	r.Route("/eve/v1", func(r chi.Router) {
 		r.Get("/network.json", msrv.handleNetwork())
+		// TODO: add external_ipv6?
 		r.Get("/external_ipv4", msrv.handleExternalIP())
 		r.Get("/hostname", msrv.handleHostname())
 		r.Post("/kubeconfig", msrv.handleAppInstMeta(

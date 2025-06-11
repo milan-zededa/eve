@@ -71,7 +71,7 @@ type NetworkPortStatus struct {
 }
 
 type AddrInfo struct {
-	Addr             net.IP
+	Addr             net.IP // TODO: report with subnet
 	Geo              ipinfo.IPInfo
 	LastGeoTimestamp time.Time
 }
@@ -523,6 +523,7 @@ func CountLocalAddrNoLinkLocalWithCost(dns DeviceNetworkStatus,
 
 // CountLocalIPv4AddrAnyNoLinkLocal is like CountLocalAddrAnyNoLinkLocal but
 // only IPv4 addresses are counted
+// TODO: do we need IPv4-only variant?
 func CountLocalIPv4AddrAnyNoLinkLocal(dns DeviceNetworkStatus) int {
 
 	// Count the number of addresses which apply
@@ -594,6 +595,7 @@ func GetNTPServers(dns DeviceNetworkStatus, ifname string) ([]net.IP, []string) 
 
 // CountLocalIPv4AddrAnyNoLinkLocalIf is like CountLocalAddrAnyNoLinkLocalIf but
 // only IPv4 addresses are counted
+// TODO: do we need IPv4-only variant?
 func CountLocalIPv4AddrAnyNoLinkLocalIf(dns DeviceNetworkStatus,
 	ifname string) (int, error) {
 

@@ -749,6 +749,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnRawIptables(vif vifInfo,
 		})
 	}
 	// 2. Enable access to the metadata server
+	// TODO: Add rules for IPv6 metadata server address(es)
 	if !forIPv6 && bridgeIP != nil {
 		aclRules = append(aclRules, iptables.Rule{
 			RuleLabel: "Allow access to Metadata server",
@@ -1057,6 +1058,7 @@ func (r *LinuxNIReconciler) getIntendedAppConnNATIptables(vif vifInfo,
 				if isIPv6 != forIPv6 {
 					continue
 				}
+				// TODO: merge IP and port properly
 				target := fmt.Sprintf("%s:%d", vif.GuestIP, portMap.targetPort)
 				items = append(items, iptables.Rule{
 					RuleLabel: fmt.Sprintf("User-configured PORTMAP ACL rule %d "+
@@ -1290,6 +1292,7 @@ mangleEgress:
 		})
 	}
 	// 2.2. Mark request from app to the metadata server
+	// TODO: Add rules for metadata server IPv6 address(es)
 	if !forIPv6 && bridgeIP != nil {
 		httpMark := iptables.GetConnmark(uint8(app.appNum),
 			iptables.ControlProtocolMarkingIDMap["app_http"], false, false)

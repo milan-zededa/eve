@@ -2390,6 +2390,7 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 	return nil
 }
 
+// TODO: Check that the same IP version is used across Ipspec?
 func parseIpspec(ipspec *zconfig.Ipspec,
 	config *types.NetworkInstanceConfig) error {
 
@@ -2410,6 +2411,7 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 		config.DnsServers = append(config.DnsServers, ds)
 	}
 	// Parse Subnet
+	// TODO: this is mandatory argument
 	if s := ipspec.GetSubnet(); s != "" {
 		_, subnet, err := net.ParseCIDR(s)
 		if err != nil {

@@ -76,6 +76,7 @@ func (z *zedrouter) getNIBridgeConfig(
 			continue
 		}
 		staticRoutes = append(staticRoutes, nireconciler.IPRoute{
+			// TODO: pass IP version
 			DstNetwork: route.DstNetwork,
 			Gateway:    route.Gateway,
 			OutputPort: route.SelectedPort,
@@ -106,6 +107,7 @@ func (z *zedrouter) attachNTPServersToPortConfigs(portConfigs []nireconciler.Por
 				continue
 			}
 			z.pubSub.StillRunning(agentName, warningTime, errorTime)
+			// TODO: get IP addresses of the version corresponding to NI subnet
 			dnsResponses, err := devicenetwork.ResolveWithPortsLambda(
 				ntpServer,
 				*z.deviceNetworkStatus,
@@ -260,7 +262,7 @@ func (z *zedrouter) updateNIPorts(niConfig types.NetworkInstanceConfig,
 	changed = changed || !generics.EqualSets(niStatus.Ports, validatedPortLLs)
 	niStatus.Ports = validatedPortLLs
 	changed = changed || !generics.EqualSets(niStatus.NTPServers, newNTPServers)
-	niStatus.NTPServers = newNTPServers
+	niStatus.NTPServers = newNTPServers // TODO should this be filtered to only include NI IP version?
 	// Update BridgeMac for Switch NI bridge created by NIM.
 	if z.niBridgeIsCreatedByNIM(niConfig) {
 		// Only switch NI with single port may have the bridge created by NIM.

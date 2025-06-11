@@ -191,6 +191,7 @@ func (c *HTTPServerConfigurator) runServer(ctx context.Context, srvName string,
 	w := c.Logger.Writer()
 	defer w.Close()
 	srv := http.Server{
+		// TODO: merge IP and port properly
 		Addr:         fmt.Sprintf("%s:%d", listenIP.String(), port),
 		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
@@ -344,6 +345,8 @@ func (c *HTTPServerConfigurator) unblockAccept(addr string, where string) {
 
 // getConnStats is used to collect some debug output from netstat.
 func (c *HTTPServerConfigurator) getConnStats(match string) string {
+	// TODO: stupid netstat does not enclose the IPv6 address in brackets.
+	//       e.g. tcp6       0      0 2a0c:c500:a81e:54:37090 2600:1901:0:c47c:::443  TIME_WAIT   -
 	cmd := "netstat -antwp | grep " + match
 	output, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {

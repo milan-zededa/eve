@@ -82,6 +82,7 @@ func initPolicy() error {
 	return nil
 }
 
+// TODO: include IPv6
 func getAllLocalAddr() []string {
 	var localIPs []string
 	localIPs = getLocalIPs()
@@ -189,6 +190,7 @@ func checkIPportPolicy(tcpOpt string, evStatus *types.EdgeviewStatus) (bool, str
 		return true, "", ""
 	}
 	var appName string
+	// TODO: improve parsing to support IPv6 addresses
 	if strings.Contains(tcpOpt, ":") {
 		opts := strings.Split(tcpOpt, ":")
 		if len(opts) != 2 {
@@ -303,6 +305,7 @@ func checkAddrLocal(addr string) bool {
 }
 
 func checkAppConsole(addr, port string) (bool, bool, string) {
+	// TODO: check also against ::1
 	if addr != "127.0.0.1" && addr != "localhost" {
 		return false, false, ""
 	}
@@ -343,6 +346,7 @@ func checkAddrApps(addr string) (bool, bool, string) {
 
 func checkAndLogProxySession(host string) (bool, string) {
 	hostIP := host
+	// TODO: parse hostIP from port properly
 	if strings.Contains(host, ":") {
 		items := strings.SplitN(host, ":", 2)
 		if len(items) == 2 {

@@ -50,13 +50,21 @@ const (
 	appUUIDContextKey
 )
 
+// TODO: App matching by source IP will have to be more clever in IPv6.
+//       The app can use the link-local IPv6 address as the source. We we need to lookup ND table to get MAC address.
+//       By the time we are processing the HTTP request, TCP handshake was already done and we should
+//       have ND table entry for the source IP (but maybe there is some delay for "ip -6 neigh show" to sync,
+//       so we should potentially wait with some small timeout)
+
 func (msrv *Msrv) handleNetwork() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		msrv.Log.Tracef("networkHandler.ServeHTTP")
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		externalIPs, code := msrv.getExternalIPsForApp(remoteIP)
 		var ipsStr []string
 		var hostname string
+		// TODO: separate list for IPv6
 		for _, ip := range externalIPs {
 			// Avoid returning the string <nil>
 			if netutils.IsEmptyIP(ip) {
@@ -80,7 +88,8 @@ func (msrv *Msrv) handleNetwork() func(http.ResponseWriter, *http.Request) {
 		w.Header().Add("Content-Type", "application/json")
 		w.WriteHeader(code)
 		resp, _ := json.Marshal(map[string]interface{}{
-			"caller-ip":         r.RemoteAddr,
+			"caller-ip": r.RemoteAddr,
+			// TODO: separate entry for ipv6
 			"external-ipv4":     strings.Join(ipsStr, ","),
 			"hostname":          hostname, // Do not delete this line for backward compatibility
 			"app-instance-uuid": hostname,
@@ -99,6 +108,7 @@ func (msrv *Msrv) handleNetwork() func(http.ResponseWriter, *http.Request) {
 func (msrv *Msrv) handleExternalIP() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		msrv.Log.Tracef("externalIPHandler.ServeHTTP")
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		externalIPs, code := msrv.getExternalIPsForApp(remoteIP)
 		w.WriteHeader(code)
@@ -116,6 +126,7 @@ func (msrv *Msrv) handleExternalIP() func(http.ResponseWriter, *http.Request) {
 func (msrv *Msrv) handleHostname() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		msrv.Log.Tracef("hostnameHandler.ServeHTTP")
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		w.Header().Add("Content-Type", "text/plain")
@@ -136,6 +147,7 @@ func (msrv *Msrv) handleOpenStack() func(http.ResponseWriter, *http.Request) {
 		msrv.Log.Tracef("openstackHandler ServeHTTP request: %s", r.URL.String())
 		dirname, filename := path.Split(strings.TrimSuffix(r.URL.Path, "/"))
 		dirname = strings.TrimSuffix(dirname, "/")
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		var hostname string
@@ -260,6 +272,7 @@ func (msrv *Msrv) handleAppInstMeta(maxResponseLen int, publishDataType types.Ap
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		if anStatus == nil {
@@ -383,6 +396,7 @@ func (msrv *Msrv) handleSigner(zedcloudCtx *zedcloud.ZedCloudContext) func(http.
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		if anStatus == nil {
@@ -419,6 +433,7 @@ func (msrv *Msrv) handleDiag() func(http.ResponseWriter, *http.Request) {
 		}
 		// Check that request comes from a source IP for an app instance
 		// to avoid returning data to others.
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		if anStatus == nil {
@@ -462,7 +477,7 @@ func (msrv *Msrv) handleAppInfo() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		msrv.Log.Tracef("wwanAppInfoHandler.ServeHTTP")
 		w.Header().Add("Content-Type", "application/json")
-
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		if anStatus == nil {
@@ -499,7 +514,7 @@ func (msrv *Msrv) handleAppInfo() func(http.ResponseWriter, *http.Request) {
 func (msrv *Msrv) handleAppCustomBlobs() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		blobName := path.Base(r.URL.Path)
-
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 		if anStatus == nil {
@@ -705,6 +720,7 @@ func serveBase64Data(w http.ResponseWriter, r *http.Request, base64Data string) 
 // for each AppInstance if caller has allowToDiscover flag enabled
 func (msrv *Msrv) handleAppInstanceDiscovery() func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// TODO: parse IP address from port properly
 		remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 		appStatus, allowToDiscover := msrv.lookupAppInstStatusByAppIP(remoteIP)
 		if appStatus == nil {
@@ -744,6 +760,7 @@ func (msrv *Msrv) handleAppInstanceDiscovery() func(http.ResponseWriter, *http.R
 func (msrv *Msrv) withPatchEnvelopesByIP() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// TODO: parse IP address from port properly
 			remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 			anStatus := msrv.lookupAppNetworkStatusByAppIP(remoteIP)
 			if anStatus == nil {

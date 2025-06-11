@@ -123,6 +123,7 @@ func (z *zedrouter) checkNetworkInstanceIPConflicts(
 	}
 	// Check for overlapping subnets between the NI and device ports.
 	for _, port := range z.deviceNetworkStatus.Ports {
+		// TODO: iterate over Port addresses
 		if netutils.OverlappingSubnets(&config.Subnet, &port.Subnet) {
 			return fmt.Errorf("subnet (%s) overlaps with device port %s "+
 				"subnet (%s)", config.Subnet.String(), port.Logicallabel,

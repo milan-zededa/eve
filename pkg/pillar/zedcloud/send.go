@@ -536,6 +536,7 @@ func (r *resolverWithLocalIP) resolverDial(
 		// There is no point in looking for DNS server on the loopback interface on EVE.
 		return nil, &types.DNSNotAvailError{IfName: r.ifName}
 	}
+	// TODO: check if the same IP version as localIP - maybe not needed, not sure if Go dialer checks this
 	// Note that port number is not looked at by skipNs.
 	if r.skipNs != nil {
 		if skip, reason := r.skipNs(dnsIP, 0); skip {

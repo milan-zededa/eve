@@ -172,6 +172,45 @@ func (lc *LinuxCollector) gcIPLeases(niInfo *niInfo) (purgedAny bool) {
 // readIPLeases returns a slice of dnsmasqLease structs, containing MAC, IP, app UUID.
 // Example line from a lease file:
 // 1560664900 00:16:3e:00:01:01 10.1.0.3 63120af3-42c4-4d84-9faf-de0582d496c2 *
+//
+// TODO: Support IPv6:
+//
+//	1748886618 572163840 fd5e:1821:efe1::10 4aba4977-f3e2-44dc-b88a-57da31731130 00:01:00:01:2f:d0:92:56:02:fe:22:1a:87:00
+//
+// But how to export MAC address? Only DUID-LLT (Type 1) and DUID-LL (Type 3) always embed the MAC.
+// DUID-EN (Type 2) and DUID-UUID (Type 4) do not contain MACs.
+// TODO: We can add patch to dnsmasq to print MAC address at the end. We will parse this field
+// when IP is IPv6
+//
+// diff --git a/src/lease.c b/src/lease.c
+//index 1a9f1c6..38d822a 100644
+//--- a/src/lease.c
+//+++ b/src/lease.c
+//@@ -329,10 +329,22 @@ void lease_update_file(time_t now)
+//                {
+//                  for (i = 0; i < lease->clid_len - 1; i++)
+//                    ourprintf(&err, "%.2x:", lease->clid[i]);
+//-                 ourprintf(&err, "%.2x\n", lease->clid[i]);
+//+                 ourprintf(&err, "%.2x", lease->clid[i]);
+//                }
+//              else
+//-               ourprintf(&err, "*\n");
+//+               ourprintf(&err, "*");
+//+
+//+           // Add MAC address at the end.
+//+           if (lease->hwaddr_type == ARPHRD_ETHER && lease->hwaddr_len == ETHER_ADDR_LEN)
+//+           {
+//+             for (i = 0; i < lease->hwaddr_len; i++)
+//+               {
+//+                     ourprintf(&err, "%.2x", lease->hwaddr[i]);
+//+                     if (i != lease->hwaddr_len - 1)
+//+                       ourprintf(&err, ":");
+//+                   }
+//+               }
+//+           ourprintf(&err, "\n");
+//            }
+//        }
+// #endif
 func (lc *LinuxCollector) readIPLeases(br NIBridge) ([]dnsmasqIPLease, error) {
 	var leases []dnsmasqIPLease
 	leasesFile := devicenetwork.DnsmasqLeaseFilePath(br.BrIfName)
@@ -190,7 +229,7 @@ func (lc *LinuxCollector) readIPLeases(br NIBridge) ([]dnsmasqIPLease, error) {
 		}
 		// remove trailing "/n" from line
 		line = line[0 : len(line)-1]
-		// Should have 5 space-separated fields. We only use 4.
+		// Should have 5-6 space-separated fields. We only use 4.
 		tokens := strings.Split(line, " ")
 		if len(tokens) < 4 {
 			log.Errorf("%s: less than 4 fields in leases file: %v",
@@ -203,7 +242,7 @@ func (lc *LinuxCollector) readIPLeases(br NIBridge) ([]dnsmasqIPLease, error) {
 				LogAndErrPrefix, tokens[0], line, err)
 			i = 0
 		}
-		macAddr, err := net.ParseMAC(tokens[1])
+		macAddr, err := net.ParseMAC(tokens[1]) // TODO: not good for IPv6
 		if err != nil {
 			log.Errorf("%s: bad MAC address %s from IP lease (%s): %s",
 				LogAndErrPrefix, tokens[1], line, err)
@@ -214,6 +253,14 @@ func (lc *LinuxCollector) readIPLeases(br NIBridge) ([]dnsmasqIPLease, error) {
 			log.Errorf("%s: bad IP address %s from IP lease (%s): %s",
 				LogAndErrPrefix, tokens[2], line, err)
 			continue
+		}
+		// TODO:
+		if ipAddr.To4() != nil {
+			// take MAC from the second field
+		} else {
+			// take MAC from the sixth field (our patch)
+			// if not available, check if embedded in DUID
+			// if not, use NetMonitor to lookup MAC by IPv6
 		}
 		lease := dnsmasqIPLease{
 			brIfName:  br.BrIfName,

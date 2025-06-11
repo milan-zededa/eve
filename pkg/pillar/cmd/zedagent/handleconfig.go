@@ -1217,6 +1217,7 @@ func updateLocalServerMap(getconfigCtx *getconfigContext, localServerURL string)
 			if len(adapterStatus.BridgeIPAddr) == 0 {
 				continue
 			}
+			// TODO: make sure that local server and bridge IP version match, otherwise continue
 			if localServerIP != nil {
 				// Check if the defined IP of localServer equals one of the IPs
 				// allocated to the app.
@@ -1251,6 +1252,7 @@ func updateLocalServerMap(getconfigCtx *getconfigContext, localServerURL string)
 						continue
 					}
 					for _, ip := range dnsNameToIPList.IPs {
+						// TODO: make sure that local server and bridge IP version match, otherwise continue
 						localServerURLReplaced := strings.Replace(
 							localServerURL, localServerHostname, ip.String(), 1)
 						log.Functionf(

@@ -63,8 +63,9 @@ func findDSmDNS(dctx *downloaderContext, serverURL string) (string, string, net.
 	// find the first src/dst pair we can use for local DS downloading
 	for _, dsIP := range foundIP {
 		ipStr := dsIP.String()
-		ifname, ipSrc := findLocalDsSrc(niItems, net.ParseIP(ipStr))
+		ifname, ipSrc := findLocalDsSrc(niItems, net.ParseIP(ipStr)) // TODO: why not use dsIP???
 		if ipSrc != nil {
+			// TODO: Use better method here, one that handles IPv6
 			newURL = urlParts[0] + ipStr + urlParts[1]
 			return newURL, ifname, ipSrc, nil
 		}
@@ -73,6 +74,7 @@ func findDSmDNS(dctx *downloaderContext, serverURL string) (string, string, net.
 	return "", "", nil, fmt.Errorf("findDSmDNS: source IP not found for %v", foundIP)
 }
 
+// TODO: expand to IPv6?
 // query for mDNS services over device local interfaces/bridges
 func queryService(ifs []net.Interface, hostname, service string) ([]net.IP, error) {
 	var foundIP []net.IP
@@ -93,6 +95,7 @@ func queryService(ifs []net.Interface, hostname, service string) ([]net.IP, erro
 		for entry := range results {
 			log.Functionf("findDSmDNS: %v", entry)
 			if strings.Contains(entry.HostName, hostname) {
+				// TODO merge IPv4 and IPv6 addresses
 				foundIP = entry.AddrIPv4
 				cancel()
 				break
@@ -119,6 +122,7 @@ func findLocalDsSrc(niItems map[string]interface{}, hostip net.IP) (ifname strin
 	for _, item := range niItems {
 		status := item.(types.NetworkInstanceStatus)
 		if status.IsIpAssigned(hostip) {
+			// TODO: check that family of hostip and BridgeIPAddr match
 			return status.BridgeName, status.BridgeIPAddr
 		}
 	}

@@ -29,6 +29,9 @@ func (srv *Msrv) lookupAppNetworkStatusByAppIP(ip net.IP) *types.AppNetworkStatu
 					return &status
 				}
 			}
+			// TODO: Are we going to put link-local addresses here as well?
+			// Or will we use ND-lookup as an alternative step for link-local Ipv6 source?
+			// The ND-lookup (and potentially caching and watching) should be done by NetworkMonitor.
 			for _, adapterIP := range adapterStatus.AssignedAddresses.IPv6Addrs {
 				if adapterIP.Address.Equal(ip) {
 					return &status
@@ -50,6 +53,7 @@ func (srv *Msrv) lookupAppInstStatusByAppIP(ip net.IP) (*types.AppInstanceStatus
 					return &status, adapterStatus.AllowToDiscover
 				}
 			}
+			// TODO: same as in lookupAppNetworkStatusByAppIP
 			for _, adapterIP := range adapterStatus.AssignedAddresses.IPv6Addrs {
 				if adapterIP.Address.Equal(ip) {
 					return &status, adapterStatus.AllowToDiscover
@@ -82,6 +86,8 @@ func (srv *Msrv) getExternalIPsForApp(remoteIP net.IP) ([]net.IP, int) {
 	for _, port := range dns.Ports {
 		if generics.ContainsItem(netstatus.Ports, port.Logicallabel) {
 			for _, addr := range port.AddrInfoList {
+				// TODO: include IPv6, at least return them in a separate list
+				//       - or receive parameter specifying which IP version to get
 				ip := addr.Addr.To4()
 				if ip == nil {
 					continue
@@ -113,6 +119,7 @@ func (srv *Msrv) lookupNetworkInstanceStatusByAppIP(
 					return &status
 				}
 			}
+			// TODO: ND-lookup for link-local
 			for _, assignedIP := range addrs.IPv6Addrs {
 				if ip.Equal(assignedIP.Address) {
 					return &status

@@ -94,6 +94,7 @@ func socketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	remoteAddr := r.RemoteAddr
+	// TODO: IPv6? (CF-Connecting-IPv6)
 	if addrStr, ok := r.Header["Cf-Connecting-Ip"]; ok {
 		if len(addrStr) > 0 {
 			remoteAddr = addrStr[0]
@@ -173,6 +174,7 @@ func socketHandler(w http.ResponseWriter, r *http.Request) {
 			if remoteAddr == addr {
 				continue
 			}
+			// TODO: IPv6?
 			dest := strings.Split(addr, ":")
 			if len(dest) == 2 {
 				addr = dest[1]
@@ -232,6 +234,7 @@ func getOutboundIP() string {
 	var err error
 	var count int
 	for count < retryMax {
+		// TODO: IPv6?
 		conn, err = net.Dial("udp", "8.8.8.8:80")
 		if err != nil {
 			fmt.Println(err)

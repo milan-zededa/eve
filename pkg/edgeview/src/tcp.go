@@ -54,6 +54,7 @@ func (endpoint *Endpt) String() string {
 	return fmt.Sprintf("%s:%d", endpoint.Host, endpoint.Port)
 }
 
+// TODO: will this work even if device has IPv6-only? I think it will.
 // client TCP service to be forwarded, starts from 9001
 var clientTCPEndpoint = Endpt{
 	Host: "0.0.0.0",
@@ -309,6 +310,7 @@ func setAndStartProxyTCP(opt string) {
 			if err != nil {
 				fmt.Printf("tcp option error %v\n", err)
 				return
+				// TODO: properly detect port in the address
 			} else if !strings.Contains(opt, ":") && !gotProxy && !gotKube {
 				fmt.Printf("tcp option needs ipaddress:port format, or in either 'proxy' or 'kube'\n")
 				return
@@ -332,6 +334,7 @@ func setAndStartProxyTCP(opt string) {
 		if err != nil {
 			fmt.Printf("tcp option error %v\n", err)
 			return
+			// TODO: properly detect port in the address
 		} else if !strings.Contains(opt, ":") && !hasProxy && !hasKube {
 			fmt.Printf("tcp option needs ipaddress:port format, or in either 'proxy' or 'kube'\n")
 			return
@@ -811,6 +814,7 @@ func processTCPcmd(opt string, remotePorts map[int]int) (bool, bool, int, map[in
 	proxycnt := 0
 	hasKube := false
 	for i, pStr := range params {
+		// TODO: properly check if there is port and split IP from port
 		if strings.Contains(pStr, ":") {
 			pPort := strings.Split(pStr, ":")
 			if len(pPort) == 2 {

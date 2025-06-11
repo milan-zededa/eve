@@ -98,6 +98,7 @@ func runNetwork(netw string) {
 			getDNS(substring)
 		} else if opt == "arp" {
 			getARP(substring)
+			// TODO: add similar command for the IPv6 ND table
 		} else if opt == "acl" {
 			runACLs(false, substring)
 			runACLs(true, substring)
@@ -205,6 +206,7 @@ func doAppNet(status, appstr string, isSummary bool) string {
 			continue
 		}
 
+		// TODO: IPv6 addresses
 		var appIP []string
 		for _, assignedip := range item.AssignedAddresses.IPv4Addrs {
 			appIP = append(appIP, assignedip.Address.String())
@@ -326,6 +328,7 @@ func boolToUpDown(isUp bool) string {
 // getAppNetTable - in 'doAppNet'
 func getAppNetTable(ipaddr string, niStatus *types.NetworkInstanceStatus) {
 	gateway := niStatus.Gateway
+	// TODO: include interfaces with IPv6-only addresses
 	allIntfs := allUPIntfIPv4()
 	var foundintfName string
 	for _, i := range allIntfs {
@@ -346,6 +349,7 @@ func getAppNetTable(ipaddr string, niStatus *types.NetworkInstanceStatus) {
 	}
 	printColor("\n - ip route tables related to: "+ipaddr, colorGREEN)
 
+	// TODO: IPv6 routes
 	routes := getAllIPv4Routes(link.Attrs().Index)
 	for _, r := range routes {
 		fmt.Printf("   %s\n", r.String())
@@ -420,6 +424,7 @@ func getURL() {
 	fmt.Printf("  %v\n", mgmtports)
 	fmt.Printf("  send bytes %d, recv bytes %d\n", intfTx, intfRx)
 
+	// TODO: include bridges of IPv6 NIs
 	ifp := allUPIntfIPv4()
 	var bridgeports []string
 	for _, i := range ifp {
@@ -490,6 +495,7 @@ func getLocalIPs() []string {
 	for _, l := range intfStr {
 		localIPs = append(localIPs, l.ipAddr)
 	}
+	// TODO: add IPv6 addresses
 	return localIPs
 }
 
@@ -552,6 +558,7 @@ func getAppIPs(status string) ([]string, uuid.UUID) {
 	var appIPs []string
 	appUUID := appStatus.UUIDandVersion.UUID
 	for _, item := range appStatus.AppNetAdapterList {
+		// TODO: IPv6 addresses
 		for _, assignedip := range item.AssignedAddresses.IPv4Addrs {
 			appIPs = append(appIPs, assignedip.Address.String())
 		}
@@ -641,6 +648,7 @@ func runACLs(isRunningACL bool, filter string) {
 			printColor(" Installed iptables: "+tbl, colorCYAN)
 			op = "-nvL"
 		}
+		// TODO: add output from ip6tables
 		prog := "iptables"
 		args := []string{op, "-t", tbl}
 		_, _ = runCmd(prog, args, true)
@@ -649,6 +657,7 @@ func runACLs(isRunningACL bool, filter string) {
 
 // runRoute
 func runRoute() {
+	// TODO: IPv6 routes
 	rules, err := netlink.RuleList(syscall.AF_INET)
 	if err != nil {
 		fmt.Printf("runRoute: rule error %v", err)
@@ -668,6 +677,7 @@ func runRoute() {
 		} else {
 			continue
 		}
+		// TODO: pick IPv4 or Ipv6 table based on route.Family
 		routes := getTableIPv4Routes(rule.Table)
 		var tStr string
 		switch rule.Table {
@@ -685,12 +695,14 @@ func runRoute() {
 		}
 	}
 
+	// TODO: include interfaces with IPv6 addresses
 	upIntfs := allUPIntfIPv4()
 	for _, i := range upIntfs {
 		link, err := netlink.LinkByName(i.intfName)
 		if err != nil {
 			continue
 		}
+		// TODO: add IPv6 routes
 		routes := getAllIPv4Routes(link.Attrs().Index)
 
 		printColor("\nshow route in interfaces: "+i.intfName, colorBLUE)
@@ -779,7 +791,7 @@ func getDNS(domain string) {
 func showSockets() {
 	printColor(" listening socket ports: ", colorBLUE)
 	prog := "ss"
-	args := []string{"-tunlp4"}
+	args := []string{"-tunlp4"} // TODO: add -p6
 	_, _ = runCmd(prog, args, true)
 	printColor(" socket established: ", colorBLUE)
 	args = []string{"-t", "state", "established"}
@@ -821,6 +833,7 @@ func showAppDetail(substring string) {
 
 func runTrace(substring, server string) {
 	prog := "traceroute"
+	// TODO: remove -4 from arguments
 	var args []string
 	if substring != "" {
 		baseargs := []string{"-4", "-m", "10", "-q", "2", substring}
@@ -854,6 +867,8 @@ func runPing(intfStat []intfIP, server string, opt string) {
 			ipaddr := opts[1]
 
 			var src string
+			// TODO: try all global-unicast IP addresses assigned to the interface,
+			//       filtered to IP version of ipaddr
 			for _, l := range intfStat {
 				if l.intfName == intf {
 					src = l.ipAddr
@@ -880,6 +895,7 @@ func runPing(intfStat []intfIP, server string, opt string) {
 		if strings.HasPrefix(iip.intfName, "bn") || strings.HasPrefix(iip.intfName, "lo") {
 			continue
 		}
+		// TODO: Use instead/additionally google Ipv6 DNS address when interface has global-unicast IPv6 address
 		ipaddr := "8.8.8.8"
 		printColor("\n - ping "+ipaddr+" through intf: "+iip.intfName, colorCYAN)
 		pingIPHost(ipaddr, iip.ipAddr)
@@ -887,7 +903,7 @@ func runPing(intfStat []intfIP, server string, opt string) {
 		// to zedcloud
 		if server != "" {
 			printColor("\n - ping to "+server+", source "+iip.ipAddr, colorCYAN)
-			ipa := net.ParseIP(iip.ipAddr)
+			ipa := net.ParseIP(iip.ipAddr) // TODO: use net.IP in intfIP and avoid this parsing
 			httpsclient(server, ipa)
 		}
 
@@ -1037,6 +1053,7 @@ func runmDNS(subStr string) {
 	printTitle(fmt.Sprintf("query mDNS service %s, on intfs %v\n", serviceStr, port), colorCYAN, true)
 
 	ifOption := zeroconf.SelectIfaces(ifs)
+	// TODO: select both IPv4 and IPv6
 	ipOption := zeroconf.SelectIPTraffic(zeroconf.IPv4)
 	resolver, err := zeroconf.NewResolver(ipOption, ifOption)
 	if err != nil {
@@ -1303,8 +1320,10 @@ func runSpeedTest(intf string) {
 	var opt string
 	var args []string
 	if intf != "" {
+		// TODO: include interfaces with IPv6 addresses, but speedtest-cli does not seem to support IPv6
 		retintfs := allUPIntfIPv4()
 		for _, i := range retintfs {
+			// TODO: why not exact match? "eth1" will match "eth11" etc.
 			if strings.Contains(i.intfName, intf) {
 				opt = " --source " + i.ipAddr
 				args = []string{"--source", i.ipAddr}
@@ -1333,6 +1352,7 @@ func getAllIntfs() []intfIP {
 			if err != nil {
 				continue
 			}
+			// TODO: include IPv6
 			if ip.To4() == nil {
 				continue
 			}
@@ -1347,6 +1367,7 @@ func getAllIntfs() []intfIP {
 	return ifs
 }
 
+// TODO: add similar function for IPv6
 func allUPIntfIPv4() []intfIP {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -1401,6 +1422,7 @@ func pingIPHost(remote, local string) {
 	var pingSuccess bool
 	p := fastping.NewPinger()
 
+	// TODO ip6 if local/remote are IPv6 addresses
 	ra, err := net.ResolveIPAddr("ip4:icmp", remote)
 	if err != nil {
 		fmt.Printf("resolve error: %v\n", err)
@@ -1433,6 +1455,7 @@ func pingIPHost(remote, local string) {
 	fmt.Printf("ping: success %v\n", pingSuccess)
 }
 
+// TODO: add similar function for IPv6
 func getAllIPv4Routes(ifindex int) []netlink.Route {
 	table := syscall.RT_TABLE_MAIN
 	filter := netlink.Route{Table: table, LinkIndex: ifindex}
@@ -1447,6 +1470,7 @@ func getAllIPv4Routes(ifindex int) []netlink.Route {
 	return routes
 }
 
+// TODO: add similar function for IPv6
 func getTableIPv4Routes(table int) []netlink.Route {
 	filter := netlink.Route{Table: table}
 	fflags := netlink.RT_FILTER_TABLE

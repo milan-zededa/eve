@@ -142,8 +142,10 @@ type portStatus struct {
 	nextHops     []net.IP
 	dnsServers   []net.IP
 	newlyAdded   bool
-	nhProbe      probeStatus
-	userProbes   map[types.ConnectivityProbe]*probeStatus
+	// TODO: we need nhProbe and userProbes separately for IPv4 and IPv6
+	// TODO: and put a given probeStatus only to version where probing is required (e.g. only IPv4, etc.)
+	nhProbe    probeStatus
+	userProbes map[types.ConnectivityProbe]*probeStatus
 }
 
 func (ps portStatus) matchesLabels(labels ...string) bool {
@@ -155,6 +157,7 @@ func (ps portStatus) matchesLabels(labels ...string) bool {
 	return true
 }
 
+// TODO: this should specify IP version to get the up count for
 func (ps portStatus) upCount(probeCfg types.NIPortProbe) int {
 	var upCount int
 	if probeCfg.EnabledGwPing && ps.cost <= probeCfg.GwPingMaxCost {
@@ -218,6 +221,7 @@ func (p *PortProber) StartPortProbing(ni uuid.UUID, niPortLabel string,
 	}
 	probeCfg := mpRoute.PortProbe
 	for _, port := range p.getPortsMatchingLabels(niPortLabel, mpRoute.OutputPortLabel) {
+		// TODO: increase counters for the IP version of the route (DstNetwork)
 		if probeCfg.EnabledGwPing && port.cost <= probeCfg.GwPingMaxCost {
 			port.nhProbe.refCount++
 		}
@@ -255,6 +259,7 @@ func (p *PortProber) StopPortProbing(ni uuid.UUID, mpRouteDst *net.IPNet) error 
 	matchingPorts := p.getPortsMatchingLabels(mpRoute.NIPortLabel,
 		mpRoute.MPRoute.OutputPortLabel)
 	for _, port := range matchingPorts {
+		// TODO: decrease counters for the IP version of the route (DstNetwork)
 		if probeCfg.EnabledGwPing && port.cost <= probeCfg.GwPingMaxCost {
 			port.nhProbe.refCount--
 			if port.nhProbe.refCount == 0 {
@@ -349,6 +354,7 @@ func (p *PortProber) GetProbeMetrics(
 		matchingPorts := p.getPortsMatchingLabels(mpRoute.NIPortLabel,
 			mpRoute.MPRoute.OutputPortLabel)
 		for _, port := range matchingPorts {
+			// TODO: select counters for the IP version of the route (DstNetwork)
 			if port.logicallabel == selectedPort {
 				metrics.SelectedPortIfName = port.ifName
 			}
@@ -425,6 +431,7 @@ func (p *PortProber) probePorts() (updates []ProbeStatus) {
 	p.applyPendingDNS()
 	// 2. probe every used port
 	for _, port := range p.ports {
+		// TODO: perform separately for IPv4 and IPv6
 		if port.nhProbe.refCount > 0 {
 			// Perform next-hop probing if it is enabled at least for one route
 			// matching this port.
@@ -511,6 +518,7 @@ func (p *PortProber) addPort(dnsPort types.NetworkPortStatus) {
 		// Mark as new so that the following probing will run fully
 		// and decide the UP/DOWN states.
 		newlyAdded: true,
+		// TODO: init these probe status for IPv4 and IPv6
 		nhProbe:    probeStatus{},
 		userProbes: make(map[types.ConnectivityProbe]*probeStatus),
 	}
@@ -519,6 +527,7 @@ func (p *PortProber) addPort(dnsPort types.NetworkPortStatus) {
 			continue
 		}
 		probeCfg := route.MPRoute.PortProbe
+		// TODO: increase only for the matching IP version
 		if probeCfg.EnabledGwPing && port.cost <= probeCfg.GwPingMaxCost {
 			port.nhProbe.refCount++
 		}
@@ -535,13 +544,16 @@ func (p *PortProber) addPort(dnsPort types.NetworkPortStatus) {
 }
 
 // Probe next-hops of the given port.
+// TODO: pass IP version as arg
 func (p *PortProber) probePortNH(port *portStatus) {
 	portLL := port.logicallabel
 	err := errors.New("missing next-hop or local IP")
+	// TODO: skip nhIP and localIP of different IP version
 	for _, nhIP := range port.nextHops {
 		nhAddr := &net.IPAddr{IP: nhIP}
 		for _, localIP := range port.localAddrs {
 			if !localIP.IsGlobalUnicast() {
+				// TODO: perhaps do not skip if nhAddr is also link-local
 				continue
 			}
 			ctx := context.Background()
@@ -556,6 +568,7 @@ func (p *PortProber) probePortNH(port *portStatus) {
 			break
 		}
 	}
+	// TODO: mention IP version in the logs
 	if err == nil {
 		// (At least one) next hop is reachable.
 		if port.newlyAdded {
@@ -608,6 +621,7 @@ func (p *PortProber) probePortNH(port *portStatus) {
 }
 
 // Probe user-defined endpoint through the given port.
+// TODO: add IP version as arg
 func (p *PortProber) probePortUserEp(port *portStatus, probe types.ConnectivityProbe) {
 	portLL := port.logicallabel
 	var (
@@ -619,6 +633,7 @@ func (p *PortProber) probePortUserEp(port *portStatus, probe types.ConnectivityP
 	case types.ConnectivityProbeMethodICMP:
 		if hostIP := net.ParseIP(probe.ProbeHost); hostIP != nil {
 			dstAddr = &net.IPAddr{IP: hostIP}
+			// TODO: error if dstAddr is not of the desired IP version to probe
 		} else {
 			dstAddr = &HostnameAddr{Hostname: probe.ProbeHost}
 		}
@@ -629,22 +644,26 @@ func (p *PortProber) probePortUserEp(port *portStatus, probe types.ConnectivityP
 				IP:   hostIP,
 				Port: int(probe.ProbePort),
 			}
+			// TODO: error if dstAddr is not of the desired IP version to probe
 		} else {
 			dstAddr = &HostnameAddr{
+				// TODO: Add desired IP version
 				Hostname: probe.ProbeHost,
 				Port:     probe.ProbePort,
 			}
 		}
 		prober = p.reachProberTCP
 	}
-	err := errors.New("missing local IP")
+	err := errors.New("missing local IP") // TODO add IP version into the error
 	for _, localIP := range port.localAddrs {
 		if !localIP.IsGlobalUnicast() {
 			continue
 		}
+		// TODO: skip if not matching IP version
 		ctx := context.Background()
 		ctx, cancel := context.WithTimeout(ctx, p.config.UserProbeTimeout)
 		startTime := time.Now()
+		// TODO: filter DNS servers to the desired IP version - not necessary
 		err = prober.Probe(ctx, port.ifName, localIP, dstAddr, port.dnsServers)
 		duration = time.Since(startTime)
 		cancel()
@@ -652,6 +671,8 @@ func (p *PortProber) probePortUserEp(port *portStatus, probe types.ConnectivityP
 			break
 		}
 	}
+	// TODO: get userProbe for the required IP version
+	// TODO: add IP version to logs
 	userProbe := port.userProbes[probe]
 	if err == nil {
 		// User-defined endpoint is reachable.
@@ -734,6 +755,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 			// Not yet probed, skip.
 			continue
 		}
+		// TODO: specify IP version of the route
 		if port.upCount(probeCfg) > 0 {
 			anyUPState = true
 			if port.cost < lowestCost {
@@ -749,6 +771,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 				(route.MPRoute.PreferLowerCost && port.cost != lowestCost) {
 				continue
 			}
+			// TODO: specify IP version of the route
 			if port.upCount(probeCfg) > highestUPCnt {
 				highestUPCnt = port.upCount(probeCfg)
 			}
@@ -760,6 +783,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 				(route.MPRoute.PreferLowerCost && port.cost != lowestCost) {
 				continue
 			}
+			// TODO: specify IP version of the route
 			if port.upCount(probeCfg) != highestUPCnt {
 				continue
 			}
@@ -779,6 +803,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 				(route.MPRoute.PreferLowerCost && port.cost != lowestCost) {
 				continue
 			}
+			// TODO: specify IP version of the route
 			if port.upCount(probeCfg) != highestUPCnt {
 				continue
 			}
@@ -817,6 +842,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 	var suitablePorts []string
 	for _, port := range matchingPorts {
 		for _, ip := range port.localAddrs {
+			// TODO: filter IP addresses of different versions
 			if ip.IsGlobalUnicast() {
 				suitablePorts = append(suitablePorts, port.logicallabel)
 			}
@@ -836,6 +862,7 @@ func (p *PortProber) pickPortForRoute(routeKey string) (changed bool) {
 	// 4. Find lowest-cost port matching the label that at least has a local IP address.
 	suitablePorts = nil
 	for _, port := range matchingPorts {
+		// TODO: filter IP addresses of different version
 		if len(port.localAddrs) > 0 {
 			suitablePorts = append(suitablePorts, port.logicallabel)
 		}

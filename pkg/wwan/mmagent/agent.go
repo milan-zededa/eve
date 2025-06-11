@@ -63,9 +63,10 @@ const (
 )
 
 var (
-	_, ipv4Any, _    = net.ParseCIDR("0.0.0.0/0")
-	_, ipv6Any, _    = net.ParseCIDR("::/0")
-	emptyPhysAddrs   = types.WwanPhysAddrs{}
+	_, ipv4Any, _  = net.ParseCIDR("0.0.0.0/0")
+	_, ipv6Any, _  = net.ParseCIDR("::/0")
+	emptyPhysAddrs = types.WwanPhysAddrs{}
+	// TODO: add default probe address for IPv6 (google IPv6 dns address)
 	defaultProbeAddr = net.ParseIP("8.8.8.8")
 	emptyIPSettings  = types.WwanIPSettings{}
 )
@@ -1053,6 +1054,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 	if probeConfig.Disable {
 		return nil
 	}
+	// TODO: With IPv6, address is assigned by SLAAC and we need to read it from the interface
 	modemAddr := modem.Status.IPSettings.Address
 	if modemAddr == nil || len(modemAddr.IP) == 0 {
 		return fmt.Errorf("modem is without IP address")
@@ -1077,6 +1079,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 			// Skip proxies referenced by hostname.
 			continue
 		}
+		// TODO: skip if modem and proxy IP are of different IP versions
 		address := net.JoinHostPort(proxy.Server, strconv.Itoa(int(proxy.Port)))
 		conn, err := tcpDialer.Dial("tcp", address)
 		if err == nil {
@@ -1095,6 +1098,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 		Timeout: dnsProbeTimeout,
 	}
 	for _, dnsSrv := range modem.Status.IPSettings.DNSServers {
+		// TODO: skip if modem and proxy IP are of different IP versions - needed?
 		msg := dns.Msg{}
 		msg.SetQuestion(".", dns.TypeA)
 		dnsSrvAddr := net.JoinHostPort(dnsSrv.String(), "53")
@@ -1112,6 +1116,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 		// However, please note that in a private LTE network, ICMP requests headed
 		// towards public DNS servers may be blocked by the firewall and thus produce
 		// probing false negatives.
+		// TODO: pick google IP of the proper IP version
 		err = a.runICMPProbe(modemIP, defaultProbeAddr)
 		if err == nil {
 			return nil
@@ -1123,6 +1128,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 			err = fmt.Errorf("failed to parse probe IP address %s",
 				probeConfig.UserDefinedProbe.ProbeHost)
 		} else {
+			// TODO: check that IP version matches the modem IP
 			err = a.runICMPProbe(modemIP, remoteIP)
 			if err == nil {
 				return nil
@@ -1135,6 +1141,7 @@ func (a *MMAgent) probeModemConnectivity(modem *ModemInfo) error {
 			err = fmt.Errorf("failed to parse probe IP address %s",
 				probeConfig.UserDefinedProbe.ProbeHost)
 		} else {
+			// TODO: check that IP version matches the modem IP
 			portStr := strconv.Itoa(int(probeConfig.UserDefinedProbe.ProbePort))
 			address := net.JoinHostPort(remoteIP.String(), portStr)
 			var conn net.Conn
@@ -1207,6 +1214,7 @@ func (a *MMAgent) connectModem(modem *ModemInfo) error {
 		return err
 	}
 	modem.Status.IPSettings = ipSettings
+	// TODO: apply only if static IP
 	return a.applyIPSettings(modem, ipSettings)
 }
 

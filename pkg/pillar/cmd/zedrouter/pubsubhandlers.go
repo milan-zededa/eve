@@ -252,6 +252,7 @@ func (z *zedrouter) handleNetworkInstanceCreate(ctxArg interface{}, key string,
 	// Set bridge IP address.
 	if status.Gateway != nil {
 		addrs := types.AssignedAddrs{
+			// TODO: this can be IPv6 address
 			IPv4Addrs: []types.AssignedAddr{
 				{
 					Address:    status.Gateway,
@@ -370,6 +371,7 @@ func (z *zedrouter) handleNetworkInstanceModify(ctxArg interface{}, key string,
 	}
 	if status.Gateway != nil && status.BridgeMac != nil {
 		addrs := types.AssignedAddrs{
+			// TODO: this can be IPv6 address
 			IPv4Addrs: []types.AssignedAddr{
 				{
 					Address:    status.Gateway,

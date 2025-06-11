@@ -82,6 +82,7 @@ func ResolveWithSrcIPWithTimeout(domain string, dnsServerIP net.IP, srcIP net.IP
 	if !strings.HasSuffix(domain, ".") {
 		domain = domain + "."
 	}
+	// TODO: Resolve also IPv6
 	msg.SetQuestion(domain, dns.TypeA)
 	dnsClient.Timeout = time.Duration(dnsTimeout)
 	reply, _, err := dnsClient.Exchange(&msg, net.JoinHostPort(dnsServerIP.String(), "53"))
@@ -181,12 +182,14 @@ func ResolveWithPortsLambda(domain string,
 
 		for _, dnsIP := range port.DNSServers {
 			for _, srcIP := range srcIPs {
+				// TODO: skip if IP addresses do not match in version
 				wg.Add(1)
 				dnsIPCopy := make(net.IP, len(dnsIP))
 				copy(dnsIPCopy, dnsIP)
 				srcIPCopy := make(net.IP, len(srcIP))
 				copy(srcIPCopy, srcIP)
 				countDNSRequests++
+				// TODO: run for A and AAAA in parallel
 				go func(dnsIP, srcIP net.IP) {
 					defer func() {
 						wg.Done()

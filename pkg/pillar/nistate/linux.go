@@ -133,6 +133,7 @@ func (vif *vifInfo) addIP(ip net.IP, source types.AddressSource,
 			// IP address is already known for this VIF.
 			// Just update the source and the expiration time.
 			alreadyExists = true
+			// TODO: maybe add also source AddressSourceSLAAC
 			if source == types.AddressSourceStatic && ipList[i].fromDHCP() {
 				// Prefer info from DHCP snooping over ARP snooping.
 				// Ignore this update.

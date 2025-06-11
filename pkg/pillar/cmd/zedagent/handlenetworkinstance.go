@@ -99,6 +99,7 @@ func prepareAndPublishNetworkInstanceInfoMsg(ctx *zedagentContext,
 				gwApp = route.GatewayApp.String()
 			}
 			info.IpRoutes = append(info.IpRoutes, &zinfo.IPRoute{
+				// TODO: maybe add IP version into this
 				DestinationNetwork: route.DstNetwork.String(),
 				Gateway:            gwIP,
 				Port:               route.OutputPort,

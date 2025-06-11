@@ -318,8 +318,8 @@ func TestSingleEthInterface(test *testing.T) {
 
 	// Simulate event of interface losing the IP address.
 	eth0.IPAddrs = nil
-	eth0.DHCP = netmonitor.DHCPInfo{}
-	eth0.DNS = netmonitor.DNSInfo{}
+	eth0.DHCP = nil
+	eth0.DNS = nil
 	networkMonitor.AddOrUpdateInterface(eth0)
 	networkMonitor.UpdateRoutes(nil)
 	t.Eventually(status.ResumeReconcile).Should(Receive())

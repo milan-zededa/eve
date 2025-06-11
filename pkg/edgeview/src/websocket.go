@@ -55,8 +55,8 @@ func setupWebC(hostname, token string, u url.URL, isServer bool) bool {
 	// if the device uses proxy cert, add to the container side
 	if isServer {
 		serverStr = isEVserver
-		proxyIP, proxyPort, proxyPEM := getProxy(false)
-		if len(proxyPEM) > 0 && basics.proxy == "" { // don't run this in re-connect cases
+		proxyIP, proxyPort, proxyPEM := getProxy(false) // TODO: for which port ???
+		if len(proxyPEM) > 0 && basics.proxy == "" {    // don't run this in re-connect cases
 			err := addPackage("/usr/sbin/update-ca-certificates", "ca-certificates")
 			if err == nil {
 				dir := "/usr/local/share/ca-certificates"
@@ -106,6 +106,7 @@ func setupWebC(hostname, token string, u url.URL, isServer bool) bool {
 			var proxyPort int
 			// if proxy exists, sometimes not on all the interfaces, try with and without proxy
 			// for dispatcher connection
+			// TODO: would be better to have a map interface -> proxy config
 			if pIP != "" && useProxy%2 == 0 {
 				proxyIP = pIP
 				proxyPort = pport
@@ -209,6 +210,7 @@ func tlsDial(isServer bool, pIP string, pport int, src []net.IP, idx int) (*webs
 func getDefrouteIntfSrcs() []net.IP {
 	var srcIPs []net.IP
 	table254 := 254
+	// TODO: also include IPv6 addresses
 	routes := getTableIPv4Routes(table254)
 	for _, r := range routes {
 		if r.Dst == nil && r.Gw.To4() != nil && r.Src.To4() != nil {

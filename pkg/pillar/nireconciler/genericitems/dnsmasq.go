@@ -46,6 +46,7 @@ type Dnsmasq struct {
 	ForNI uuid.UUID
 	// ListenIf : interface on which dnsmasq should listen.
 	ListenIf NetworkIf
+	// TODO: have 2 entries for both DHCPServer and DNSServer, one for IPv4 and the other for IPv6
 	// DHCPServer : part of the dnsmasq config specific to DHCP server.
 	DHCPServer DHCPServer
 	// DNSServer : part of the dnsmasq config specific to DNS server.
@@ -496,6 +497,7 @@ func (c *DnsmasqConfigurator) createDnsmasqConfigFile(dnsmasq Dnsmasq) error {
 
 // CreateDnsmasqConfig builds configuration for dnsmasq and writes it to the given buffer.
 // The method is exported just to be exercised by unit tests.
+// TODO: This needs to be rewritten for the dual-stack.
 func (c *DnsmasqConfigurator) CreateDnsmasqConfig(buffer io.Writer, dnsmasq Dnsmasq) error {
 	writeErr := func(err error) error {
 		err = fmt.Errorf("failed to write dnsmasq config: %w", err)

@@ -88,6 +88,7 @@ func (z *zedrouter) generateAppMac(adapterNum int, appStatus *types.AppNetworkSt
 	return nil
 }
 
+// TODO: rename and support IPv6 subnet
 // Returns an IPv4 address allocated for the guest side of an application VIF.
 func (z *zedrouter) lookupOrAllocateIPv4ForVIF(niStatus *types.NetworkInstanceStatus,
 	adapterStatus types.AppNetAdapterStatus, appID uuid.UUID) (net.IP, error) {
@@ -210,6 +211,7 @@ func (z *zedrouter) recordAssignedIPsToAdapterStatus(adapter *types.AppNetAdapte
 	adapter.AssignedAddresses = vifAddrs.AssignedAddrs
 	adapter.IPAddrMisMatch = false
 	if !netutils.IsEmptyIP(adapter.AppIPAddr) {
+		// TODO: check address of the same IP version
 		leasedIP := adapter.AssignedAddresses.GetInternallyLeasedIPv4Addr()
 		if !adapter.AppIPAddr.Equal(leasedIP) {
 			// Config and status do not match.

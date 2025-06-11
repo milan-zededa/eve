@@ -46,6 +46,7 @@ func (m *MockNetworkMonitor) AddOrUpdateInterface(mockIf MockInterface) {
 	prev, existed := m.interfaces[ifIndex]
 	m.interfaces[ifIndex] = mockIf
 	// Interface add/update event.
+	// TODO: DeepEqual is unnecessary
 	if !existed || !reflect.DeepEqual(mockIf.Attrs, prev.Attrs) {
 		m.publishEvent(IfChange{
 			Attrs: mockIf.Attrs,
@@ -136,6 +137,7 @@ func (m *MockNetworkMonitor) UpdateRoutes(routes []Route) {
 	for _, route := range m.routes {
 		var found bool
 		for _, prevRoute := range prev {
+			// TODO: get rid of the ugly DeepEqual-s
 			if reflect.DeepEqual(route, prevRoute) {
 				found = true
 				break

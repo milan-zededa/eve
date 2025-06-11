@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -316,8 +317,8 @@ func (z *zedrouter) getAppContainerLogs(status types.AppNetworkStatus,
 
 func (z *zedrouter) getAppContainers(status types.AppNetworkStatus) (
 	*client.Client, []apitypes.Container, error) {
-	containerEndpoint := "tcp://" + status.GetStatsIPAddr.String() +
-		":" + strconv.Itoa(dockerAPIPort)
+	hostPort := net.JoinHostPort(status.GetStatsIPAddr.String(), strconv.Itoa(dockerAPIPort))
+	containerEndpoint := "tcp://" + hostPort
 	cli, err := client.NewClientWithOpts(
 		client.WithHost(containerEndpoint),
 		client.WithVersion(dockerAPIVersion),
@@ -365,7 +366,9 @@ func (z *zedrouter) getIotEdgeMetricsAndLogs(status types.AppNetworkStatus,
 
 // Helper function to construct the URL for nested app operations
 func buildNestedAppURL(status types.AppNetworkStatus, endpoint string, appID string) string {
-	baseURL := fmt.Sprintf("http://%s:%d%s", status.GetStatsIPAddr.String(), nestedAppDomainAppPort, endpoint)
+	hostPort := net.JoinHostPort(
+		status.GetStatsIPAddr.String(), strconv.Itoa(nestedAppDomainAppPort))
+	baseURL := fmt.Sprintf("http://%s%s", hostPort, endpoint)
 	if appID != "" {
 		return baseURL + appID
 	}

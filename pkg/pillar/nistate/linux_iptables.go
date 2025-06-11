@@ -65,6 +65,7 @@ func (lc *LinuxCollector) fetchIptablesCounters() []aclCounters {
 	for table, chains := range chainsWithCounters {
 		for _, chain := range chains {
 			for _, vif := range vifs {
+				// TODO: collect also IPv6 counters
 				output, err := iptables.IptableCmdOut(
 					nil, "-t", table, "-S", chain+"-"+vif.ifName, "-v")
 				if err != nil {
@@ -282,6 +283,7 @@ func (lc *LinuxCollector) getIptablesACLDrop(counters []aclCounters,
 }
 
 // Look for a DROP entry with More set.
+// TODO: obsolete comment?
 // zedrouter appends a '+' to the vifname to handle PV/qemu which for some
 // reason have a second <vifname>-emu bridge interface. Need to match that here.
 func (lc *LinuxCollector) getIptablesACLRateLimitDrop(counters []aclCounters,

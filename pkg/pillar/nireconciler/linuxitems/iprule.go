@@ -25,6 +25,8 @@ type IPRule struct {
 	Mask     int
 	Src      *net.IPNet
 	Dst      *net.IPNet
+	// TODO: Add IP family (it will have to be part of the name - and ideally also label)
+	//        - or make a separate type for IPV6 (like for routes)
 }
 
 // Name combines all attributes to construct a unique identifier for IP rule.
@@ -130,6 +132,7 @@ func (c *IPRuleConfigurator) makeNetlinkRule(rule IPRule) *netlink.Rule {
 	r.Mark = rule.Mark
 	r.Mask = rule.Mask
 	r.Priority = rule.Priority
+	// TODO: allow to set family to V6 even if Src and Dst are nil
 	r.Family = netlink.FAMILY_V4
 	if rule.Src != nil && rule.Src.IP.To4() == nil {
 		r.Family = netlink.FAMILY_V6

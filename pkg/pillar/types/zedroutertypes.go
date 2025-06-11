@@ -396,6 +396,7 @@ type AssignedAddrs struct {
 
 // GetInternallyLeasedIPv4Addr returns IPv4 address leased by EVE using
 // an internally run DHCP server.
+// TODO: add boolean option ipv6
 func (aa AssignedAddrs) GetInternallyLeasedIPv4Addr() net.IP {
 	for _, addr := range aa.IPv4Addrs {
 		if addr.AssignedBy == AddressSourceInternalDHCP {
@@ -749,6 +750,7 @@ type NetworkInstanceConfig struct {
 
 // IPRouteConfig : single IP route config entry.
 type IPRouteConfig struct {
+	// TODO: probably makes sense to add IPVersion (AddressType)
 	// Destination network.
 	// Guaranteed by zedagent not to be nil.
 	DstNetwork *net.IPNet

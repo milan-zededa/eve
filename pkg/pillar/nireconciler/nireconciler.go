@@ -168,6 +168,7 @@ type IPRoute struct {
 	DstNetwork *net.IPNet // cannot be nil
 	Gateway    net.IP     // can be nil
 	OutputPort string     // logical label, empty if gateway is application running on EVE
+	// TODO: Add IP version
 }
 
 // IsDefaultRoute returns true if this is a default route, i.e. matches all destinations.

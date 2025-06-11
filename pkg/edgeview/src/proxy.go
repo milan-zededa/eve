@@ -62,6 +62,7 @@ func handleTunneling(w http.ResponseWriter, r *http.Request, dnsIP string) {
 				d := net.Dialer{
 					Timeout: time.Millisecond * time.Duration(10000),
 				}
+				// TODO merge IP and port properly
 				return d.DialContext(ctx, network, dnsIP+":53")
 			},
 		}

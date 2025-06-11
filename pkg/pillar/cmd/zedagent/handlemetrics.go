@@ -1231,7 +1231,7 @@ func PublishAppInfoToZedCloud(ctx *zedagentContext, uuid string,
 					ipv6Addr.Address.String())
 			}
 			networkInfo.MacAddr = *proto.String(macAddr.String())
-			networkInfo.Ipv4Up = hasIPv4Addr
+			networkInfo.Ipv4Up = hasIPv4Addr // TODO: are we going to use this with IPv6?
 			networkInfo.IpAddrMisMatch = ipAddrMismatch
 			name := appIfnameToName(aiStatus, ifname)
 			log.Tracef("app %s/%s localName %s devName %s",
