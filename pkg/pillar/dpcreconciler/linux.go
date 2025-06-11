@@ -918,13 +918,16 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig,
 		if !found {
 			continue
 		}
-		dnsInfo, err := r.NetworkMonitor.GetInterfaceDNSInfo(ifIndex)
+		dnsInfoList, err := r.NetworkMonitor.GetInterfaceDNSInfo(ifIndex)
 		if err != nil {
 			r.Log.Errorf("getIntendedGlobalCfg: failed to get DNS info for %s: %v",
 				port.IfName, err)
 			continue
 		}
-		dnsServers[port.IfName] = dnsInfo.DNSServers
+		dnsServers[port.IfName] = []net.IP{}
+		for _, dnsInfo := range dnsInfoList {
+			dnsServers[port.IfName] = append(dnsServers[port.IfName], dnsInfo.DNSServers...)
+		}
 	}
 	intendedCfg.PutItem(generic.ResolvConf{DNSServers: dnsServers}, nil)
 	return intendedCfg
@@ -1781,6 +1784,22 @@ func (r *LinuxDpcReconciler) getIntendedFilterRules(gcp types.ConfigItemValueMap
 	}
 	inputV4Rules = append(inputV4Rules, dhcpRule)
 
+	// Allow incoming DHCPv6 replies from the server.
+	// dhcpcd likes to use Rapid commit option (rfc8415, section 21.14.),
+	// where a SOLICIT message with multicast destination is immediately
+	// followed by a REPLY from the DHCPv6 server.
+	// Conntract does not see this pair of messages as RELATED (which we would
+	// ACCEPT with our first INPUT rule), therefore we need an explicit rule
+	// to accept DHCPv6 replies.
+	dhcpv6Rule := iptables.Rule{
+		RuleLabel: "Allow DHCPv6",
+		MatchOpts: []string{"-p", "udp", "--sport", "dhcpv6-server",
+			"--dport", "dhcpv6-client"},
+		Target:      "ACCEPT",
+		Description: "Allow traffic from DHCPv6 server to enter the device",
+	}
+	inputV6Rules = append(inputV6Rules, dhcpv6Rule)
+
 	// Allow ICMP echo request to enter the device from outside.
 	icmpRule := iptables.Rule{
 		RuleLabel:   "Allow ICMP echo request",
@@ -2012,12 +2031,20 @@ func (r *LinuxDpcReconciler) getIntendedMarkingRules(dpc types.DevicePortConfig,
 		TargetOpts:  []string{"--set-mark", controlProtoMark("in_dhcp")},
 		Description: "Mark ingress DHCP traffic",
 	}
+	markDhcpv6 := iptables.Rule{
+		RuleLabel: "DHCPv6 mark",
+		MatchOpts: []string{"-p", "udp", "--sport", "dhcpv6-server",
+			"--dport", "dhcpv6-client"},
+		Target:      "CONNMARK",
+		TargetOpts:  []string{"--set-mark", controlProtoMark("in_dhcp")},
+		Description: "Mark ingress DHCPv6 traffic",
+	}
 
 	protoMarkV4Rules := []iptables.Rule{
 		markSSHAndGuacamole, markVnc, markIcmpV4, markDhcp,
 	}
 	protoMarkV6Rules := []iptables.Rule{
-		markSSHAndGuacamole, markVnc, markIcmpV6,
+		markSSHAndGuacamole, markVnc, markIcmpV6, markDhcpv6,
 	}
 
 	if r.HVTypeKube {

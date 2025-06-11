@@ -51,8 +51,7 @@ type NetworkPortStatus struct {
 	Cost                 uint8
 	Dhcp                 DhcpType
 	Type                 NetworkType // IPv4 or IPv6 or Dual stack
-	Subnet               net.IPNet
-	ConfiguredNtpServers []string // This comes from network configuration
+	ConfiguredNtpServers []string    // This comes from network configuration
 	IgnoreDhcpNtpServers bool
 	DomainName           string
 	DNSServers           []net.IP // If not set we use Gateway as DNS server

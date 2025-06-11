@@ -302,14 +302,18 @@ func mockEth0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("192.168.10.5/24")},
-		DHCP: netmonitor.DHCPInfo{
-			Subnet:     ipSubnet("192.168.10.0/24"),
-			NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+		DHCP: []netmonitor.DHCPInfo{
+			{
+				Subnet:     ipSubnet("192.168.10.0/24"),
+				NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+			},
 		},
-		DNS: netmonitor.DNSInfo{
-			ResolvConfPath: "/etc/eth0-resolv.conf",
-			Domains:        []string{"eth-test-domain"},
-			DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+		DNS: []netmonitor.DNSInfo{
+			{
+				ResolvConfPath: "/etc/eth0-resolv.conf",
+				Domains:        []string{"eth-test-domain"},
+				DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+			},
 		},
 		HwAddr: macAddress("02:00:00:00:00:01"),
 	}
@@ -357,14 +361,18 @@ func mockEth1() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("172.20.1.2/24")},
-		DHCP: netmonitor.DHCPInfo{
-			Subnet:     ipSubnet("172.20.1.0/24"),
-			NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
+		DHCP: []netmonitor.DHCPInfo{
+			{
+				Subnet:     ipSubnet("172.20.1.0/24"),
+				NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
+			},
 		},
-		DNS: netmonitor.DNSInfo{
-			ResolvConfPath: "/etc/eth1-resolv.conf",
-			Domains:        []string{"eth-test-domain"},
-			DNSServers:     []net.IP{net.ParseIP("1.1.1.1")},
+		DNS: []netmonitor.DNSInfo{
+			{
+				ResolvConfPath: "/etc/eth1-resolv.conf",
+				Domains:        []string{"eth-test-domain"},
+				DNSServers:     []net.IP{net.ParseIP("1.1.1.1")},
+			},
 		},
 		HwAddr: macAddress("02:00:00:00:00:02"),
 	}
@@ -400,14 +408,18 @@ func mockWlan0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("192.168.77.2/24")},
-		DHCP: netmonitor.DHCPInfo{
-			Subnet:     ipSubnet("192.168.77.0/24"),
-			NtpServers: []net.IP{net.ParseIP("129.6.15.32")},
+		DHCP: []netmonitor.DHCPInfo{
+			{
+				Subnet:     ipSubnet("192.168.77.0/24"),
+				NtpServers: []net.IP{net.ParseIP("129.6.15.32")},
+			},
 		},
-		DNS: netmonitor.DNSInfo{
-			ResolvConfPath: "/etc/wlan0-resolv.conf",
-			Domains:        []string{"wlan-test-domain"},
-			DNSServers:     []net.IP{net.ParseIP("192.168.77.13")},
+		DNS: []netmonitor.DNSInfo{
+			{
+				ResolvConfPath: "/etc/wlan0-resolv.conf",
+				Domains:        []string{"wlan-test-domain"},
+				DNSServers:     []net.IP{net.ParseIP("192.168.77.13")},
+			},
 		},
 		HwAddr: macAddress("02:00:00:00:00:03"),
 	}
@@ -425,14 +437,18 @@ func mockWwan0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("15.123.87.20/28")},
-		DHCP: netmonitor.DHCPInfo{
-			Subnet:     ipSubnet("15.123.87.16/28"),
-			NtpServers: []net.IP{net.ParseIP("128.138.141.177")},
+		DHCP: []netmonitor.DHCPInfo{
+			{
+				Subnet:     ipSubnet("15.123.87.16/28"),
+				NtpServers: []net.IP{net.ParseIP("128.138.141.177")},
+			},
 		},
-		DNS: netmonitor.DNSInfo{
-			ResolvConfPath: "/etc/wlan0-resolv.conf",
-			Domains:        []string{"wwan-test-domain"},
-			DNSServers:     []net.IP{net.ParseIP("208.67.222.222")},
+		DNS: []netmonitor.DNSInfo{
+			{
+				ResolvConfPath: "/etc/wlan0-resolv.conf",
+				Domains:        []string{"wwan-test-domain"},
+				DNSServers:     []net.IP{net.ParseIP("208.67.222.222")},
+			},
 		},
 		HwAddr: macAddress("02:00:00:00:00:04"),
 	}
@@ -1588,24 +1604,32 @@ func TestVlansAndBonds(test *testing.T) {
 
 	// Simulate events of VLAN sub-interfaces receiving IP addresses from DHCP servers.
 	shopfloor100.IPAddrs = []*net.IPNet{ipAddress("192.168.10.5/24")}
-	shopfloor100.DHCP = netmonitor.DHCPInfo{
-		Subnet:     ipSubnet("192.168.10.0/24"),
-		NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+	shopfloor100.DHCP = []netmonitor.DHCPInfo{
+		{
+			Subnet:     ipSubnet("192.168.10.0/24"),
+			NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+		},
 	}
-	shopfloor100.DNS = netmonitor.DNSInfo{
-		ResolvConfPath: "/etc/shopfloor.100-resolv.conf",
-		Domains:        []string{"vlan100-test-domain"},
-		DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+	shopfloor100.DNS = []netmonitor.DNSInfo{
+		{
+			ResolvConfPath: "/etc/shopfloor.100-resolv.conf",
+			Domains:        []string{"vlan100-test-domain"},
+			DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+		},
 	}
 	shopfloor200.IPAddrs = []*net.IPNet{ipAddress("172.20.1.2/24")}
-	shopfloor200.DHCP = netmonitor.DHCPInfo{
-		Subnet:     ipSubnet("172.20.1.0/24"),
-		NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
+	shopfloor200.DHCP = []netmonitor.DHCPInfo{
+		{
+			Subnet:     ipSubnet("172.20.1.0/24"),
+			NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
+		},
 	}
-	shopfloor200.DNS = netmonitor.DNSInfo{
-		ResolvConfPath: "/etc/shopfloor.200-resolv.conf",
-		Domains:        []string{"vlan200-test-domain"},
-		DNSServers:     []net.IP{net.ParseIP("1.1.1.1")},
+	shopfloor200.DNS = []netmonitor.DNSInfo{
+		{
+			ResolvConfPath: "/etc/shopfloor.200-resolv.conf",
+			Domains:        []string{"vlan200-test-domain"},
+			DNSServers:     []net.IP{net.ParseIP("1.1.1.1")},
+		},
 	}
 	networkMonitor.AddOrUpdateInterface(shopfloor100)
 	networkMonitor.AddOrUpdateInterface(shopfloor200)
@@ -1735,7 +1759,7 @@ func TestTransientDNSError(test *testing.T) {
 	// Prepare simulated network stack.
 	eth0 := mockEth0()
 	eth0.IPAddrs = nil // eth0 does not yet provide working connectivity
-	eth0.DNS = netmonitor.DNSInfo{}
+	eth0.DNS = []netmonitor.DNSInfo{}
 	networkMonitor.AddOrUpdateInterface(eth0)
 
 	// Apply global config first.
