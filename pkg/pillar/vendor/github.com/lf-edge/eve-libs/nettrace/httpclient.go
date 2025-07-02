@@ -592,7 +592,7 @@ func (c *HTTPClient) periodicSockUpdate(gettingTrace bool) {
 }
 
 func (c *HTTPClient) getConntrack(addr addrTuple, entry *conntrackEntry, now Timestamp) {
-	flow, err := c.nfConn.Get(conntrack.Flow{
+	input := conntrack.Flow{
 		TupleOrig: conntrack.Tuple{
 			IP: conntrack.IPTuple{
 				SourceAddress:      addr.srcIP,
@@ -604,9 +604,12 @@ func (c *HTTPClient) getConntrack(addr addrTuple, entry *conntrackEntry, now Tim
 				DestinationPort: addr.dstPort,
 			},
 		},
-	})
+	}
+	flow, err := c.nfConn.Get(input)
 	entry.queriedAt = now
+	c.log.Infof("HEY! getConntrack (%+v): %v, %+v", input, err, flow)
 	if err != nil {
+		// TODO: avoid this warning
 		c.log.Warningf("nettrace: networkTracer id=%s: "+
 			"failed to get conntrack entry for connection %v: %v",
 			c.id, addr, err)

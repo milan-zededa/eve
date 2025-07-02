@@ -1046,6 +1046,7 @@ func (r *LinuxNIReconciler) getIntendedNIServices(niID uuid.UUID) dg.Graph {
 	return intendedServices
 }
 
+// TODO: do not start Metadata server for switch NI
 func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []dg.Item) {
 	ni := r.nis[niID]
 	_, bridgeIP, _, _, err := r.getBridgeAddrs(niID)

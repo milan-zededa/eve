@@ -578,6 +578,7 @@ func (z *zedrouter) doInactivateNetworkInstance(status *types.NetworkInstanceSta
 func (z *zedrouter) doUpdateActivatedNetworkInstance(config types.NetworkInstanceConfig,
 	status *types.NetworkInstanceStatus) {
 	bridgeConfig := z.getNIBridgeConfig(status)
+	// TODO: do not run for switch NI:
 	z.attachNTPServersToPortConfigs(bridgeConfig.Ports)
 	niRecStatus, err := z.niReconciler.UpdateNI(
 		z.runCtx, config, bridgeConfig)

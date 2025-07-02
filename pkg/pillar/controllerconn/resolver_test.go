@@ -34,15 +34,17 @@ func createNetmonitorMockInterface() []netmonitor.MockInterface {
 				},
 			},
 			HwAddr: []byte{},
-			DNS: netmonitor.DNSInfo{
-				ResolvConfPath: "/etc/resolv.conf",
-				Domains:        []string{},
-				DNSServers: []net.IP{
-					{208, 67, 220, 220},
-					{208, 67, 222, 222},
-					{141, 1, 1, 1},
-					{1, 1, 1, 1},
-					{9, 9, 9, 9},
+			DNS: []netmonitor.DNSInfo{
+				{
+					ResolvConfPath: "/etc/resolv.conf",
+					Domains:        []string{},
+					DNSServers: []net.IP{
+						{208, 67, 220, 220},
+						{208, 67, 222, 222},
+						{141, 1, 1, 1},
+						{1, 1, 1, 1},
+						{9, 9, 9, 9},
+					},
 				},
 			},
 		},
@@ -62,12 +64,14 @@ func createNetmonitorMockInterface() []netmonitor.MockInterface {
 				},
 			},
 			HwAddr: []byte{},
-			DNS: netmonitor.DNSInfo{
-				ResolvConfPath: "/etc/resolv.conf",
-				Domains:        []string{},
-				DNSServers: []net.IP{
-					{1, 0, 0, 1},
-					{8, 8, 8, 8},
+			DNS: []netmonitor.DNSInfo{
+				{
+					ResolvConfPath: "/etc/resolv.conf",
+					Domains:        []string{},
+					DNSServers: []net.IP{
+						{1, 0, 0, 1},
+						{8, 8, 8, 8},
+					},
 				},
 			},
 		},
@@ -81,12 +85,14 @@ func createNetmonitorMockInterface() []netmonitor.MockInterface {
 				Mask: []byte{255, 255, 255, 0},
 			}},
 			HwAddr: []byte{},
-			DNS: netmonitor.DNSInfo{
-				ResolvConfPath: "/etc/resolv.conf",
-				Domains:        []string{},
-				DNSServers: []net.IP{
-					{0, 6, 6, 6},
-					{0, 7, 7, 7},
+			DNS: []netmonitor.DNSInfo{
+				{
+					ResolvConfPath: "/etc/resolv.conf",
+					Domains:        []string{},
+					DNSServers: []net.IP{
+						{0, 6, 6, 6},
+						{0, 7, 7, 7},
+					},
 				},
 			},
 		},
@@ -100,7 +106,11 @@ func createDeviceNetworkStatus() types.DeviceNetworkStatus {
 	for i := range deviceNetworkStatusPorts {
 		deviceNetworkStatusPorts[i].IfName = mockInterface[i].Attrs.IfName
 		deviceNetworkStatusPorts[i].IsL3Port = true
-		deviceNetworkStatusPorts[i].DNSServers = mockInterface[i].DNS.DNSServers
+		var dnsServers []net.IP
+		for _, dnsInfo := range mockInterface[i].DNS {
+			dnsServers = append(dnsServers, dnsInfo.DNSServers...)
+		}
+		deviceNetworkStatusPorts[i].DNSServers = dnsServers
 		addrInfos := make([]types.AddrInfo, len(mockInterface[i].IPAddrs))
 		for j := range mockInterface[i].IPAddrs {
 			addrInfos[j] = types.AddrInfo{

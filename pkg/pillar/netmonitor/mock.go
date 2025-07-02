@@ -31,8 +31,8 @@ type MockInterface struct {
 	Attrs   IfAttrs
 	IPAddrs []*net.IPNet
 	HwAddr  net.HardwareAddr
-	DNS     DNSInfo
-	DHCP    DHCPInfo
+	DNS     []DNSInfo
+	DHCP    []DHCPInfo
 }
 
 // AddOrUpdateInterface : allows to simulate an event of interface being added
@@ -47,6 +47,7 @@ func (m *MockNetworkMonitor) AddOrUpdateInterface(mockIf MockInterface) {
 	prev, existed := m.interfaces[ifIndex]
 	m.interfaces[ifIndex] = mockIf
 	// Interface add/update event.
+	// TODO: DeepEqual is unnecessary
 	if !existed || !reflect.DeepEqual(mockIf.Attrs, prev.Attrs) {
 		m.publishEvent(IfChange{
 			Attrs: mockIf.Attrs,
@@ -119,7 +120,7 @@ func (m *MockNetworkMonitor) DelInterface(ifName string) {
 	}
 	m.publishEvent(DNSInfoChange{
 		IfIndex: ifIndex,
-		Info:    DNSInfo{},
+		Info:    []DNSInfo{},
 	})
 	m.publishEvent(IfChange{
 		Attrs:   mockIf.Attrs,
@@ -137,6 +138,7 @@ func (m *MockNetworkMonitor) UpdateRoutes(routes []Route) {
 	for _, route := range m.routes {
 		var found bool
 		for _, prevRoute := range prev {
+			// TODO: get rid of the ugly DeepEqual-s
 			if reflect.DeepEqual(route, prevRoute) {
 				found = true
 				break
@@ -227,23 +229,23 @@ func (m *MockNetworkMonitor) GetInterfaceAddrs(ifIndex int) (
 }
 
 // GetInterfaceDNSInfo returns DNS info associated with the mock interface.
-func (m *MockNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) (DNSInfo, error) {
+func (m *MockNetworkMonitor) GetInterfaceDNSInfo(ifIndex int) ([]DNSInfo, error) {
 	m.Lock()
 	defer m.Unlock()
 	mockIf, exists := m.interfaces[ifIndex]
 	if !exists {
-		return DNSInfo{}, m.ifNotFoundErr(ifIndex)
+		return []DNSInfo{}, m.ifNotFoundErr(ifIndex)
 	}
 	return mockIf.DNS, nil
 }
 
 // GetInterfaceDHCPInfo returns DHCP info associated with the mock interface.
-func (m *MockNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (DHCPInfo, error) {
+func (m *MockNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) ([]DHCPInfo, error) {
 	m.Lock()
 	defer m.Unlock()
 	mockIf, exists := m.interfaces[ifIndex]
 	if !exists {
-		return DHCPInfo{}, m.ifNotFoundErr(ifIndex)
+		return nil, m.ifNotFoundErr(ifIndex)
 	}
 	return mockIf.DHCP, nil
 }

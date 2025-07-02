@@ -22,6 +22,8 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// TODO: Make sure the PortProber does not use and count IPv6 addresses
+
 // PortProber is used by zedrouter to test the connectivity status of device ports
 // used by network instances with multipath routes.
 // For every multipath route, PortProber picks one of the ports to use at the given

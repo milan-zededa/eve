@@ -84,6 +84,7 @@ func (r *ResolverWithLocalIP) resolverDial(
 		// There is no point in looking for DNS server on the loopback interface on EVE.
 		return nil, &types.DNSNotAvailError{IfName: r.ifName}
 	}
+	// TODO: check if the same IP version as localIP - maybe not needed, not sure if Go dialer checks this
 	// Note that port number is not looked at by skipNs.
 	if r.skipNs != nil {
 		if skip, reason := r.skipNs(dnsIP, 0); skip {
@@ -225,6 +226,7 @@ func ResolveWithSrcIPWithTimeout(domain string, dnsServerIP net.IP, srcIP net.IP
 	if !strings.HasSuffix(domain, ".") {
 		domain = domain + "."
 	}
+	// TODO: Resolve also IPv6
 	msg.SetQuestion(domain, dns.TypeA)
 	dnsClient.Timeout = time.Duration(dnsTimeout)
 	reply, _, err := dnsClient.Exchange(&msg, net.JoinHostPort(dnsServerIP.String(), "53"))
@@ -329,12 +331,14 @@ func ResolveWithPortsLambda(domain string,
 
 		for _, dnsIP := range port.DNSServers {
 			for _, srcIP := range srcIPs {
+				// TODO: skip if IP addresses do not match in version
 				wg.Add(1)
 				dnsIPCopy := make(net.IP, len(dnsIP))
 				copy(dnsIPCopy, dnsIP)
 				srcIPCopy := make(net.IP, len(srcIP))
 				copy(srcIPCopy, srcIP)
 				countDNSRequests++
+				// TODO: run for A and AAAA in parallel
 				go func(dnsIP, srcIP net.IP) {
 					defer func() {
 						wg.Done()

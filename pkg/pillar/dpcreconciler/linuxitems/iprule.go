@@ -142,6 +142,7 @@ func (c *IPRuleConfigurator) makeNetlinkRule(rule IPRule) *netlink.Rule {
 	r.Dst = rule.Dst
 	r.Table = rule.Table
 	r.Priority = rule.Priority
+	// TODO: allow to specify family even if src and dst are both nil
 	r.Family = netlink.FAMILY_V4
 	if rule.Src != nil && rule.Src.IP.To4() == nil {
 		r.Family = netlink.FAMILY_V6

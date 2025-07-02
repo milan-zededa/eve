@@ -2357,6 +2357,7 @@ func parseCellularIPType(
 	}
 }
 
+// TODO: Check that the same IP version is used across Ipspec?
 func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObjectConfig) error {
 	config.Dhcp = types.DhcpType(ipspec.Dhcp)
 	config.DomainName = ipspec.GetDomain()

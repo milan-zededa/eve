@@ -274,14 +274,18 @@ func TestSingleEthInterface(test *testing.T) {
 	// Simulate IP address being allocated by DHCP server
 	eth0IP := ipAddress("192.168.10.5/24")
 	eth0.IPAddrs = append(eth0.IPAddrs, eth0IP)
-	eth0.DHCP = netmonitor.DHCPInfo{
-		Subnet:     ipSubnet("192.168.10.0/24"),
-		NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+	eth0.DHCP = []netmonitor.DHCPInfo{
+		{
+			Subnet:     ipSubnet("192.168.10.0/24"),
+			NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
+		},
 	}
-	eth0.DNS = netmonitor.DNSInfo{
-		ResolvConfPath: "/etc/eth0-resolv.conf",
-		Domains:        []string{"test-domain"},
-		DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+	eth0.DNS = []netmonitor.DNSInfo{
+		{
+			ResolvConfPath: "/etc/eth0-resolv.conf",
+			Domains:        []string{"test-domain"},
+			DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+		},
 	}
 	networkMonitor.AddOrUpdateInterface(eth0)
 	routes := []netmonitor.Route{
@@ -321,8 +325,8 @@ func TestSingleEthInterface(test *testing.T) {
 
 	// Simulate event of interface losing the IP address.
 	eth0.IPAddrs = nil
-	eth0.DHCP = netmonitor.DHCPInfo{}
-	eth0.DNS = netmonitor.DNSInfo{}
+	eth0.DHCP = nil
+	eth0.DNS = nil
 	networkMonitor.AddOrUpdateInterface(eth0)
 	networkMonitor.UpdateRoutes(nil)
 	t.Eventually(status.ResumeReconcile).Should(Receive())
@@ -479,26 +483,34 @@ func TestMultipleEthsSameSubnet(test *testing.T) {
 	ntpServers := []net.IP{net.ParseIP("132.163.96.5")}
 	eth0IP := ipAddress("192.168.10.5/24")
 	eth0.IPAddrs = append(eth0.IPAddrs, eth0IP)
-	eth0.DHCP = netmonitor.DHCPInfo{
-		Subnet:     subnet,
-		NtpServers: ntpServers,
+	eth0.DHCP = []netmonitor.DHCPInfo{
+		{
+			Subnet:     subnet,
+			NtpServers: ntpServers,
+		},
 	}
-	eth0.DNS = netmonitor.DNSInfo{
-		ResolvConfPath: "/etc/eth0-resolv.conf",
-		Domains:        []string{"test-domain"},
-		DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+	eth0.DNS = []netmonitor.DNSInfo{
+		{
+			ResolvConfPath: "/etc/eth0-resolv.conf",
+			Domains:        []string{"test-domain"},
+			DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+		},
 	}
 	networkMonitor.AddOrUpdateInterface(eth0)
 	eth1IP := ipAddress("192.168.10.6/24")
 	eth1.IPAddrs = append(eth1.IPAddrs, eth1IP)
-	eth1.DHCP = netmonitor.DHCPInfo{
-		Subnet:     subnet,
-		NtpServers: ntpServers,
+	eth1.DHCP = []netmonitor.DHCPInfo{
+		{
+			Subnet:     subnet,
+			NtpServers: ntpServers,
+		},
 	}
-	eth1.DNS = netmonitor.DNSInfo{
-		ResolvConfPath: "/etc/eth1-resolv.conf",
-		Domains:        []string{"test-domain"},
-		DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+	eth1.DNS = []netmonitor.DNSInfo{
+		{
+			ResolvConfPath: "/etc/eth1-resolv.conf",
+			Domains:        []string{"test-domain"},
+			DNSServers:     []net.IP{net.ParseIP("8.8.8.8")},
+		},
 	}
 	networkMonitor.AddOrUpdateInterface(eth1)
 	gw := net.ParseIP("192.168.10.1")

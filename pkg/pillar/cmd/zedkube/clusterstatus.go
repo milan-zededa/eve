@@ -232,6 +232,7 @@ func (z *zedkube) startClusterStatusServer() {
 		// Listen on the ClusterIPPrefix IP and the ClusterStatusPort
 		// the firewall rule is explicitly added to allow traffic to this port in kubevirt
 		// this is documented in pkg/pillar/docs/zedkube.md section "Cluster Status Server"
+		// TODO: merge IP and port properly
 		Addr:    z.clusterConfig.ClusterIPPrefix.IP.String() + ":" + types.ClusterStatusPort,
 		Handler: mux,
 	}

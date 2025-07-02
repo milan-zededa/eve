@@ -163,6 +163,7 @@ func populateKVIFromPVCName(kvi *types.KubeVolumeInfo) (*types.KubeVolumeInfo, e
 			if err != nil {
 				return kvi, fmt.Errorf("PopulateKVIFromPVCName can't get replica engine: %v", err)
 			}
+			// TODO: merge IP and port properly
 			replicaAddress := "tcp://" + replicaEngineIP + ":" + fmt.Sprintf("%d", replicaEnginePort)
 			rebuildStatus, ok := engine.Status.RebuildStatus[replicaAddress]
 			if !ok {
