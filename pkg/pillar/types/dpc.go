@@ -680,8 +680,8 @@ const (
 
 // DhcpConfig : DHCP configuration for network port.
 type DhcpConfig struct {
-	Dhcp       DhcpType // If DhcpTypeStatic use below; if DhcpTypeNone do nothing
-	AddrSubnet string   // In CIDR e.g., 192.168.1.44/24
+	Dhcp       DhcpType   // If DhcpTypeStatic use below; if DhcpTypeNone do nothing
+	AddrSubnet *net.IPNet // In CIDR e.g., 192.168.1.44/24
 	Gateway    net.IP
 	DomainName string
 	NTPServers []string
@@ -1079,7 +1079,7 @@ type NetworkXObjectConfig struct {
 	UUID                 uuid.UUID
 	Type                 NetworkType
 	Dhcp                 DhcpType // If DhcpTypeStatic or DhcpTypeClient use below
-	Subnet               net.IPNet
+	Subnet               *net.IPNet
 	Gateway              net.IP
 	DomainName           string
 	NTPServers           []string

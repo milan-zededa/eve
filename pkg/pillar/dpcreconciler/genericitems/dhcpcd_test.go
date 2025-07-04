@@ -12,6 +12,12 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/utils/generics"
 )
 
+func addrSubnet(ipAddr string) *net.IPNet {
+	ip, subnet, _ := net.ParseCIDR(ipAddr)
+	subnet.IP = ip
+	return subnet
+}
+
 func TestDhcpcdEqual(t *testing.T) {
 	t.Parallel()
 	type test struct {
@@ -26,11 +32,11 @@ func TestDhcpcdEqual(t *testing.T) {
 			item1: configitems.Dhcpcd{
 				DhcpConfig: types.DhcpConfig{
 					Dhcp:       types.DhcpTypeClient,
-					AddrSubnet: "192.168.1.44/24",          // irrelevant
-					Gateway:    net.ParseIP("192.168.1.1"), // irrelevant
-					DomainName: "mydomain",                 // irrelevant
-					NTPServers: []string{"192.168.1.1"},    // irrelevant
-					Type:       types.NetworkTypeIpv4Only,  // must match
+					AddrSubnet: addrSubnet("192.168.1.44/24"), // irrelevant
+					Gateway:    net.ParseIP("192.168.1.1"),    // irrelevant
+					DomainName: "mydomain",                    // irrelevant
+					NTPServers: []string{"192.168.1.1"},       // irrelevant
+					Type:       types.NetworkTypeIpv4Only,     // must match
 				},
 			},
 			item2: configitems.Dhcpcd{
@@ -95,7 +101,7 @@ func TestDhcpcdEqual(t *testing.T) {
 			item1: configitems.Dhcpcd{
 				DhcpConfig: types.DhcpConfig{
 					Dhcp:       types.DhcpTypeStatic,
-					AddrSubnet: "192.168.1.44/24",
+					AddrSubnet: addrSubnet("192.168.1.44/24"),
 					DomainName: "mydomain",
 					NTPServers: []string{"192.168.1.1"},
 					DNSServers: []net.IP{net.ParseIP("8.8.8.8")},
@@ -105,7 +111,7 @@ func TestDhcpcdEqual(t *testing.T) {
 			item2: configitems.Dhcpcd{
 				DhcpConfig: types.DhcpConfig{
 					Dhcp:       types.DhcpTypeStatic,
-					AddrSubnet: "192.168.1.44/24",
+					AddrSubnet: addrSubnet("192.168.1.44/24"),
 					DomainName: "mydomain",
 					NTPServers: []string{"192.168.1.1"},
 					DNSServers: []net.IP{net.ParseIP("8.8.8.8")},
@@ -119,7 +125,7 @@ func TestDhcpcdEqual(t *testing.T) {
 			item1: configitems.Dhcpcd{
 				DhcpConfig: types.DhcpConfig{
 					Dhcp:       types.DhcpTypeStatic,
-					AddrSubnet: "192.168.1.44/24",
+					AddrSubnet: addrSubnet("192.168.1.44/24"),
 					DomainName: "mydomain",
 					NTPServers: []string{"192.168.1.1"},
 					DNSServers: []net.IP{net.ParseIP("8.8.8.8")}, // does not match
@@ -128,7 +134,7 @@ func TestDhcpcdEqual(t *testing.T) {
 			item2: configitems.Dhcpcd{
 				DhcpConfig: types.DhcpConfig{
 					Dhcp:       types.DhcpTypeStatic,
-					AddrSubnet: "192.168.1.44/24",
+					AddrSubnet: addrSubnet("192.168.1.44/24"),
 					DomainName: "mydomain",
 					NTPServers: []string{"192.168.1.1"},
 					DNSServers: []net.IP{net.ParseIP("1.1.1.1")}, // does not match
@@ -161,7 +167,7 @@ func TestDhcpcdArgs(t *testing.T) {
 				Type: types.NetworkTypeIpv4Only,
 			},
 			expOp:   "--request",
-			expArgs: []string{"-f", "/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0"},
+			expArgs: []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0"},
 		},
 		{
 			name: "DHCP client for IPv4 only with zero gateway",
@@ -171,7 +177,7 @@ func TestDhcpcdArgs(t *testing.T) {
 				Gateway: net.IP{0, 0, 0, 0},
 			},
 			expOp:   "--request",
-			expArgs: []string{"-f", "/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0", "--nogateway"},
+			expArgs: []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0", "--nogateway"},
 		},
 		{
 			name: "DHCP client for IPv6 only",
@@ -180,7 +186,7 @@ func TestDhcpcdArgs(t *testing.T) {
 				Type: types.NetworkTypeIpv6Only,
 			},
 			expOp:   "--request",
-			expArgs: []string{"-f", "/dhcpcd.conf", "--ipv6only", "-b", "-t", "0"},
+			expArgs: []string{"-f", "/etc/dhcpcd.conf", "--ipv6only", "-b", "-t", "0"},
 		},
 		{
 			name: "DHCP client for dual stack",
@@ -189,13 +195,13 @@ func TestDhcpcdArgs(t *testing.T) {
 				Type: types.NetworkTypeDualStack,
 			},
 			expOp:   "--request",
-			expArgs: []string{"-f", "/dhcpcd.conf", "--noipv4ll", "-b", "-t", "0"},
+			expArgs: []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "-b", "-t", "0"},
 		},
 		{
 			name: "Static IPv4 config",
 			config: types.DhcpConfig{
 				Dhcp:       types.DhcpTypeStatic,
-				AddrSubnet: "192.168.1.44/24",
+				AddrSubnet: addrSubnet("192.168.1.44/24"),
 				Gateway:    net.IP{192, 168, 1, 1},
 				DomainName: "mydomain",
 				NTPServers: []string{"192.168.1.1", "10.10.12.13"},
@@ -206,13 +212,13 @@ func TestDhcpcdArgs(t *testing.T) {
 			expArgs: []string{"ip_address=192.168.1.44/24", "--static", "routers=192.168.1.1",
 				"--static", "domain_name=mydomain", "--static", "domain_name_servers=8.8.8.8",
 				"--static", "ntp_servers=192.168.1.1", "--static", "ntp_servers=10.10.12.13",
-				"-f", "/dhcpcd.conf", "-b", "-t", "0"},
+				"-f", "/etc/dhcpcd.conf", "-b", "-t", "0"},
 		},
 		{
 			name: "Static IPv4 config with unspecified gateway",
 			config: types.DhcpConfig{
 				Dhcp:       types.DhcpTypeStatic,
-				AddrSubnet: "192.168.1.44/24",
+				AddrSubnet: addrSubnet("192.168.1.44/24"),
 				DomainName: "mydomain",
 				NTPServers: []string{"192.168.1.1", "10.10.12.13"},
 				DNSServers: []net.IP{net.ParseIP("8.8.8.8")},
@@ -222,7 +228,7 @@ func TestDhcpcdArgs(t *testing.T) {
 			expArgs: []string{"ip_address=192.168.1.44/24",
 				"--static", "domain_name=mydomain", "--static", "domain_name_servers=8.8.8.8",
 				"--static", "ntp_servers=192.168.1.1", "--static", "ntp_servers=10.10.12.13",
-				"-f", "/dhcpcd.conf", "-b", "-t", "0", "--nogateway"},
+				"-f", "/etc/dhcpcd.conf", "-b", "-t", "0", "--nogateway"},
 		},
 	}
 	configurator := configitems.DhcpcdConfigurator{}

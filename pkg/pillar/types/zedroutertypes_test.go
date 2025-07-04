@@ -820,6 +820,12 @@ func TestGetMgmtPortsByCost(t *testing.T) {
 	}
 }
 
+func addrWithSubnet(ipAddr string) *net.IPNet {
+	ip, subnet, _ := net.ParseCIDR(ipAddr)
+	subnet.IP = ip
+	return subnet
+}
+
 // Common DeviceNetworkStatus with addresses and costs; link-local etc
 // for the Count and Get functions
 // Note that

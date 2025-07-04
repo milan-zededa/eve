@@ -48,8 +48,7 @@ func (m *DpcManager) doAddDPC(ctx context.Context, dpc types.DevicePortConfig) {
 	// When the current DeviceNetworkStatus does not have any usable IP addresses,
 	// we should go ahead and call RestartVerify even when "configChanged" is false.
 	// Also if we have no working one (index -1) we restart.
-	// TODO: get nunmber for IPv6 addresses also if IPv6 is enabled
-	ipAddrCount := types.CountLocalIPv4AddrAnyNoLinkLocal(m.deviceNetStatus)
+	ipAddrCount := types.CountLocalAddrAnyNoLinkLocal(m.deviceNetStatus)
 	numDNSServers := types.CountDNSServers(m.deviceNetStatus, "")
 	if !configChanged && ipAddrCount > 0 && numDNSServers > 0 &&
 		m.dpcList.CurrentIndex != -1 {

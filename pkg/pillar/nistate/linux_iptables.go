@@ -65,7 +65,6 @@ func (lc *LinuxCollector) fetchIptablesCounters() []aclCounters {
 	for table, chains := range chainsWithCounters {
 		for _, chain := range chains {
 			for _, vif := range vifs {
-				// TODO: collect also IPv6 counters
 				output, err := iptables.IptableCmdOut(
 					nil, "-t", table, "-S", chain+"-"+vif.ifName, "-v")
 				if err != nil {
@@ -74,6 +73,19 @@ func (lc *LinuxCollector) fetchIptablesCounters() []aclCounters {
 				} else {
 					c := lc.parseIptablesCounters(output, table, chain,
 						vif.bridge, vif.ifName, 4)
+					if c != nil {
+						counters = append(counters, c...)
+					}
+				}
+				// Collect also IPv6 counters.
+				output, err = iptables.Ip6tableCmdOut(
+					nil, "-t", table, "-S", chain+"-"+vif.ifName, "-v")
+				if err != nil {
+					lc.log.Errorf("%s: fetchIptablesCounters: ip6tables -S failed: %v",
+						LogAndErrPrefix, err)
+				} else {
+					c := lc.parseIptablesCounters(output, table, chain,
+						vif.bridge, vif.ifName, 6)
 					if c != nil {
 						counters = append(counters, c...)
 					}
@@ -221,7 +233,8 @@ func (lc *LinuxCollector) parseIptablesLine(
 func (lc *LinuxCollector) getIptablesCounters(
 	counters []aclCounters, match aclCounters) aclCounters {
 	for i, c := range counters {
-		if c.ipVer != match.ipVer || c.dropCounter != match.dropCounter ||
+		if (match.ipVer != 0 && c.ipVer != match.ipVer) ||
+			c.dropCounter != match.dropCounter ||
 			c.drop != match.drop || c.limit != match.limit {
 			continue
 		}

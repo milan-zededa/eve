@@ -877,17 +877,22 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig,
 		Description: "Global configuration",
 	}
 	intendedCfg := dg.New(graphArgs)
-	// TODO: add this for IPv6 as well
 	// Move IP rule that matches local destined packets below network instance rules.
 	intendedCfg.PutItem(linux.IPRule{
 		Priority: types.PbrLocalDestPrio,
 		Table:    unix.RT_TABLE_LOCAL,
+	}, nil)
+	intendedCfg.PutItem(linux.IPRule{
+		Priority: types.PbrLocalDestPrio,
+		Table:    unix.RT_TABLE_LOCAL,
+		IPv6:     true,
 	}, nil)
 	if r.HVTypeKube {
 		intendedCfg.PutItem(linux.IPRule{
 			Dst:      kubePodCIDR,
 			Priority: types.PbrKubeNetworkPrio,
 			Table:    unix.RT_TABLE_MAIN,
+			IPv6:     false,
 		}, nil)
 		tableForKubeSvc := unix.RT_TABLE_MAIN
 		if clusterStatus.ClusterInterface != "" {
@@ -897,6 +902,7 @@ func (r *LinuxDpcReconciler) getIntendedGlobalCfg(dpc types.DevicePortConfig,
 			Dst:      kubeSvcCIDR,
 			Priority: types.PbrKubeNetworkPrio,
 			Table:    tableForKubeSvc,
+			IPv6:     false,
 		}, nil)
 	}
 	if len(dpc.Ports) == 0 {
@@ -1195,6 +1201,7 @@ func (r *LinuxDpcReconciler) getIntendedSrcIPRules(dpc types.DevicePortConfig) d
 				Src:      netutils.HostSubnet(ipAddr.IP),
 				Priority: types.PbrLocalOrigPrio,
 				Table:    types.DPCBaseRTIndex + ifIndex,
+				IPv6:     ipAddr.IP.To4() == nil,
 			}, nil)
 		}
 	}
@@ -1255,7 +1262,7 @@ func (r *LinuxDpcReconciler) getIntendedRoutes(dpc types.DevicePortConfig,
 			intendedRoutes.PutItem(linux.Route{
 				Route: netlink.Route{
 					LinkIndex: ifIndex,
-					Family:    netlink.FAMILY_V4, // TODO: determine this from the cluster IP prefix
+					Family:    netlink.FAMILY_V4,
 					Scope:     netlink.SCOPE_UNIVERSE,
 					Protocol:  unix.RTPROT_STATIC,
 					Type:      unix.RTN_UNICAST,

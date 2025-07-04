@@ -1425,7 +1425,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 			if ip != nil {
 				addrSubnet := network.Subnet
 				addrSubnet.IP = ip
-				port.AddrSubnet = addrSubnet.String()
+				port.AddrSubnet = addrSubnet
 			}
 			port.WirelessCfg = network.WirelessCfg
 			port.Gateway = network.Gateway
@@ -2357,7 +2357,6 @@ func parseCellularIPType(
 	}
 }
 
-// TODO: Check that the same IP version is used across Ipspec?
 func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObjectConfig) error {
 	config.Dhcp = types.DhcpType(ipspec.Dhcp)
 	config.DomainName = ipspec.GetDomain()
@@ -2366,12 +2365,17 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 		if err != nil {
 			return fmt.Errorf("invalid subnet (%s): %w", s, err)
 		}
-		config.Subnet = *subnet
+		config.Subnet = subnet
 	}
 	if g := ipspec.GetGateway(); g != "" {
 		config.Gateway = net.ParseIP(g)
 		if config.Gateway == nil {
 			return fmt.Errorf("invalid gateway IP (%s)", g)
+		}
+		if config.Subnet != nil &&
+			!netutils.SameIPVersions(config.Subnet.IP, config.Gateway) {
+			return fmt.Errorf("IP version mismatch between subnet (%s) and gateway (%s)",
+				config.Subnet, config.Gateway)
 		}
 	}
 
@@ -2391,6 +2395,11 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 		if ds == nil {
 			return fmt.Errorf("invalid DNS IP (%s)", dsStr)
 		}
+		if config.Subnet != nil &&
+			!netutils.SameIPVersions(config.Subnet.IP, ds) {
+			return fmt.Errorf("IP version mismatch between subnet (%s) and DNS server (%s)",
+				config.Subnet, ds)
+		}
 		config.DNSServers = append(config.DNSServers, ds)
 	}
 	if dr := ipspec.GetDhcpRange(); dr != nil && dr.GetStart() != "" {
@@ -2402,6 +2411,24 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 		if end == nil && dr.GetEnd() != "" {
 			return fmt.Errorf("invalid DHCP range end IP (%s)", dr.GetEnd())
 		}
+		if end != nil && !netutils.SameIPVersions(start, end) {
+			return fmt.Errorf("IP version mismatch between DHCP range start (%s) and end (%s)",
+				start, end)
+		}
+		if config.Subnet != nil {
+			if !config.Subnet.Contains(start) {
+				return fmt.Errorf("DHCP range start IP (%s) is not within the subnet (%s)",
+					start, config.Subnet)
+			}
+			if end != nil && !config.Subnet.Contains(end) {
+				return fmt.Errorf("DHCP range end IP (%s) is not within the subnet (%s)",
+					end, config.Subnet)
+			}
+			if end != nil && bytes.Compare(start, end) > 0 {
+				return fmt.Errorf("DHCP range start IP (%s) is greater than end IP (%s)",
+					start, end)
+			}
+		}
 		config.DhcpRange.Start = start
 		config.DhcpRange.End = end
 	}
@@ -2411,6 +2438,15 @@ func parseIpspecNetworkXObject(ipspec *zconfig.Ipspec, config *types.NetworkXObj
 func parseIpspec(ipspec *zconfig.Ipspec,
 	config *types.NetworkInstanceConfig) error {
 
+	// Parse Subnet - mandatory argument.
+	if ipspec.GetSubnet() == "" {
+		return fmt.Errorf("missing network instance subnet")
+	}
+	_, subnet, err := net.ParseCIDR(ipspec.GetSubnet())
+	if err != nil {
+		return fmt.Errorf("invalid subnet (%s): %w", ipspec.GetSubnet(), err)
+	}
+	config.Subnet = subnet
 	config.DomainName = ipspec.GetDomain()
 	// Parse NTP Server
 	if config.NtpServers == nil {
@@ -2425,21 +2461,21 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 		if ds == nil {
 			return fmt.Errorf("invalid DNS IP (%s)", dsStr)
 		}
-		config.DnsServers = append(config.DnsServers, ds)
-	}
-	// Parse Subnet
-	if s := ipspec.GetSubnet(); s != "" {
-		_, subnet, err := net.ParseCIDR(s)
-		if err != nil {
-			return fmt.Errorf("invalid subnet (%s): %w", s, err)
+		if !netutils.SameIPVersions(config.Subnet.IP, ds) {
+			return fmt.Errorf("IP version mismatch between subnet (%s) and DNS server (%s)",
+				config.Subnet, ds)
 		}
-		config.Subnet = *subnet
+		config.DnsServers = append(config.DnsServers, ds)
 	}
 	// Parse Gateway
 	if g := ipspec.GetGateway(); g != "" {
 		config.Gateway = net.ParseIP(g)
 		if config.Gateway == nil {
 			return fmt.Errorf("invalid gateway IP (%s)", g)
+		}
+		if !netutils.SameIPVersions(config.Subnet.IP, config.Gateway) {
+			return fmt.Errorf("IP version mismatch between subnet (%s) and gateway (%s)",
+				config.Subnet, config.Gateway)
 		}
 	}
 	// Parse DhcpRange
@@ -2451,6 +2487,22 @@ func parseIpspec(ipspec *zconfig.Ipspec,
 		end := net.ParseIP(dr.GetEnd())
 		if end == nil && dr.GetEnd() != "" {
 			return fmt.Errorf("invalid DHCP range end IP (%s)", dr.GetEnd())
+		}
+		if end != nil && !netutils.SameIPVersions(start, end) {
+			return fmt.Errorf("IP version mismatch between DHCP range start (%s) and end (%s)",
+				start, end)
+		}
+		if !config.Subnet.Contains(start) {
+			return fmt.Errorf("DHCP range start IP (%s) is not within the subnet (%s)",
+				start, config.Subnet)
+		}
+		if end != nil && !config.Subnet.Contains(end) {
+			return fmt.Errorf("DHCP range end IP (%s) is not within the subnet (%s)",
+				end, config.Subnet)
+		}
+		if end != nil && bytes.Compare(start, end) > 0 {
+			return fmt.Errorf("DHCP range start IP (%s) is greater than end IP (%s)",
+				start, end)
 		}
 		config.DhcpRange.Start = start
 		config.DhcpRange.End = end

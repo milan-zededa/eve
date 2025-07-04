@@ -174,7 +174,7 @@ func TestReconcileWithEmptyArgs(test *testing.T) {
 	t.Expect(itemCountWithType(iptables.ChainV4Typename)).To(Equal(14))
 	t.Expect(itemCountWithType(iptables.ChainV6Typename)).To(Equal(14))
 	t.Expect(itemCountWithType(iptables.RuleV4Typename)).To(Equal(24))
-	t.Expect(itemCountWithType(iptables.RuleV6Typename)).To(Equal(23))
+	t.Expect(itemCountWithType(iptables.RuleV6Typename)).To(Equal(24))
 	t.Expect(itemIsCreatedWithDescrSnippet("--dport 22 -j REJECT")).To(BeTrue())
 
 	// Check that the node_exporter port is blocked for non-local traffic
@@ -274,11 +274,9 @@ func TestSingleEthInterface(test *testing.T) {
 	// Simulate IP address being allocated by DHCP server
 	eth0IP := ipAddress("192.168.10.5/24")
 	eth0.IPAddrs = append(eth0.IPAddrs, eth0IP)
-	eth0.DHCP = []netmonitor.DHCPInfo{
-		{
-			Subnet:     ipSubnet("192.168.10.0/24"),
-			NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
-		},
+	eth0.DHCP = netmonitor.DHCPInfo{
+		IPv4Subnet:     ipSubnet("192.168.10.0/24"),
+		IPv4NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
 	}
 	eth0.DNS = []netmonitor.DNSInfo{
 		{
@@ -325,7 +323,7 @@ func TestSingleEthInterface(test *testing.T) {
 
 	// Simulate event of interface losing the IP address.
 	eth0.IPAddrs = nil
-	eth0.DHCP = nil
+	eth0.DHCP = netmonitor.DHCPInfo{}
 	eth0.DNS = nil
 	networkMonitor.AddOrUpdateInterface(eth0)
 	networkMonitor.UpdateRoutes(nil)
@@ -483,11 +481,9 @@ func TestMultipleEthsSameSubnet(test *testing.T) {
 	ntpServers := []net.IP{net.ParseIP("132.163.96.5")}
 	eth0IP := ipAddress("192.168.10.5/24")
 	eth0.IPAddrs = append(eth0.IPAddrs, eth0IP)
-	eth0.DHCP = []netmonitor.DHCPInfo{
-		{
-			Subnet:     subnet,
-			NtpServers: ntpServers,
-		},
+	eth0.DHCP = netmonitor.DHCPInfo{
+		IPv4Subnet:     subnet,
+		IPv4NtpServers: ntpServers,
 	}
 	eth0.DNS = []netmonitor.DNSInfo{
 		{
@@ -499,11 +495,10 @@ func TestMultipleEthsSameSubnet(test *testing.T) {
 	networkMonitor.AddOrUpdateInterface(eth0)
 	eth1IP := ipAddress("192.168.10.6/24")
 	eth1.IPAddrs = append(eth1.IPAddrs, eth1IP)
-	eth1.DHCP = []netmonitor.DHCPInfo{
-		{
-			Subnet:     subnet,
-			NtpServers: ntpServers,
-		},
+	eth1.DHCP = netmonitor.DHCPInfo{
+
+		IPv4Subnet:     subnet,
+		IPv4NtpServers: ntpServers,
 	}
 	eth1.DNS = []netmonitor.DNSInfo{
 		{

@@ -308,11 +308,9 @@ func mockEth0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("192.168.10.5/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("192.168.10.0/24"),
-				NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("192.168.10.0/24"),
+			IPv4NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -367,11 +365,9 @@ func mockEth1() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("172.20.1.2/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("172.20.1.0/24"),
-				NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("172.20.1.0/24"),
+			IPv4NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -414,11 +410,9 @@ func mockWlan0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("192.168.77.2/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("192.168.77.0/24"),
-				NtpServers: []net.IP{net.ParseIP("129.6.15.32")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("192.168.77.0/24"),
+			IPv4NtpServers: []net.IP{net.ParseIP("129.6.15.32")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -443,11 +437,9 @@ func mockWwan0() netmonitor.MockInterface {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddress("15.123.87.20/28")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("15.123.87.16/28"),
-				NtpServers: []net.IP{net.ParseIP("128.138.141.177")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("15.123.87.16/28"),
+			IPv4NtpServers: []net.IP{net.ParseIP("128.138.141.177")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -1048,7 +1040,7 @@ func TestDNS(test *testing.T) {
 	t.Expect(eth0State.DNSServers[0].String()).To(Equal("8.8.8.8"))
 	t.Expect(eth0State.DhcpNtpServers).To(HaveLen(1))
 	t.Expect(eth0State.DhcpNtpServers[0].String()).To(Equal("132.163.96.5"))
-	t.Expect(eth0State.Subnet.String()).To(Equal("192.168.10.0/24"))
+	t.Expect(eth0State.IPv4Subnet.String()).To(Equal("192.168.10.0/24"))
 	t.Expect(eth0State.MacAddr.String()).To(Equal("02:00:00:00:00:01"))
 	t.Expect(eth0State.Up).To(BeTrue())
 	t.Expect(eth0State.Type).To(BeEquivalentTo(types.NetworkTypeIPv4))
@@ -1071,7 +1063,7 @@ func TestDNS(test *testing.T) {
 	t.Expect(eth1State.DNSServers[0].String()).To(Equal("1.1.1.1"))
 	t.Expect(eth1State.DhcpNtpServers).To(HaveLen(1))
 	t.Expect(eth1State.DhcpNtpServers[0].String()).To(Equal("132.163.96.6"))
-	t.Expect(eth1State.Subnet.String()).To(Equal("172.20.1.0/24"))
+	t.Expect(eth1State.IPv4Subnet.String()).To(Equal("172.20.1.0/24"))
 	t.Expect(eth1State.MacAddr.String()).To(Equal("02:00:00:00:00:02"))
 	t.Expect(eth1State.Up).To(BeTrue())
 	t.Expect(eth1State.Type).To(BeEquivalentTo(types.NetworkTypeIPv4))
@@ -1604,11 +1596,9 @@ func TestVlansAndBonds(test *testing.T) {
 
 	// Simulate events of VLAN sub-interfaces receiving IP addresses from DHCP servers.
 	shopfloor100.IPAddrs = []*net.IPNet{ipAddress("192.168.10.5/24")}
-	shopfloor100.DHCP = []netmonitor.DHCPInfo{
-		{
-			Subnet:     ipSubnet("192.168.10.0/24"),
-			NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
-		},
+	shopfloor100.DHCP = netmonitor.DHCPInfo{
+		IPv4Subnet:     ipSubnet("192.168.10.0/24"),
+		IPv4NtpServers: []net.IP{net.ParseIP("132.163.96.5")},
 	}
 	shopfloor100.DNS = []netmonitor.DNSInfo{
 		{
@@ -1618,11 +1608,9 @@ func TestVlansAndBonds(test *testing.T) {
 		},
 	}
 	shopfloor200.IPAddrs = []*net.IPNet{ipAddress("172.20.1.2/24")}
-	shopfloor200.DHCP = []netmonitor.DHCPInfo{
-		{
-			Subnet:     ipSubnet("172.20.1.0/24"),
-			NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
-		},
+	shopfloor200.DHCP = netmonitor.DHCPInfo{
+		IPv4Subnet:     ipSubnet("172.20.1.0/24"),
+		IPv4NtpServers: []net.IP{net.ParseIP("132.163.96.6")},
 	}
 	shopfloor200.DNS = []netmonitor.DNSInfo{
 		{
@@ -1672,7 +1660,7 @@ func TestVlansAndBonds(test *testing.T) {
 	t.Expect(eth0State.DomainName).To(BeEmpty())
 	t.Expect(eth0State.DNSServers).To(BeEmpty())
 	t.Expect(eth0State.DhcpNtpServers).To(BeEmpty())
-	t.Expect(eth0State.Subnet.IP).To(BeNil())
+	t.Expect(eth0State.IPv4Subnet).To(BeNil())
 	t.Expect(eth0State.MacAddr.String()).To(Equal("02:00:00:00:00:01"))
 	t.Expect(eth0State.Up).To(BeTrue())
 	t.Expect(eth0State.Type).To(BeEquivalentTo(types.NetworkTypeNOOP))
@@ -1689,7 +1677,7 @@ func TestVlansAndBonds(test *testing.T) {
 	t.Expect(eth1State.DomainName).To(BeEmpty())
 	t.Expect(eth1State.DNSServers).To(BeEmpty())
 	t.Expect(eth1State.DhcpNtpServers).To(BeEmpty())
-	t.Expect(eth1State.Subnet.IP).To(BeNil())
+	t.Expect(eth1State.IPv4Subnet).To(BeNil())
 	t.Expect(eth1State.MacAddr.String()).To(Equal("02:00:00:00:00:02"))
 	t.Expect(eth1State.Up).To(BeTrue())
 	t.Expect(eth1State.Type).To(BeEquivalentTo(types.NetworkTypeNOOP))
@@ -1705,7 +1693,7 @@ func TestVlansAndBonds(test *testing.T) {
 	t.Expect(bond0State.DomainName).To(BeEmpty())
 	t.Expect(bond0State.DNSServers).To(BeEmpty())
 	t.Expect(bond0State.DhcpNtpServers).To(BeEmpty())
-	t.Expect(bond0State.Subnet.IP).To(BeNil())
+	t.Expect(bond0State.IPv4Subnet).To(BeNil())
 	t.Expect(bond0State.MacAddr.String()).To(Equal("02:00:00:00:00:03"))
 	t.Expect(bond0State.Up).To(BeTrue())
 	t.Expect(bond0State.Type).To(BeEquivalentTo(types.NetworkTypeNOOP))
@@ -1724,7 +1712,7 @@ func TestVlansAndBonds(test *testing.T) {
 	t.Expect(vlan100State.DNSServers[0].String()).To(Equal("8.8.8.8"))
 	t.Expect(vlan100State.DhcpNtpServers).To(HaveLen(1))
 	t.Expect(vlan100State.DhcpNtpServers[0].String()).To(Equal("132.163.96.5"))
-	t.Expect(vlan100State.Subnet.String()).To(Equal("192.168.10.0/24"))
+	t.Expect(vlan100State.IPv4Subnet.String()).To(Equal("192.168.10.0/24"))
 	t.Expect(vlan100State.MacAddr.String()).To(Equal("02:00:00:00:00:04"))
 	t.Expect(vlan100State.Up).To(BeTrue())
 	t.Expect(vlan100State.Type).To(BeEquivalentTo(types.NetworkTypeIPv4))
@@ -1744,7 +1732,7 @@ func TestVlansAndBonds(test *testing.T) {
 	t.Expect(vlan200State.DNSServers[0].String()).To(Equal("1.1.1.1"))
 	t.Expect(vlan200State.DhcpNtpServers).To(HaveLen(1))
 	t.Expect(vlan200State.DhcpNtpServers[0].String()).To(Equal("132.163.96.6"))
-	t.Expect(vlan200State.Subnet.String()).To(Equal("172.20.1.0/24"))
+	t.Expect(vlan200State.IPv4Subnet.String()).To(Equal("172.20.1.0/24"))
 	t.Expect(vlan200State.MacAddr.String()).To(Equal("02:00:00:00:00:05"))
 	t.Expect(vlan200State.Up).To(BeTrue())
 	t.Expect(vlan200State.Type).To(BeEquivalentTo(types.NetworkTypeIPv4))
@@ -1965,7 +1953,7 @@ func TestRemovalOfOldNonWorkingDPCs(test *testing.T) {
 	timePrio2 := time.Now()
 	dpc = makeDPC("zedagent", timePrio2, selectedIntfs{eth0: true})
 	dpc.Ports[0].Dhcp = types.DhcpTypeStatic
-	dpc.Ports[0].AddrSubnet = "192.168.1.44/24"
+	dpc.Ports[0].AddrSubnet = ipAddress("192.168.1.44/24")
 	connTester.SetConnectivityError("zedagent", "eth0",
 		errors.New("failed to connect over eth0"))
 	dpcManager.AddDPC(dpc)
@@ -1983,7 +1971,7 @@ func TestRemovalOfOldNonWorkingDPCs(test *testing.T) {
 	timePrio3 := time.Now()
 	dpc = makeDPC("zedagent", timePrio3, selectedIntfs{eth1: true})
 	dpc.Ports[0].Dhcp = types.DhcpTypeStatic
-	dpc.Ports[0].AddrSubnet = "10.10.5.22/24"
+	dpc.Ports[0].AddrSubnet = ipAddress("10.10.5.22/24")
 	connTester.SetConnectivityError("zedagent", "eth1",
 		errors.New("failed to connect over eth1"))
 	dpcManager.AddDPC(dpc)

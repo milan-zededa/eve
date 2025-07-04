@@ -34,10 +34,9 @@ type NetworkMonitor interface {
 	// GetInterfaceDNSInfo : get DNS information associated with the given interface.
 	// Function returns one entry for every resolv.conf file generated for the interface.
 	GetInterfaceDNSInfo(ifIndex int) ([]DNSInfo, error)
-	// GetInterfaceDHCPInfo : get DHCP information associated with the given interface.
-	// This information should be retrieved from the DHCP client.
-	// Returns entries separately for IPv4 and IPv6.
-	GetInterfaceDHCPInfo(ifIndex int) ([]DHCPInfo, error)
+	// GetInterfaceDHCPInfo : get DHCP + DHCPv6 information associated with the given interface.
+	// This information should be retrieved from the DHCP(v6) client.
+	GetInterfaceDHCPInfo(ifIndex int) (DHCPInfo, error)
 	// GetInterfaceDefaultGWs : return a list of IP addresses of default gateways
 	// used by the given interface. Includes both statically configured GWs as well as
 	// those assigned by DHCP.
@@ -70,7 +69,6 @@ type Route struct {
 	Dst     *net.IPNet
 	Gw      net.IP
 	Table   int
-	// TODO: add family
 	// Network-stack specific data.
 	Data interface{}
 }
@@ -188,14 +186,8 @@ type DNSInfo struct {
 
 // DHCPInfo : DHCP information associated with an interface.
 type DHCPInfo struct {
-	// TODO: get rid of this and rename to NTPInfo
-	// (and perhaps return single DHCPInfo with IPv4NtpServers and IPv6NtpServers, or just return list of net.IP)
-	Subnet     *net.IPNet
-	NtpServers []net.IP
-	ForIPv6    bool
-}
-
-// IsEmpty return true if DHCPInfo is empty/unset.
-func (info DHCPInfo) IsEmpty() bool {
-	return info.Subnet == nil && len(info.NtpServers) == 0
+	IPv4Subnet     *net.IPNet
+	IPv6Subnets    []*net.IPNet
+	IPv4NtpServers []net.IP
+	IPv6NtpServers []net.IP
 }

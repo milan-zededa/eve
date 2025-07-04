@@ -51,8 +51,10 @@ type NetworkPortStatus struct {
 	Cost                 uint8
 	Dhcp                 DhcpType
 	Type                 NetworkType // IPv4 or IPv6 or Dual stack
-	Subnet               net.IPNet   // TODO: remove
-	ConfiguredNtpServers []string    // This comes from network configuration
+	ConfiguredSubnet     *net.IPNet
+	IPv4Subnet           *net.IPNet
+	IPv6Subnets          []*net.IPNet
+	ConfiguredNtpServers []string // This comes from network configuration
 	IgnoreDhcpNtpServers bool
 	DomainName           string
 	DNSServers           []net.IP // If not set we use Gateway as DNS server
@@ -71,7 +73,7 @@ type NetworkPortStatus struct {
 }
 
 type AddrInfo struct {
-	Addr             net.IP // TODO: report with subnet
+	Addr             net.IP
 	Geo              ipinfo.IPInfo
 	LastGeoTimestamp time.Time
 }
@@ -237,7 +239,8 @@ func (status DeviceNetworkStatus) MostlyEqual(status2 DeviceNetworkStatus) bool 
 			return false
 		}
 		if p1.Dhcp != p2.Dhcp ||
-			!netutils.EqualIPNets(&p1.Subnet, &p2.Subnet) ||
+			!netutils.EqualIPNets(p1.IPv4Subnet, p2.IPv4Subnet) ||
+			!generics.EqualSetsFn(p1.IPv6Subnets, p2.IPv6Subnets, netutils.EqualIPNets) ||
 			!generics.EqualSets(p1.ConfiguredNtpServers, p2.ConfiguredNtpServers) ||
 			p1.DomainName != p2.DomainName {
 			return false
@@ -523,7 +526,6 @@ func CountLocalAddrNoLinkLocalWithCost(dns DeviceNetworkStatus,
 
 // CountLocalIPv4AddrAnyNoLinkLocal is like CountLocalAddrAnyNoLinkLocal but
 // only IPv4 addresses are counted
-// TODO: do we need IPv4-only variant?
 func CountLocalIPv4AddrAnyNoLinkLocal(dns DeviceNetworkStatus) int {
 
 	// Count the number of addresses which apply
@@ -595,7 +597,6 @@ func GetNTPServers(dns DeviceNetworkStatus, ifname string) ([]net.IP, []string) 
 
 // CountLocalIPv4AddrAnyNoLinkLocalIf is like CountLocalAddrAnyNoLinkLocalIf but
 // only IPv4 addresses are counted
-// TODO: do we need IPv4-only variant?
 func CountLocalIPv4AddrAnyNoLinkLocalIf(dns DeviceNetworkStatus,
 	ifname string) (int, error) {
 

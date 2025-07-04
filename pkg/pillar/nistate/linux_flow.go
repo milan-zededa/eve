@@ -656,7 +656,6 @@ func (lc *LinuxCollector) processDHCPPacket(
 	}
 
 	// This is IPv6 packet.
-	// TODO: I think that this XXX is mostly obsolete
 	// XXX Need to come back to handle IPv6 properly, including:
 	//  - each MAC can have both IPv4 and IPv6 addresses
 	//  - IPv6 can be stateful with DHCPv6 or stateless with autoconfig with RS/RA/etc.

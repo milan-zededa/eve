@@ -588,11 +588,7 @@ func (r *LinuxNIReconciler) getIntendedNIL2Cfg(niID uuid.UUID) dg.Graph {
 		Description: "Layer 2 configuration for network instance",
 	}
 	intendedL2Cfg := dg.New(graphArgs)
-	var bridgeIPs []*net.IPNet
-	bridgeIP, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
-	if bridgeIP != nil {
-		bridgeIPs = append(bridgeIPs, bridgeIP)
-	}
+	bridgeIPs, _, bridgeMAC, _, _ := r.getBridgeAddrs(niID)
 	withSTP := ni.config.Type == types.NetworkInstanceTypeSwitch &&
 		len(ni.bridge.Ports) > 1
 	intendedL2Cfg.PutItem(linux.Bridge{
@@ -688,21 +684,25 @@ func (r *LinuxNIReconciler) getIntendedNIL3Cfg(niID uuid.UUID) dg.Graph {
 		Description: "Layer 3 configuration for network instance",
 	}
 	intendedL3Cfg := dg.New(graphArgs)
-	bridgeIPNet, bridgeIPHost, _, _, _ := r.getBridgeAddrs(niID)
-	if !r.niBridgeIsCreatedByNIM(ni.config, ni.bridge) {
-		if bridgeIPNet != nil {
-			intendedL3Cfg.PutItem(generic.IPReserve{
-				AddrWithMask: bridgeIPNet,
-				NetIf: generic.NetworkIf{
-					IfName:  ni.brIfName,
-					ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
-				},
-			}, nil)
-		}
-	}
 	if ni.config.Type == types.NetworkInstanceTypeSwitch {
-		// No more L3 config for switch network instance.
+		// No L3 config for switch network instance.
 		return intendedL3Cfg
+	}
+	// For local NI there should be one bridge IP.
+	// But we still check len(ips) != 0 to stay on a safe side.
+	bridgeIPsNet, bridgeIPsHost, _, _, _ := r.getBridgeAddrs(niID)
+	if len(bridgeIPsNet) != 0 {
+		intendedL3Cfg.PutItem(generic.IPReserve{
+			AddrWithMask: bridgeIPsNet[0],
+			NetIf: generic.NetworkIf{
+				IfName:  ni.brIfName,
+				ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
+			},
+		}, nil)
+	}
+	var bridgeIPHost *net.IPNet
+	if len(bridgeIPsHost) != 0 {
+		bridgeIPHost = bridgeIPsHost[0]
 	}
 	if r.getNISubnet(ni) == nil {
 		// Local network instance with undefined subnet.
@@ -1046,21 +1046,27 @@ func (r *LinuxNIReconciler) getIntendedNIServices(niID uuid.UUID) dg.Graph {
 	return intendedServices
 }
 
-// TODO: do not start Metadata server for switch NI
 func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []dg.Item) {
 	ni := r.nis[niID]
-	_, bridgeIP, _, _, err := r.getBridgeAddrs(niID)
+	_, bridgeIPs, _, _, err := r.getBridgeAddrs(niID)
 	if err != nil {
 		r.log.Errorf("%s: getIntendedMetadataSrvCfg: getBridgeAddrs(%s) failed: %v",
 			LogAndErrPrefix, niID, err)
 		return nil
 	}
-	if bridgeIP == nil {
-		// No IP address for the metadata server to listen on.
+	var bridgeIPv4 net.IP
+	for _, bridgeIP := range bridgeIPs {
+		if bridgeIP.IP.To4() != nil {
+			bridgeIPv4 = bridgeIP.IP.To4()
+			break
+		}
+	}
+	if bridgeIPv4 == nil {
+		// No IPv4 address for the metadata server to listen on.
 		return nil
 	}
-	srvAddr := fmt.Sprintf("%s:%d", bridgeIP.IP.String(), 80)
-	if bridgeIP.IP.To4() != nil {
+	srvAddr := fmt.Sprintf("%s:%d", bridgeIPv4.String(), 80)
+	if bridgeIPv4.To4() != nil {
 		items = append(items, iptables.Rule{
 			RuleLabel: fmt.Sprintf("Redirection rule for metadata server of NI: %s",
 				ni.config.UUID),
@@ -1072,7 +1078,7 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 			TargetOpts: []string{"--to-destination", srvAddr},
 			Description: fmt.Sprintf("Redirect traffic headed towards the metadata "+
 				"service IP (%s) into the real IP address of the HTTP server (%s) "+
-				"of the NI %v", metadataSrvIP, bridgeIP.IP, ni.config.DisplayName),
+				"of the NI %v", metadataSrvIP, bridgeIPv4, ni.config.DisplayName),
 		})
 	}
 	if r.niBridgeIsCreatedByNIM(ni.config, ni.bridge) {
@@ -1091,7 +1097,7 @@ func (r *LinuxNIReconciler) getIntendedMetadataSrvCfg(niID uuid.UUID) (items []d
 	}
 	items = append(items, generic.HTTPServer{
 		ForNI:    niID,
-		ListenIP: bridgeIP.IP,
+		ListenIP: bridgeIPv4,
 		ListenIf: generic.NetworkIf{
 			IfName:  ni.brIfName,
 			ItemRef: dg.Reference(linux.Bridge{IfName: ni.brIfName}),
@@ -1108,11 +1114,16 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 		// Not running DHCP and DNS servers inside EVE for Switch network instances.
 		return
 	}
-	_, bridgeIP, _, _, err := r.getBridgeAddrs(niID)
+	_, bridgeIPs, _, _, err := r.getBridgeAddrs(niID)
 	if err != nil {
 		r.log.Errorf("%s: getIntendedDnsmasqCfg: getBridgeAddrs(%s) failed: %v",
 			LogAndErrPrefix, niID, err)
 		return nil
+	}
+	var bridgeIP net.IP
+	if len(bridgeIPs) != 0 {
+		// For local NI there will be exactly one bridge IP.
+		bridgeIP = bridgeIPs[0].IP
 	}
 
 	// DHCP server configuration
@@ -1121,7 +1132,8 @@ func (r *LinuxNIReconciler) getIntendedDnsmasqCfg(niID uuid.UUID) (items []dg.It
 	//  b) all ports are app-shared and without default route
 	var gatewayIP net.IP
 	if bridgeIP != nil {
-		gatewayIP = bridgeIP.IP
+		// For local NI there will be exactly one bridge IP.
+		gatewayIP = bridgeIPs[0].IP
 	}
 	var withDefaultRoute bool
 	for _, port := range ni.bridge.Ports {

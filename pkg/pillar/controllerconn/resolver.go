@@ -84,7 +84,12 @@ func (r *ResolverWithLocalIP) resolverDial(
 		// There is no point in looking for DNS server on the loopback interface on EVE.
 		return nil, &types.DNSNotAvailError{IfName: r.ifName}
 	}
-	// TODO: check if the same IP version as localIP - maybe not needed, not sure if Go dialer checks this
+	// Ensure the DNS server IP and the local source IP use the same IP version.
+	if r.localIP != nil && !netutils.SameIPVersions(r.localIP, dnsIP) {
+		return nil, fmt.Errorf(
+			"DNS server IP version (%v) does not match local IP version (%v)",
+			dnsIP, r.localIP)
+	}
 	// Note that port number is not looked at by skipNs.
 	if r.skipNs != nil {
 		if skip, reason := r.skipNs(dnsIP, 0); skip {
@@ -226,8 +231,17 @@ func ResolveWithSrcIPWithTimeout(domain string, dnsServerIP net.IP, srcIP net.IP
 	if !strings.HasSuffix(domain, ".") {
 		domain = domain + "."
 	}
-	// TODO: Resolve also IPv6
-	msg.SetQuestion(domain, dns.TypeA)
+	// Although we could issue separate queries for A and AAAA records,
+	// we currently limit the query type to match the IP version of the
+	// source IP and the DNS server's address.
+	// After all, there's no need to resolve an IPv6 address if the system
+	// lacks a local IPv6 address — and the same applies to IPv4.
+	ipv6 := srcIP.To4() == nil
+	if ipv6 {
+		msg.SetQuestion(domain, dns.TypeAAAA)
+	} else {
+		msg.SetQuestion(domain, dns.TypeA)
+	}
 	dnsClient.Timeout = time.Duration(dnsTimeout)
 	reply, _, err := dnsClient.Exchange(&msg, net.JoinHostPort(dnsServerIP.String(), "53"))
 	if err != nil {
@@ -238,6 +252,12 @@ func ResolveWithSrcIPWithTimeout(domain string, dnsServerIP net.IP, srcIP net.IP
 			response = append(response, DNSResponse{
 				IP:  aRecord.A,
 				TTL: aRecord.Header().Ttl,
+			})
+		}
+		if aaaaRecord, ok := answer.(*dns.AAAA); ok {
+			response = append(response, DNSResponse{
+				IP:  aaaaRecord.AAAA,
+				TTL: aaaaRecord.Header().Ttl,
 			})
 		}
 	}
@@ -316,6 +336,7 @@ func ResolveWithPortsLambda(domain string,
 	var errs []error
 	var errsMutex sync.Mutex
 	var wg sync.WaitGroup
+	var waitForIPv4, waitForIPv6 bool
 
 	for _, port := range dns.Ports {
 		if !port.IsL3Port || port.Cost > 0 {
@@ -329,16 +350,22 @@ func ResolveWithPortsLambda(domain string,
 			}
 		}
 
-		for _, dnsIP := range port.DNSServers {
-			for _, srcIP := range srcIPs {
-				// TODO: skip if IP addresses do not match in version
+		for _, srcIP := range srcIPs {
+			if srcIP.To4() != nil {
+				waitForIPv4 = true
+			} else {
+				waitForIPv6 = true
+			}
+			for _, dnsIP := range port.DNSServers {
+				if !netutils.SameIPVersions(srcIP, dnsIP) {
+					continue
+				}
 				wg.Add(1)
 				dnsIPCopy := make(net.IP, len(dnsIP))
 				copy(dnsIPCopy, dnsIP)
 				srcIPCopy := make(net.IP, len(srcIP))
 				copy(srcIPCopy, srcIP)
 				countDNSRequests++
-				// TODO: run for A and AAAA in parallel
 				go func(dnsIP, srcIP net.IP) {
 					defer func() {
 						wg.Done()
@@ -384,25 +411,50 @@ func ResolveWithPortsLambda(domain string,
 		close(quit)
 		<-wgChan
 	}()
-	select {
-	case <-wgChan:
-		var responses []DNSResponse
-		if countDNSRequests == 0 {
-			// fallback in case no resolver is configured
-			ips, err := net.LookupIP(domain)
-			if err != nil {
-				return nil, append(errs, fmt.Errorf("fallback resolver failed: %+v", err))
+
+	var responses []DNSResponse
+	for {
+		select {
+		case <-wgChan:
+			if countDNSRequests == 0 {
+				// fallback in case no resolver is configured
+				ips, err := net.LookupIP(domain)
+				if err != nil {
+					return nil, append(errs, fmt.Errorf("fallback resolver failed: %+v", err))
+				}
+				for _, ip := range ips {
+					responses = append(responses, DNSResponse{
+						IP:  ip,
+						TTL: uint32(maxTTLSec),
+					})
+				}
 			}
-			for _, ip := range ips {
-				responses = append(responses, DNSResponse{
-					IP:  ip,
-					TTL: uint32(maxTTLSec),
-				})
+			if len(responses) > 0 {
+				return responses, nil
+			}
+			return nil, errs
+		case dnsResponses := <-resolvedIPsChan:
+			for _, dnsResp := range dnsResponses {
+				if dnsResp.IP.To4() != nil {
+					waitForIPv4 = false
+				} else {
+					waitForIPv6 = false
+				}
+				// Avoid duplicates.
+				var duplicate bool
+				for i := range responses {
+					if responses[i].IP.Equal(dnsResp.IP) {
+						duplicate = true
+					}
+				}
+				if !duplicate {
+					responses = append(responses, dnsResp)
+				}
+			}
+			if !waitForIPv4 && !waitForIPv6 {
+				return responses, nil
 			}
 		}
-		return responses, errs
-	case ip := <-resolvedIPsChan:
-		return ip, nil
 	}
 
 }

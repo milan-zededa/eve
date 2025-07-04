@@ -560,10 +560,9 @@ func (m *DpcManager) checkIfMgmtPortsHaveIPandDNS() bool {
 		return false
 	}
 	for _, port := range mgmtPorts {
-		// TODO: get nunmber for IPv6 addresses also if IPv6 is enabled
-		numAddrs, err := types.CountLocalIPv4AddrAnyNoLinkLocalIf(m.deviceNetStatus, port)
+		numAddrs, err := types.CountLocalAddrAnyNoLinkLocalIf(m.deviceNetStatus, port)
 		if err != nil {
-			m.Log.Errorf("CountLocalIPv4AddrAnyNoLinkLocalIf failed for %s: %v",
+			m.Log.Errorf("CountLocalAddrAnyNoLinkLocalIf failed for %s: %v",
 				port, err)
 			continue
 		}

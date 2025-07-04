@@ -22,8 +22,6 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-// TODO: Make sure the PortProber does not use and count IPv6 addresses
-
 // PortProber is used by zedrouter to test the connectivity status of device ports
 // used by network instances with multipath routes.
 // For every multipath route, PortProber picks one of the ports to use at the given
@@ -32,6 +30,8 @@ import (
 // Whenever the selected port changes, zedrouter is notified by the prober.
 // It is up to the zedrouter to perform update of the route from one port to another
 // inside the network stack.
+// Note: PortProber is used only for Local network instances. Since IPv6 addressing is
+// not supported for Local NIs, PortProber only needs to handle IPv4 addresses.
 type PortProber struct {
 	sync.Mutex
 	log             *base.LogObject
@@ -509,7 +509,7 @@ func (p *PortProber) addPort(dnsPort types.NetworkPortStatus) {
 		isWwan:       dnsPort.WirelessCfg.WType == types.WirelessTypeCellular,
 		localAddrs:   getLocalIPs(dnsPort),
 		nextHops:     getNextHops(dnsPort),
-		dnsServers:   dnsPort.DNSServers,
+		dnsServers:   getDNSServers(dnsPort),
 		// Mark as new so that the following probing will run fully
 		// and decide the UP/DOWN states.
 		newlyAdded: true,
@@ -941,8 +941,11 @@ func (p *PortProber) getWwanRSSI(portLabel string) (rssi int32) {
 
 func getLocalIPs(port types.NetworkPortStatus) (ips []net.IP) {
 	for _, addr := range port.AddrInfoList {
-		if !addr.Addr.IsUnspecified() {
-			ips = append(ips, addr.Addr)
+		if addr.Addr.IsUnspecified() {
+			continue
+		}
+		if ip := addr.Addr.To4(); ip != nil {
+			ips = append(ips, ip)
 		}
 	}
 	return ips
@@ -950,8 +953,20 @@ func getLocalIPs(port types.NetworkPortStatus) (ips []net.IP) {
 
 func getNextHops(port types.NetworkPortStatus) (ips []net.IP) {
 	for _, dr := range port.DefaultRouters {
-		if !dr.IsUnspecified() {
-			ips = append(ips, dr)
+		if dr.IsUnspecified() {
+			continue
+		}
+		if ip := dr.To4(); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
+func getDNSServers(port types.NetworkPortStatus) (ips []net.IP) {
+	for _, srv := range port.DNSServers {
+		if ip := srv.To4(); ip != nil {
+			ips = append(ips, ip)
 		}
 	}
 	return ips

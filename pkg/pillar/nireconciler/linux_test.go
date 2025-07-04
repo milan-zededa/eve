@@ -142,10 +142,6 @@ func ipSubnet(ipAddr string) *net.IPNet {
 	return subnet
 }
 
-func deref[T any](p *T) T {
-	return *p
-}
-
 func makeUUID(id string) types.UUIDandVersion {
 	uuid, _ := uuid.FromString(id)
 	return types.UUIDandVersion{UUID: uuid}
@@ -287,11 +283,9 @@ var (
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddressWithPrefix("192.168.10.5/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("192.168.10.0/24"),
-				NtpServers: []net.IP{ipAddress("132.163.96.5")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("192.168.10.0/24"),
+			IPv4NtpServers: []net.IP{ipAddress("132.163.96.5")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -343,10 +337,8 @@ var (
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddressWithPrefix("172.20.0.40/16")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet: ipSubnet("172.20.0.0/16"),
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet: ipSubnet("172.20.0.0/16"),
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -448,10 +440,8 @@ var (
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddressWithPrefix("172.30.30.40/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet: ipSubnet("172.30.30.0/24"),
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet: ipSubnet("172.30.30.0/24"),
 		},
 		DNS: []netmonitor.DNSInfo{
 			{
@@ -487,7 +477,7 @@ var (
 		PortLabel:      "ethernet0",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV4,
-		Subnet:         deref(ipAddressWithPrefix("10.10.10.0/24")),
+		Subnet:         ipAddressWithPrefix("10.10.10.0/24"),
 	}
 	ni1Bridge = nirec.NIBridge{
 		NI:         ni1UUID.UUID,
@@ -551,7 +541,7 @@ var (
 		PortLabel:      "ethernet2",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV6,
-		Subnet:         deref(ipAddressWithPrefix("2001::1111:0000/112")),
+		Subnet:         ipAddressWithPrefix("2001::1111:0000/112"),
 		DnsServers:     []net.IP{ipAddress("2001:4860:4860::8888")},
 		DnsNameToIPList: []types.DNSNameToIP{
 			{
@@ -622,7 +612,7 @@ var (
 		PortLabel:      "shopfloor",
 		Type:           types.NetworkInstanceTypeLocal,
 		IpType:         types.AddressTypeIPV4,
-		Subnet:         deref(ipAddressWithPrefix("10.10.20.0/24")),
+		Subnet:         ipAddressWithPrefix("10.10.20.0/24"),
 	}
 	ni5Bridge = nirec.NIBridge{
 		NI:         ni5UUID.UUID,
@@ -3137,11 +3127,9 @@ func TestSwitchNIWithMultiplePorts(test *testing.T) {
 			LowerUp:       true,
 		},
 		IPAddrs: []*net.IPNet{ipAddressWithPrefix("192.168.10.5/24")},
-		DHCP: []netmonitor.DHCPInfo{
-			{
-				Subnet:     ipSubnet("192.168.10.0/24"),
-				NtpServers: []net.IP{ipAddress("132.163.96.5")},
-			},
+		DHCP: netmonitor.DHCPInfo{
+			IPv4Subnet:     ipSubnet("192.168.10.0/24"),
+			IPv4NtpServers: []net.IP{ipAddress("132.163.96.5")},
 		},
 		DNS: []netmonitor.DNSInfo{
 			{

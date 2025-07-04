@@ -960,9 +960,8 @@ func printOutput(ctx *diagContext, caller string) {
 		ctx.ph.Print("\n")
 		// If static print static config
 		if port.Dhcp == types.DhcpTypeStatic {
-			// TODO: we need to get the Subnet from the config (or add ConfiguredSubnet to Status)
 			ctx.ph.Print("INFO: %s: Static IP subnet: %s\n",
-				ifname, port.Subnet.String())
+				ifname, port.ConfiguredSubnet.String())
 			for _, r := range port.DefaultRouters {
 				ctx.ph.Print("INFO: %s: Static IP router: %s\n",
 					ifname, r.String())

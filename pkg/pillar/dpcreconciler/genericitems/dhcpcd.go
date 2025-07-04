@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -126,18 +125,9 @@ func (c *DhcpcdConfigurator) Create(ctx context.Context, item depgraph.Item) err
 			// Nothing to validate.
 
 		case types.DhcpTypeStatic:
-			if config.AddrSubnet == "" {
+			if config.AddrSubnet == nil {
 				err := fmt.Errorf("DHCP config is missing AddrSubnet for interface %s",
 					ifName)
-				c.Log.Error(err)
-				done(err)
-				return
-			}
-			// Check that we can parse it
-			_, _, err := net.ParseCIDR(config.AddrSubnet)
-			if err != nil {
-				err = fmt.Errorf(
-					"failed to parse AddrSubnet from DHCP config for interface %s", ifName)
 				c.Log.Error(err)
 				done(err)
 				return
@@ -281,12 +271,12 @@ func (c *DhcpcdConfigurator) DhcpcdArgs(config types.DhcpConfig) (op string, arg
 	switch config.Dhcp {
 	case types.DhcpTypeClient:
 		op = "--request"
-		args = []string{"-f", "/dhcpcd.conf", "--noipv4ll", "-b", "-t", "0"}
+		args = []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "-b", "-t", "0"}
 		switch config.Type {
 		case types.NetworkTypeIpv4Only:
-			args = []string{"-f", "/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0"}
+			args = []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0"}
 		case types.NetworkTypeIpv6Only:
-			args = []string{"-f", "/dhcpcd.conf", "--ipv6only", "-b", "-t", "0"}
+			args = []string{"-f", "/etc/dhcpcd.conf", "--ipv6only", "-b", "-t", "0"}
 		case types.NetworkTypeNOOP:
 		case types.NetworkTypeIPv4:
 		case types.NetworkTypeIPV6:
@@ -299,8 +289,8 @@ func (c *DhcpcdConfigurator) DhcpcdArgs(config types.DhcpConfig) (op string, arg
 
 	case types.DhcpTypeStatic:
 		op = "--static"
-		args = []string{fmt.Sprintf("ip_address=%s", config.AddrSubnet)}
-		extras := []string{"-f", "/dhcpcd.conf", "-b", "-t", "0"}
+		args = []string{fmt.Sprintf("ip_address=%s", config.AddrSubnet.String())}
+		extras := []string{"-f", "/etc/dhcpcd.conf", "-b", "-t", "0"}
 		if config.Gateway == nil || config.Gateway.IsUnspecified() {
 			extras = append(extras, "--nogateway")
 		} else if config.Gateway.String() != "" {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,7 +55,7 @@ type LinuxNetworkMonitor struct {
 	ifIndexToAttrs map[int]IfAttrs
 	ifIndexToAddrs map[int]ifAddrs
 	ifIndexToDNS   map[int][]DNSInfo
-	ifIndexToDHCP  map[int][]DHCPInfo
+	ifIndexToDHCP  map[int]DHCPInfo
 	ifIndexToGWs   map[int][]net.IP
 }
 
@@ -86,7 +87,7 @@ func (m *LinuxNetworkMonitor) initCache() {
 	m.ifIndexToAttrs = make(map[int]IfAttrs)
 	m.ifIndexToAddrs = make(map[int]ifAddrs)
 	m.ifIndexToDNS = make(map[int][]DNSInfo)
-	m.ifIndexToDHCP = make(map[int][]DHCPInfo)
+	m.ifIndexToDHCP = make(map[int]DHCPInfo)
 	m.ifIndexToGWs = make(map[int][]net.IP)
 }
 
@@ -269,7 +270,7 @@ func (m *LinuxNetworkMonitor) parseDNSInfo(resolvConf string) (info DNSInfo) {
 
 // GetInterfaceDHCPInfo returns DHCP info for the interface obtained
 // from dhcpcd.
-func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info []DHCPInfo, err error) {
+func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info DHCPInfo, err error) {
 	m.cacheLock.Lock()
 	defer m.cacheLock.Unlock()
 	if !m.initialized {
@@ -283,117 +284,179 @@ func (m *LinuxNetworkMonitor) GetInterfaceDHCPInfo(ifIndex int) (info []DHCPInfo
 		return info, err
 	}
 	ifName := attrs.IfName
-	v4Info, err1 := m.getDHCPInfo(ifName, false)
-	if err1 == nil && !v4Info.IsEmpty() {
-		info = append(info, v4Info)
+	subnet, ntpServers, err := m.getDHCPv4Info(ifName)
+	if err != nil {
+		return info, err
 	}
-	v6Info, err2 := m.getDHCPInfo(ifName, true)
-	if err2 == nil && !v6Info.IsEmpty() {
-		info = append(info, v6Info)
+	info.IPv4Subnet = subnet
+	info.IPv4NtpServers = ntpServers
+	subnets, ntpServers, err := m.getDHCPv6Info(ifName)
+	if err != nil {
+		return info, err
 	}
-	if err1 == nil || err2 == nil {
-		m.ifIndexToDHCP[ifIndex] = info
-		return info, nil
-	}
-	if err1 != nil {
-		return info, err1
-	}
-	return info, err2
+	info.IPv6Subnets = subnets
+	info.IPv6NtpServers = ntpServers
+	return info, nil
 }
 
-func (m *LinuxNetworkMonitor) getDHCPInfo(
-	ifName string, forIPv6 bool) (info DHCPInfo, err error) {
-	versionArg := "-4"
-	if forIPv6 {
-		versionArg = "-6"
-		info.ForIPv6 = true
-	}
-	m.Log.Functionf("Calling dhcpcd -U %s %s", versionArg, ifName)
-	cmd := base.Exec(m.Log, "dhcpcd", "-U", versionArg, ifName)
+func (m *LinuxNetworkMonitor) getDHCPv4Info(
+	ifName string) (subnet *net.IPNet, ntpServers []net.IP, err error) {
+	m.Log.Functionf("Calling dhcpcd -U -4 %s", ifName)
+	cmd := base.Exec(m.Log, "dhcpcd", "-U", "-4", ifName)
 	outputBytes, err := cmd.CombinedOutput()
 	output := string(outputBytes)
 	if err != nil {
-		if strings.Contains(output, "dhcpcd is not running") ||
-			strings.Contains(output, "dhcp_dump: No such file or directory") {
-			// DHCP is not configured for this interface and IP version.
-			// Return empty DHCPInfo.
-			return info, nil
+		if m.isDhcpcdNotRunningErr(output) {
+			return nil, nil, nil
 		}
-		err = fmt.Errorf("dhcpcd -U %s failed: %s: %s", versionArg, output, err)
+		err = fmt.Errorf("dhcpcd -U -4 %s failed: %s: %s", ifName, output, err)
 		return
 	}
-	m.Log.Tracef("dhcpcd -U %s got %v", versionArg, output)
-	lines := strings.Split(output, "\n")
+	return ParseDHCPv4Lease(output)
+}
+
+func (m *LinuxNetworkMonitor) getDHCPv6Info(
+	ifName string) (subnets []*net.IPNet, ntpServers []net.IP, err error) {
+	m.Log.Functionf("Calling dhcpcd -U -6 %s", ifName)
+	cmd := base.Exec(m.Log, "dhcpcd", "-U", "-6", ifName)
+	outputBytes, err := cmd.CombinedOutput()
+	output := string(outputBytes)
+	if err != nil {
+		if m.isDhcpcdNotRunningErr(output) {
+			return nil, nil, nil
+		}
+		if strings.Contains(output, "dhcpcd_readdump1: Invalid argument") {
+			// Ignore this error for now.
+			err = nil
+		} else {
+			err = fmt.Errorf("dhcpcd -U -6 %s failed: %s: %s", ifName, output, err)
+			return
+		}
+	}
+	return ParseDHCPv6Lease(output)
+}
+
+// Returns if dhcpcd call failed because dhcpcd is not running for the given interface.
+func (m *LinuxNetworkMonitor) isDhcpcdNotRunningErr(dhcpcdOutput string) bool {
+	if strings.Contains(dhcpcdOutput, "dhcpcd is not running") {
+		return true
+	}
+	if strings.Contains(dhcpcdOutput, "dhcp_dump: No such file or directory") {
+		return true
+	}
+	return false
+}
+
+// ParseDHCPv4Lease parses the DHCPv4 lease information for the given network interface.
+// It extracts the assigned subnet (network address and subnet mask) and any configured
+// NTP servers.
+func ParseDHCPv4Lease(content string) (subnet *net.IPNet, ntpServers []net.IP, err error) {
+	lines := strings.Split(content, "\n")
+	var netAddr net.IP
 	var masklen int
-	var subnet net.IP
-
-	/* TODO: IPv6 looks like this:
-
-	$ dhcpcd -U -6 eth0
-	no such user dhcpcd
-	reason=ROUTERADVERT
-	interface=eth0
-	protocol=ra
-	nd1_from=fe80::c225:2fff:fea2:dc73
-	nd1_acquired=1190
-	nd1_now=1199
-	nd1_hoplimit=64
-	nd1_flags=O
-	nd1_lifetime=1800
-	nd1_prefix_information1_length=64
-	nd1_prefix_information1_flags=LA
-	nd1_prefix_information1_vltime=2592000
-	nd1_prefix_information1_pltime=604800
-	nd1_prefix_information1_prefix=2a0c:c500:a81e:5400::
-	nd1_mtu=1500
-	nd1_source_address=c0252fa2dc73
-	nd1_rdnss1_lifetime=900
-	nd1_rdnss1_servers=2a0c:c500:a8ca::de 2a0c:c500:a8ca::d5
-	nd1_addr1=2a0c:c500:a81e:5400:7d61:3555:b4aa:6199/64
-
-	*/
 
 	for _, line := range lines {
-		items := strings.Split(line, "=")
+		items := strings.SplitN(line, "=", 2)
 		if len(items) != 2 {
 			continue
 		}
-		m.Log.Tracef("Got <%s> <%s>", items[0], items[1])
-		switch items[0] {
+		k, v := strings.TrimSpace(items[0]), trimQuotes(strings.TrimSpace(items[1]))
+		switch k {
 		case "network_number":
-			network := trimQuotes(items[1])
-			m.Log.Functionf("getDHCPInfo(%s,%s) network_number %s",
-				ifName, versionArg, network)
-			ip := net.ParseIP(network)
-			if ip == nil {
-				m.Log.Errorf("Failed to parse %s", network)
-				continue
-			}
-			subnet = ip
+			netAddr = net.ParseIP(v)
 		case "subnet_cidr":
-			str := trimQuotes(items[1])
-			m.Log.Functionf("getDHCPInfo(%s,%s) subnet_cidr %s",
-				ifName, versionArg, str)
-			masklen, err = strconv.Atoi(str)
+			m, err := strconv.Atoi(v)
 			if err != nil {
-				m.Log.Errorf("Failed to parse masklen %s", str)
 				continue
 			}
+			masklen = m
 		case "ntp_servers":
-			str := trimQuotes(items[1])
-			m.Log.Functionf("getDHCPInfo(%s,%s) ntp_servers %s",
-				ifName, versionArg, str)
-			servers := strings.Split(str, " ")
-			for _, server := range servers {
-				ip := net.ParseIP(server)
-				if ip != nil {
-					info.NtpServers = append(info.NtpServers, ip)
+			for _, s := range strings.Fields(v) {
+				if ip := net.ParseIP(s); ip != nil {
+					ntpServers = append(ntpServers, ip)
 				}
 			}
 		}
 	}
-	info.Subnet = &net.IPNet{IP: subnet, Mask: net.CIDRMask(masklen, 32)}
-	return info, nil
+
+	if netAddr != nil && masklen > 0 {
+		subnet = &net.IPNet{IP: netAddr, Mask: net.CIDRMask(masklen, 32)}
+	}
+	return subnet, ntpServers, nil
+}
+
+var (
+	// Regex to match:
+	//   nd<routerIndex>_prefix_information<infoIndex>_prefix
+	//   nd<routerIndex>_prefix_information<infoIndex>_length
+	ipv6PrefixRe = regexp.MustCompile(`^nd(\d+)_prefix_information(\d+)_prefix$`)
+	ipv6LengthRe = regexp.MustCompile(`^nd(\d+)_prefix_information(\d+)_length$`)
+	ipv6NTPRe    = regexp.MustCompile(`^dhcp6_ntp_server_addr$`)
+)
+
+// ParseDHCPv6Lease parses the DHCPv6/RA lease information for the given network interface.
+// It extracts IPv6 subnets (from RA prefix information) and any configured NTP servers
+// (if present).
+func ParseDHCPv6Lease(output string) ([]*net.IPNet, []net.IP, error) {
+	lines := strings.Split(output, "\n")
+
+	var subnets []*net.IPNet
+	var ntpServers []net.IP
+
+	// Map of "routerIndex-infoIndex" -> data
+	type key struct {
+		routerIdx string
+		infoIdx   string
+	}
+	prefixes := make(map[key]net.IP)
+	lengths := make(map[key]int)
+
+	for _, line := range lines {
+		items := strings.SplitN(line, "=", 2)
+		if len(items) != 2 {
+			continue
+		}
+		k, v := strings.TrimSpace(items[0]), trimQuotes(strings.TrimSpace(items[1]))
+
+		// Match prefix
+		if match := ipv6PrefixRe.FindStringSubmatch(k); len(match) == 3 {
+			ip := net.ParseIP(v)
+			if ip != nil {
+				prefixes[key{match[1], match[2]}] = ip
+			}
+			continue
+		}
+
+		// Match length
+		if match := ipv6LengthRe.FindStringSubmatch(k); len(match) == 3 {
+			if maskLen, err := strconv.Atoi(v); err == nil {
+				lengths[key{match[1], match[2]}] = maskLen
+			}
+			continue
+		}
+
+		// Match NTPv6 servers
+		if ipv6NTPRe.MatchString(k) {
+			for _, s := range strings.Fields(v) {
+				if ip := net.ParseIP(s); ip != nil {
+					ntpServers = append(ntpServers, ip)
+				}
+			}
+		}
+	}
+
+	// Match prefix/length by key
+	for idx, ip := range prefixes {
+		if length, ok := lengths[idx]; ok {
+			subnet := &net.IPNet{
+				IP:   ip,
+				Mask: net.CIDRMask(length, 128),
+			}
+			subnets = append(subnets, subnet)
+		}
+	}
+
+	return subnets, ntpServers, nil
 }
 
 // GetInterfaceDefaultGWs return a list of IP addresses of default gateways

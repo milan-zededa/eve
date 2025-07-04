@@ -59,11 +59,7 @@ func (m *DpcManager) updateDNS() {
 		// Set fields from the config...
 		m.deviceNetStatus.Ports[ix].Dhcp = port.Dhcp
 		m.deviceNetStatus.Ports[ix].Type = port.Type
-		// TODO get rid of this Subnet
-		_, subnet, _ := net.ParseCIDR(port.AddrSubnet)
-		if subnet != nil {
-			m.deviceNetStatus.Ports[ix].Subnet = *subnet
-		}
+		m.deviceNetStatus.Ports[ix].ConfiguredSubnet = port.AddrSubnet
 		// Start with any statically assigned values; update below
 		m.deviceNetStatus.Ports[ix].DomainName = port.DomainName
 		m.deviceNetStatus.Ports[ix].DNSServers = port.DNSServers
@@ -218,7 +214,6 @@ func (m *DpcManager) updateGeo() {
 			if ai.Addr.IsLinkLocalUnicast() {
 				continue
 			}
-			// TODO: count for the same IP version?
 			numDNSServers := types.CountDNSServers(m.deviceNetStatus, port.IfName)
 			if numDNSServers == 0 {
 				continue
@@ -249,7 +244,6 @@ func (m *DpcManager) updateGeo() {
 	}
 }
 
-// TODO: turn this into getNTPInfo
 func (m *DpcManager) getDHCPInfo(port *types.NetworkPortStatus) error {
 	if port.Dhcp != types.DhcpTypeClient {
 		return nil
@@ -265,23 +259,15 @@ func (m *DpcManager) getDHCPInfo(port *types.NetworkPortStatus) error {
 		return fmt.Errorf("getDHCPInfo: failed to get index for interface %s: %v",
 			port.IfName, err)
 	}
-	dhcpInfoList, err := m.NetworkMonitor.GetInterfaceDHCPInfo(ifIndex)
+	dhcpInfo, err := m.NetworkMonitor.GetInterfaceDHCPInfo(ifIndex)
 	if err != nil {
 		return fmt.Errorf("getDHCPInfo: failed to get DHCP info for interface %s: %v",
 			port.IfName, err)
 	}
-	preferIPv6 := port.Type == types.NetworkTypeIPV6 ||
-		port.Type == types.NetworkTypeIpv6Only
-	for _, dhcpInfo := range dhcpInfoList {
-		if dhcpInfo.Subnet != nil {
-			// We have only one Subnet field to report.
-			// With dual-stack we pick the subnet for the preferred IP version.
-			if len(port.Subnet.IP) == 0 || dhcpInfo.ForIPv6 == preferIPv6 {
-				port.Subnet = *dhcpInfo.Subnet
-			}
-		}
-		port.DhcpNtpServers = append(port.DhcpNtpServers, dhcpInfo.NtpServers...)
-	}
+	port.IPv4Subnet = dhcpInfo.IPv4Subnet
+	port.IPv6Subnets = dhcpInfo.IPv6Subnets
+	port.DhcpNtpServers = append(port.DhcpNtpServers, dhcpInfo.IPv4NtpServers...)
+	port.DhcpNtpServers = append(port.DhcpNtpServers, dhcpInfo.IPv6NtpServers...)
 	return nil
 }
 
