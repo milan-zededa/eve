@@ -367,14 +367,14 @@ func (c *DhcpcdConfigurator) dhcpcdCmd(op string, extras []string,
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 
-		c.Log.Functionf("Background command %s %v", dhcpcdBinary, args)
+		c.Log.Noticef("Background command %s %v", dhcpcdBinary, args)
 		go func() {
 			if err := cmd.Run(); err != nil {
 				c.Log.Errorf("%s %v: failed: %v", dhcpcdBinary, args, err)
 			}
 		}()
 	} else {
-		c.Log.Functionf("Calling command %s %v\n", dhcpcdBinary, args)
+		c.Log.Noticef("Calling command %s %v\n", dhcpcdBinary, args)
 		out, err := base.Exec(c.Log, dhcpcdBinary, args...).CombinedOutput()
 		if err != nil {
 			err = fmt.Errorf("dhcpcd command %s failed: %w; output: %s",
