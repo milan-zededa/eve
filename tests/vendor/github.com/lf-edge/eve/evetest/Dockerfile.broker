@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.6.0
+
+# Input arguments
+ARG ALPINE_VERSION=3.21
+ARG GOLANG_VERSION=1.24
+
+###########################
+# Build stage
+###########################
+FROM golang:${GOLANG_VERSION}-alpine${ALPINE_VERSION} AS builder
+
+# Set build-time "version" variable.
+ARG EVETEST_VERSION=dev
+ENV EVETEST_VERSION=${EVETEST_VERSION}
+
+# Set up working directory and GOBIN
+WORKDIR /broker
+ENV GOBIN=/go/bin
+ENV GOFLAGS="-mod=vendor"
+
+# Install build dependencies
+RUN apk add --no-cache \
+    make \
+    gcc \
+    musl-dev \
+    pkgconfig \
+    libvirt-dev \
+    git
+
+# Copy source code, vendor directory, Makefile, etc.
+COPY . .
+
+# Run Makefile target to install evetest-broker
+RUN make install-broker
+
+###########################
+# Runtime image
+###########################
+FROM alpine:${ALPINE_VERSION}
+
+# Install runtime dependencies for libvirt
+RUN apk add --no-cache libvirt
+
+# Copy the built broker binary from builder
+COPY --from=builder /go/bin/evetest-broker /usr/local/bin/evetest-broker
+
+# Expose the broker gRPC port
+EXPOSE 50221
+
+# Default command
+ENTRYPOINT ["/usr/local/bin/evetest-broker"]

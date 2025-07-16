@@ -1,0 +1,91 @@
+# syntax=docker/dockerfile:1.6
+
+# Input arguments
+ARG EVETEST_VERSION=dev
+ARG ALPINE_VERSION=3.21
+ARG GOLANG_VERSION=1.24
+ARG EVETEST_ADAM_REPO=lfedge/adam
+ARG EVETEST_ADAM_VERSION=0.0.57
+
+###########################
+# Pull adam binary stage
+###########################
+FROM ${EVETEST_ADAM_REPO}:${EVETEST_ADAM_VERSION} AS adam
+
+###########################
+# Pull broker binary stage
+###########################
+FROM lfedge/evetest-broker:${EVETEST_VERSION} AS broker
+
+###########################
+# evetest CLI build stage
+###########################
+FROM golang:${GOLANG_VERSION}-alpine${ALPINE_VERSION} AS builder
+
+ARG EVETEST_VERSION=dev
+
+WORKDIR /evetest
+ENV GOBIN=/go/bin
+ENV GOFLAGS="-mod=vendor"
+
+# Install make
+RUN apk add --no-cache make
+
+# Copy source code, vendor directory, Makefile, etc.
+COPY . .
+
+# Install CLI using the Makefile target
+RUN make install-cli EVETEST_VERSION=${EVETEST_VERSION}
+
+###########################
+# Final runtime image
+###########################
+FROM golang:${GOLANG_VERSION}-alpine${ALPINE_VERSION}
+
+# Set evetest version
+ARG EVETEST_VERSION=dev
+ENV EVETEST_VERSION=${EVETEST_VERSION}
+
+# Install runtime dependencies of the evetest broker
+RUN apk add --no-cache iptables libvirt dnsmasq radvd swtpm
+
+# Install QEMU
+RUN apk add --no-cache \
+    qemu \
+    qemu-system-x86_64 \
+    qemu-system-aarch64
+
+# Install some useful tools for troubleshooting
+RUN apk add --no-cache bash inetutils-telnet tcpdump \
+                       strace busybox-extras socat openssh-client
+
+# Pull adam binary
+COPY --from=adam /bin/adam /usr/local/bin/adam
+
+# Copy broker binary
+COPY --from=broker /usr/local/bin/evetest-broker /usr/local/bin/evetest-broker
+
+# Copy evetest CLI binary
+COPY --from=builder /go/bin/evetest /usr/local/bin/evetest
+
+# Create work directories
+RUN mkdir -p /tests /artifacts
+WORKDIR /tests
+
+# Copy the entrypoint script
+COPY --from=builder evetest/entrypoint.sh /usr/local/bin/evetest-entrypoint
+RUN chmod +x /usr/local/bin/evetest-entrypoint
+
+# Copy the private key used for SSH access to SDN VM
+COPY ./sdn/vm/cert/ssh/sdn_rsa /root/.ssh/sdn_rsa
+RUN chmod 600 /root/.ssh/sdn_rsa
+
+# Copy the private key used for SSH access to EVE VM
+COPY ./cert/eve_rsa /root/.ssh/eve_rsa
+RUN chmod 600 /root/.ssh/eve_rsa
+
+# Expose the evetest gRPC port
+EXPOSE 50021
+
+# Set default entrypoint
+ENTRYPOINT ["/usr/local/bin/evetest-entrypoint"]
