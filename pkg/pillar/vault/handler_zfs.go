@@ -353,7 +353,7 @@ func MountVaultZvol(log *base.LogObject, datasetPath string) error {
 		}
 	}
 
-	err = unix.Mount(devPath, "/"+types.SealedDataset, vaultFsType, unix.MS_DIRSYNC|unix.MS_NOATIME, "")
+	err = unix.Mount(devPath, "/"+types.SealedDataset, vaultFsType, unix.MS_NOATIME, "")
 	if err != nil {
 		return fmt.Errorf("mount of %s to %s err:%v", devPath, "/"+types.SealedDataset, err)
 	}
