@@ -1360,3 +1360,16 @@ help:
 	@echo
 	@echo "make run is currently an alias for make run-live"
 	@echo
+
+
+###############################
+# Evetest - work in progress
+###############################
+
+.PHONY: evetest
+
+evetest:
+	$(MAKE) -C evetest evetest
+
+evetest-%:
+	@$(MAKE) -C evetest $*
