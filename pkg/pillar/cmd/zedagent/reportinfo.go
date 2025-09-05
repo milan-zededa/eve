@@ -58,8 +58,7 @@ func deviceInfoTask(ctxPtr *zedagentContext, triggerDeviceInfo <-chan destinatio
 		select {
 		case dest := <-triggerDeviceInfo:
 			start := time.Now()
-			log.Function("deviceInfoTask got message")
-
+			log.Noticef("LocalCmdAgent: deviceInfoTask got message")
 			PublishDeviceInfoToZedCloud(ctxPtr, dest)
 			ctxPtr.iteration++
 			log.Function("deviceInfoTask done with message")
@@ -1204,28 +1203,37 @@ func getBaseosUpdateCounter(ctx *zedagentContext) uint32 {
 }
 
 func getDeviceState(ctx *zedagentContext) types.DeviceState {
+	log.Noticef("LocalCmdAgent: getDeviceState")
 	if ctx.maintenanceMode {
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_MAINTENANCE_MODE")
 		return types.DEVICE_STATE_MAINTENANCE_MODE
 	}
 	if isUpdating(ctx) || isKubeClusterUpdating(ctx) {
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_BASEOS_UPDATING")
 		return types.DEVICE_STATE_BASEOS_UPDATING
 	}
 	if ctx.rebootCmd || ctx.deviceReboot {
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_REBOOTING")
 		return types.DEVICE_STATE_REBOOTING
 	}
 	if ctx.shutdownCmd || ctx.deviceShutdown {
 		if ctx.allDomainsHalted {
+			log.Noticef("LocalCmdAgent: DEVICE_STATE_PREPARED_POWEROFF")
 			return types.DEVICE_STATE_PREPARED_POWEROFF
 		}
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_PREPARING_POWEROFF")
 		return types.DEVICE_STATE_PREPARING_POWEROFF
 	}
 	if ctx.poweroffCmd || ctx.devicePoweroff {
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_POWERING_OFF")
 		return types.DEVICE_STATE_POWERING_OFF
 	}
 	if ctx.getconfigCtx != nil && (ctx.getconfigCtx.configReceived ||
 		ctx.getconfigCtx.readSavedConfig) {
+		log.Noticef("LocalCmdAgent: DEVICE_STATE_ONLINE")
 		return types.DEVICE_STATE_ONLINE
 	}
+	log.Noticef("LocalCmdAgent: DEVICE_STATE_BOOTING")
 	return types.DEVICE_STATE_BOOTING
 }
 

@@ -44,6 +44,8 @@ func (zedagentCtx *zedagentContext) ApplyLocalDeviceCommand(
 	}
 
 	if getconfigCtx.updateInprogress {
+		log.Noticef("LocalCmdAgent: updateInprogress, will do it as deferred")
+
 		switch devCmd {
 		case types.DevCommandUnspecified:
 			// Do nothing
@@ -66,6 +68,8 @@ func (zedagentCtx *zedagentContext) ApplyLocalDeviceCommand(
 	// If HV=kubevirt and clustered, we may need to drain a replica first.
 	// If so defer/block the node outage.
 	if getconfigCtx.waitDrainInProgress {
+		log.Noticef("LocalCmdAgent: waitDrainInProgress, will do it as deferred")
+
 		switch devCmd {
 		case types.DevCommandUnspecified:
 			// Do nothing
@@ -119,11 +123,14 @@ func (zedagentCtx *zedagentContext) ApplyLocalDeviceCommand(
 	}
 
 	// shutdown the application instances
+	log.Noticef("LocalCmdAgent: running shutdownAppsGlobal")
 	shutdownAppsGlobal(zedagentCtx)
+	log.Noticef("LocalCmdAgent: running publishZedAgentStatus")
 	publishZedAgentStatus(getconfigCtx)
 
 	// Ensure Controller/LOC receives the POWERING_OFF state update
 	// before the device shuts down.
+	log.Noticef("LocalCmdAgent: triggering publishDevInfo")
 	triggerPublishDevInfoToDest(zedagentCtx, ControllerDest|LOCDest)
 	return true
 }
