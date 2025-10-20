@@ -344,6 +344,8 @@ const qemuDiskTemplate = `
   scsi = "off"
   bus = "pci.{{.PCIId}}"
   addr = "0x0"
+  disable-modern = "true"
+  disable-legacy = "off"
 {{- end}}
   drive = "drive-virtio-disk{{.DiskID}}"
 {{- else}}
@@ -382,6 +384,10 @@ const qemuNetTemplate = `
   mac = "{{.Mac}}"
   bus = "pci.{{.PCIId}}"
   addr = "0x0"
+{{- if eq .Driver "virtio-net-pci" }}
+  disable-modern = "true"
+  disable-legacy = "off"
+{{- end}}
 {{- if and (eq .Driver "virtio-net-pci") (ne .MTU 0) }}
   host_mtu = "{{.MTU}}"
 {{- end}}

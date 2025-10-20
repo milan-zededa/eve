@@ -1024,8 +1024,8 @@ $(PARALLEL_BUILD_LOCK): $(BUILD_DIR)
 # to cleanup possibly old linuxkit-builder containers because this
 # target is executed only once per build for both secuential and parallel builds
 $(LINUXKIT): $(BUILDTOOLS_BIN)/linuxkit-$(LINUXKIT_VERSION) $(PARALLEL_BUILD_LOCK)
-	$(QUIET)docker stop linuxkit-builder >/dev/null 2>&1 || true
-	$(QUIET)docker rm linuxkit-builder >/dev/null 2>&1 || true
+	# $(QUIET)docker stop linuxkit-builder >/dev/null 2>&1 || true
+	# $(QUIET)docker rm linuxkit-builder >/dev/null 2>&1 || true
 	$(QUIET)ln -sf  $(notdir $<) $@
 	$(QUIET): $@: Succeeded
 
