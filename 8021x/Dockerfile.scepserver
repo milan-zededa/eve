@@ -1,0 +1,33 @@
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    iproute2 \
+    iputils-ping \
+    curl \
+    unzip \
+    dnsmasq \
+    tcpdump \
+    net-tools \
+    strace \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install SCEP server
+WORKDIR /opt/scep
+RUN curl -L -o scepserver.zip https://github.com/micromdm/scep/releases/download/v2.3.0/scepserver-linux-amd64-v2.3.0.zip && \
+    unzip scepserver.zip && \
+    rm scepserver.zip && \
+    mv scepserver-linux-amd64 scepserver && \
+    chmod +x scepserver && \
+    mv scepserver /usr/local/bin/scepserver
+
+# CA Certificate
+COPY certs/pnac-ca.key /etc/certs/ca.key
+COPY certs/pnac-ca.pem /etc/certs/ca.pem
+RUN chmod 600 /etc/certs/ca.key
+
+# Add startup script
+COPY scripts/start-scep-server.sh /usr/local/bin/start-scep-server.sh
+RUN chmod +x /usr/local/bin/start-scep-server.sh
+
+CMD ["/usr/local/bin/start-scep-server.sh"]

@@ -1,0 +1,48 @@
+# =========================
+# Stage 1: Build SCEP proxy
+# =========================
+FROM golang:1.23 AS scep-builder
+
+# Set working directory
+WORKDIR /build
+
+# Copy the entire scep-proxy source tree
+COPY scep-proxy/ ./scep-proxy/
+
+# Build the binary
+WORKDIR /build/scep-proxy
+
+# Ensure vendor mode is used (since vendor/ exists)
+ENV GOFLAGS="-mod=vendor"
+
+# Build static-ish binary (no CGO needed here)
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -o scep-proxy
+
+# =========================
+# Stage 2: Final runtime image
+# =========================
+FROM ubuntu:22.04
+
+RUN apt-get update && apt-get install -y \
+    iproute2 \
+    iputils-ping \
+    curl \
+    tcpdump \
+    net-tools \
+    strace \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install SCEP proxy
+COPY --from=scep-builder /build/scep-proxy/scep-proxy /usr/local/bin/scep-proxy
+RUN chmod +x /usr/local/bin/scep-proxy
+
+# Certificates
+COPY certs /etc/certs
+RUN chmod 600 /etc/certs/*.key
+
+# Add startup script
+COPY scripts/start-scep-proxy.sh /usr/local/bin/start-scep-proxy.sh
+RUN chmod +x /usr/local/bin/start-scep-proxy.sh
+
+CMD ["/usr/local/bin/start-scep-proxy.sh"]

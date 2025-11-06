@@ -1,0 +1,38 @@
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    hostapd \
+    iproute2 \
+    iputils-ping \
+    curl \
+    unzip \
+    dnsmasq \
+    ebtables \
+    nftables \
+    tcpdump \
+    net-tools \
+    strace \
+    && rm -rf /var/lib/apt/lists/*
+
+# Certificates
+COPY certs /etc/certs
+RUN chmod 600 /etc/certs/*.key
+
+# hostapd configuration
+COPY config/hostapd.conf /etc/hostapd/hostapd.conf
+COPY config/eap_users /etc/hostapd/eap_users
+
+# Add startup script
+COPY scripts/start-authenticator.sh /usr/local/bin/start-authenticator.sh
+RUN chmod +x /usr/local/bin/start-authenticator.sh
+
+# Add script used to update nftables
+COPY scripts/on-auth-event.sh /usr/local/bin/on-auth-event.sh
+RUN chmod +x /usr/local/bin/on-auth-event.sh
+
+# Add script used to de-authenticate port
+COPY scripts/deauthenticate.sh /usr/local/bin/deauthenticate.sh
+RUN chmod +x /usr/local/bin/deauthenticate.sh
+
+CMD ["/usr/local/bin/start-authenticator.sh"]
