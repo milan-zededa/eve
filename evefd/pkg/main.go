@@ -1,18 +1,36 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 )
 
 const (
-	metadataSrvAddr        = "http://169.254.169.254"
-	netMetricsEndpoint     = "/eve/v1/networks/metrics.json"
-	nodeRawMetricsEndpoint = "/eve/v1/noderawmetrics/metrics.json"
+	metadataSrvAddr          = "http://169.254.169.254"
+	netMetricsEndpoint       = "/eve/v1/networks/metrics.json"
+	nodeRawMetricsEndpoint   = "/eve/v1/noderawmetrics/metrics.json"
+	historyFilePath          = "/var/lib/node-health/history.json" // adjust path as you like
+	metricsHistoryMaxSamples = 360                                 //   360 samples ≈ 1 hour of history
 )
+
+type MetricsHistory struct {
+	mu      sync.RWMutex
+	samples []NodeRawMetrics
+	max     int
+}
+
+func NewMetricsHistory(max int) *MetricsHistory {
+	return &MetricsHistory{max: max}
+}
+
+var metricsHistory = NewMetricsHistory(metricsHistoryMaxSamples)
 
 type NetworkMetrics struct {
 	IfName              string `json:"IfName"`
@@ -249,322 +267,150 @@ type NodeHealthReport struct {
 	HardwareReplacementRecommendations HardwareReplacementRecommendations `json:"hardware_replacement_recommendations"`
 }
 
+// =========================== HELPERS =============================
+
+func appendSampleToFile(path string, sample NodeRawMetrics) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := json.NewEncoder(f)
+	return enc.Encode(sample) // writes JSON + newline
+}
+
+func startMetricsCollector(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			raw, err := fetchNodeRawMetrics()
+			if err != nil {
+				log.Printf("metrics collector: failed to fetch metrics: %v", err)
+				continue
+			}
+
+			// Optional: also push into in-memory history if you kept it
+			metricsHistory.Add(raw)
+
+			// Persist to file
+			if err := appendSampleToFile(historyFilePath, raw); err != nil {
+				log.Printf("metrics collector: failed to write history file: %v", err)
+			}
+		}
+	}()
+}
+
+func loadHistoryFromFile(path string, max int) ([]NodeRawMetrics, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // no history yet is not an error
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var history []NodeRawMetrics
+
+	reader := bufio.NewReader(f)
+	dec := json.NewDecoder(reader)
+
+	for {
+		var s NodeRawMetrics
+		if err := dec.Decode(&s); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return history, err
+		}
+		history = append(history, s)
+		if max > 0 && len(history) > max {
+			// keep only the last `max` elements
+			history = history[len(history)-max:]
+		}
+	}
+	return history, nil
+}
+
+func (h *MetricsHistory) Add(sample NodeRawMetrics) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.samples = append(h.samples, sample)
+
+	// Trim to maximum allowed history
+	if len(h.samples) > h.max {
+		h.samples = h.samples[len(h.samples)-h.max:]
+	}
+}
+
+func (h *MetricsHistory) Snapshot() []NodeRawMetrics {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	out := make([]NodeRawMetrics, len(h.samples))
+	copy(out, h.samples)
+	return out
+}
+
+func (h *MetricsHistory) Last() (NodeRawMetrics, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if len(h.samples) == 0 {
+		return NodeRawMetrics{}, false
+	}
+	return h.samples[len(h.samples)-1], true
+}
+
 // =========================== SIMPLE HEURISTICS =============================
 
-func AnalyzeNode(raw NodeRawMetrics) NodeHealthReport {
+func AnalyzeNode(raw NodeRawMetrics, history []NodeRawMetrics) NodeHealthReport {
+	now := time.Now().UTC()
+
 	report := NodeHealthReport{
 		NodeID:        raw.NodeID,
-		GeneratedAt:   time.Now().UTC(),
-		OverallStatus: "ok",
+		GeneratedAt:   now,
+		OverallStatus: "ok", // will be updated
 	}
 
-	var mainIssues []MainIssue
+	// Start from 100 and subtract deltas from each component.
 	healthScore := 100
 
-	// ------------------ MEMORY / ECC ---------------------------------------
-	memComp := MemoryComponent{Status: "ok"}
-	var memIssues []MemoryIssue
-	var memReplacement []ReplacementPriority
+	var allMainIssues []MainIssue
+	var allReplacement []ReplacementPriority
 
-	for _, m := range raw.ECCModules {
-		// Simple thresholds (you can refine later)
-		highCorrected := m.CECount > 100
-		hasUE := m.UECount > 0
+	// ---- Per-component analyzers ----
 
-		if highCorrected || hasUE {
-			severity := "medium"
-			if hasUE {
-				severity = "high"
-			}
-			issue := MemoryIssue{
-				Type:                      "ecc_errors",
-				Severity:                  severity,
-				CorrectedErrorRatePerHour: 0, // we don't have rate yet, just counts
-				UncorrectedErrorsLast24h:  m.UECount,
-				Detail:                    fmt.Sprintf("ECC error count on %s is above the safety threshold.", labelOrSlot(m)),
-				AffectedModules: []MemoryAffectedModule{
-					{
-						Label:             m.Label,
-						Slot:              m.Slot,
-						RecommendedAction: "Replace this DIMM as soon as possible.",
-					},
-				},
-				SuggestedActions: []string{
-					fmt.Sprintf("Schedule replacement of DIMM %s in the next maintenance window.", labelOrSlot(m)),
-					"Avoid deploying new memory-critical workloads before replacement.",
-				},
-			}
-			memIssues = append(memIssues, issue)
-			memComp.Status = "critical"
+	memComp, memIssues, memRepl, memDelta := analyzeMemory(raw, history)
+	healthScore -= memDelta
+	allMainIssues = append(allMainIssues, memIssues...)
+	allReplacement = append(allReplacement, memRepl...)
 
-			mainIssues = append(mainIssues, MainIssue{
-				Title:         fmt.Sprintf("High ECC error rate on memory %s", labelOrSlot(m)),
-				Detail:        "ECC error rate is above the safety threshold. Uncorrected errors significantly increase risk of data corruption.",
-				Severity:      "critical",
-				ComponentType: "memory",
-				ComponentIDs:  []string{labelOrSlot(m)},
-				SuggestedActions: []string{
-					fmt.Sprintf("Schedule replacement of DIMM %s in the next maintenance window.", labelOrSlot(m)),
-					"Avoid deploying new memory-intensive workloads on this node until the DIMM is replaced.",
-					"Monitor ECC error counters more frequently until replacement is completed.",
-				},
-			})
+	storageComp, storageIssues, diskRepl, storageDelta := analyzeStorage(raw, history)
+	healthScore -= storageDelta
+	allMainIssues = append(allMainIssues, storageIssues...)
+	allReplacement = append(allReplacement, diskRepl...)
 
-			memReplacement = append(memReplacement, ReplacementPriority{
-				ComponentType: "memory_dimm",
-				ID:            labelOrSlot(m),
-				Priority:      "1",
-				Reason:        "ECC error count above threshold - high risk for data corruption.",
-			})
+	cpuComp, cpuIssues, cpuDelta := analyzeCPU(raw, history)
+	healthScore -= cpuDelta
+	allMainIssues = append(allMainIssues, cpuIssues...)
 
-			healthScore -= 30
-		}
-	}
-	if memComp.Status == "ok" {
-		memComp.Status = "ok"
-	}
-	memComp.Issues = memIssues
+	thermalComp, thermalIssues, thermalDelta := analyzeThermal(raw, history)
+	healthScore -= thermalDelta
+	allMainIssues = append(allMainIssues, thermalIssues...)
 
-	// ------------------- STORAGE / SMART ------------------------------------
-	storageComp := StorageComponent{Status: "ok"}
-	var storageDevices []StorageDeviceIssue
-	var diskReplacement []ReplacementPriority
+	netComp, netIssues, netDelta := analyzeNetwork(raw, history)
+	healthScore -= netDelta
+	allMainIssues = append(allMainIssues, netIssues...)
 
-	for _, s := range raw.Smart {
-		severity := "ok"
-		needsIssue := false
+	psuComp, psuIssues, psuDelta := analyzePSU(raw, history)
+	healthScore -= psuDelta
+	allMainIssues = append(allMainIssues, psuIssues...)
 
-		realloc := ptrInt64(s.ReallocatedSectors)
-		pending := ptrInt64(s.PendingSectors)
-		crc := ptrInt64(s.CRCErrors)
-		wear := ptrInt64(s.WearLevelPercent)
-
-		if realloc > 0 || pending > 0 || crc > 0 || wear >= 80 {
-			needsIssue = true
-			severity = "medium"
-		}
-
-		if needsIssue {
-			storageComp.Status = "warning"
-
-			smartMap := map[string]interface{}{
-				"reallocated_sectors": realloc,
-				"pending_sectors":     pending,
-				"crc_errors":          crc,
-				"wear_level_percent":  wear,
-			}
-
-			issue := StorageSmartIssue{
-				Type:              "smart_health",
-				Severity:          severity,
-				SmartIndicators:   smartMap,
-				Detail:            "SMART attributes indicate early degradation.",
-				RecommendedAction: fmt.Sprintf("Plan disk %s replacement during the next maintenance window.", s.Device),
-			}
-
-			deviceIssue := StorageDeviceIssue{
-				DeviceID: s.Device,
-				Role:     "system_storage", // you can refine this from topology info
-				Status:   "warning",
-				Issues:   []StorageSmartIssue{issue},
-			}
-
-			storageDevices = append(storageDevices, deviceIssue)
-
-			mainIssues = append(mainIssues, MainIssue{
-				Title:         fmt.Sprintf("SMART degradation on disk %s", s.Device),
-				Detail:        "Disk shows reallocated and/or pending sectors, indicating early media degradation.",
-				Severity:      "warning",
-				ComponentType: "storage",
-				ComponentIDs:  []string{s.Device},
-				SuggestedActions: []string{
-					fmt.Sprintf("Plan disk %s replacement during the next maintenance window.", s.Device),
-					"Ensure recent backups or replicas exist for any critical data on this disk.",
-					"Avoid placing new write-heavy workloads on this node until the disk is replaced.",
-				},
-			})
-
-			diskReplacement = append(diskReplacement, ReplacementPriority{
-				ComponentType: "disk",
-				ID:            s.Device,
-				Priority:      "2",
-				Reason:        "SMART values indicate early disk degradation - schedule replacement.",
-			})
-
-			healthScore -= 20
-		}
-	}
-	storageComp.Devices = storageDevices
-
-	// ------------------- CPU / THROTTLING -----------------------------------
-	cpuComp := CPUComponent{Status: "ok"}
-	var cpuIssues []CPUIssue
-
-	totalThrottle := raw.CPUThrottling.CoreThrottleCount + raw.CPUThrottling.PackageThrottleCount
-	if totalThrottle > 0 {
-		cpuComp.Status = "warning"
-		issue := CPUIssue{
-			Type:     "thermal_throttling",
-			Severity: "medium",
-			Detail:   "CPU frequency has been capped due to high temperature.",
-			SuggestedActions: []string{
-				"Check cooling (fans, airflow, dust).",
-				"Reduce CPU load by migrating at least one high-CPU app.",
-				"Avoid onboarding new CPU-heavy apps on this node.",
-			},
-		}
-		cpuIssues = append(cpuIssues, issue)
-
-		mainIssues = append(mainIssues, MainIssue{
-			Title:         "CPU thermal throttling under current workload",
-			Detail:        "CPU frequency has been capped due to high temperature.",
-			Severity:      "medium",
-			ComponentType: "cpu",
-			ComponentIDs:  []string{"cpu_package_0"},
-			SuggestedActions: []string{
-				"Inspect cooling (fans, airflow, dust) and verify that all fans operate correctly.",
-				"Consider migrating at least one high-CPU application to another node.",
-				"Review power/thermal limits if throttling persists after cooling checks.",
-			},
-		})
-
-		healthScore -= 15
-	}
-	cpuComp.Issues = cpuIssues
-
-	// ------------------- THERMALS -------------------------------------------
-	thermalComp := ThermalComponent{
-		Status: "ok",
-		Detail: "Thermals appear within normal range.",
-	}
-	maxTemp := 0.0
-	for _, t := range raw.Temperatures {
-		if t.TemperatureC > maxTemp {
-			maxTemp = t.TemperatureC
-		}
-	}
-	if maxTemp >= 80 { // simple threshold
-		thermalComp.Status = "warning"
-		thermalComp.Detail = "Chassis temperature and/or CPU package temperature are near upper limits."
-		thermalComp.SuggestedActions = []string{
-			"Verify rack cooling and airflow.",
-			"Check for blocked vents or dust on heatsinks.",
-		}
-		if healthScore > 0 {
-			healthScore -= 10
-		}
-	}
-
-	// ------------------- NETWORK / NICS -------------------------------------
-	netComp := NetworkComponent{Status: "ok"}
-	var netIssues []NetworkIssue
-
-	for _, nic := range raw.Networks {
-		totalPkts := nic.TxPkts + nic.RxPkts
-		totalErrors := nic.TxErrors + nic.RxErrors
-		totalDrops := nic.TxDrops + nic.RxDrops +
-			nic.TxACLDrops + nic.RxACLDrops +
-			nic.TxACLRateLimitDrops + nic.RxACLRateLimitDrops
-
-		// 1) Interface down
-		if !nic.Up {
-			issue := NetworkIssue{
-				Type:      "interface_down",
-				Severity:  "critical",
-				Interface: nic.IfName,
-				Detail:    fmt.Sprintf("Interface %s is reported as down.", nic.IfName),
-				SuggestedActions: []string{
-					"Check physical link (cable, SFP, switch port).",
-					"Verify VLAN/switch configuration and NIC configuration.",
-					"If intentionally down, mark this interface as unused in config.",
-				},
-			}
-			netIssues = append(netIssues, issue)
-			netComp.Status = "critical"
-
-			mainIssues = append(mainIssues, MainIssue{
-				Title:         fmt.Sprintf("Network interface %s is down", nic.IfName),
-				Detail:        "Interface is not operational; connectivity may be impacted.",
-				Severity:      "critical",
-				ComponentType: "network",
-				ComponentIDs:  []string{nic.IfName},
-				SuggestedActions: []string{
-					"Check cabling and switch ports.",
-					"Verify that this interface is configured and should be up.",
-				},
-			})
-
-			healthScore -= 15
-			continue
-		}
-
-		// 2) Errors / drops
-		var errorRatio, dropRatio float64
-		if totalPkts > 0 {
-			errorRatio = float64(totalErrors) / float64(totalPkts)
-			dropRatio = float64(totalDrops) / float64(totalPkts)
-		}
-
-		// thresholds: tweak to taste
-		highErrors := totalErrors > 100 || errorRatio > 0.01 // >1% errors
-		highDrops := totalDrops > 500 || dropRatio > 0.02    // >2% drops
-
-		if highErrors || highDrops {
-			severity := "warning"
-			if errorRatio > 0.05 || dropRatio > 0.05 {
-				severity = "medium"
-			}
-
-			detail := fmt.Sprintf(
-				"Interface %s shows elevated errors/drops (errors=%d, drops=%d, total_pkts=%d).",
-				nic.IfName, totalErrors, totalDrops, totalPkts,
-			)
-
-			issue := NetworkIssue{
-				Type:      "packet_errors_or_drops",
-				Severity:  severity,
-				Interface: nic.IfName,
-				Detail:    detail,
-				SuggestedActions: []string{
-					"Inspect cabling and switch port for this interface.",
-					"Check for duplex/speed mismatches or faulty hardware.",
-					"Consider moving latency-sensitive traffic away from this NIC until stabilized.",
-				},
-			}
-			netIssues = append(netIssues, issue)
-
-			if netComp.Status != "critical" {
-				netComp.Status = "warning"
-			}
-
-			mainIssues = append(mainIssues, MainIssue{
-				Title:         fmt.Sprintf("NIC %s has high error/drop rate", nic.IfName),
-				Detail:        detail,
-				Severity:      severity,
-				ComponentType: "network",
-				ComponentIDs:  []string{nic.IfName},
-				SuggestedActions: []string{
-					"Inspect cabling and switch port.",
-					"Review network configuration and physical connectivity.",
-				},
-			})
-
-			healthScore -= 10
-		}
-	}
-	if netComp.Status == "ok" {
-		netComp.Status = "ok"
-	}
-	netComp.Issues = netIssues
-
-	// ------------------- PSU -------------------------------------------------
-	psuComp := PSUComponent{
-		Status: "ok",
-		Detail: "PSU health and fan speeds are within normal range.",
-	}
-	// You can add real rules based on PSUSensors here.
-
-	// ------------------- OVERALL STATUS -------------------------------------
+	// Clamp score
 	if healthScore < 0 {
 		healthScore = 0
 	}
@@ -572,6 +418,7 @@ func AnalyzeNode(raw NodeRawMetrics) NodeHealthReport {
 		healthScore = 100
 	}
 
+	// Overall status from score (still heuristic; could be ML later).
 	statusLabel := "Healthy"
 	overallStatus := "ok"
 	if healthScore >= 80 {
@@ -589,101 +436,29 @@ func AnalyzeNode(raw NodeRawMetrics) NodeHealthReport {
 	report.Summary = Summary{
 		HealthScore: healthScore,
 		StatusLabel: statusLabel,
-		MainIssues:  mainIssues,
+		MainIssues:  allMainIssues,
 	}
 
-	// ------------------- COMPONENT SUMMARY ----------------------------------
+	// Components
 	report.Components = Components{
 		CPU:     cpuComp,
 		Memory:  memComp,
 		Storage: storageComp,
 		PSU:     psuComp,
 		Thermal: thermalComp,
+		Network: netComp,
 	}
 
-	// ------------------- SAFE TO DEPLOY NEW APPS? ---------------------------
-	safe := SafeToDeployNewApp{
-		Status: "yes",
-		Reason: "No major hardware issues detected.",
-	}
-	if memComp.Status == "critical" || storageComp.Status == "warning" || cpuComp.Status == "warning" {
-		safe.Status = "no"
-		safe.Reason = "Memory and/or storage and/or CPU issues detected. New workloads are not recommended until hardware is fixed or load is reduced."
-	}
-	report.SafeToDeployNewApp = safe
-
-	// ------------------- APP PLACEMENT RECOMMENDATIONS ----------------------
-	var appsToMigrate []AppToMigrate
-	var appsSafe []AppSafeToStay
-
-	for _, app := range raw.Apps {
-		heavyCPU := app.CPUPercent > 70
-		heavyMem := app.MemoryGB > 8
-		writeHeavy := app.IOProfile == "high_write"
-
-		reasons := []string{}
-		if heavyCPU && cpuComp.Status == "warning" {
-			reasons = append(reasons, "High sustained CPU usage contributes to thermal throttling.")
-		}
-		if heavyMem && memComp.Status == "critical" {
-			reasons = append(reasons, "High memory footprint on a node with ECC problems.")
-		}
-		if writeHeavy && storageComp.Status == "warning" {
-			reasons = append(reasons, "Write-heavy workload on a disk with SMART degradation.")
-		}
-
-		if len(reasons) > 0 {
-			priority := "medium"
-			if memComp.Status == "critical" || heavyCPU {
-				priority = "high"
-			}
-			targetReq := AppPlacementTargetReq{}
-			if heavyCPU {
-				targetReq.MinCPUCores = 16
-			}
-			if heavyMem {
-				targetReq.MinMemoryGB = 32
-			}
-			if writeHeavy {
-				targetReq.StorageType = "healthy_ssd_or_nvme"
-			}
-			appsToMigrate = append(appsToMigrate, AppToMigrate{
-				AppID:   app.AppID,
-				AppName: app.AppName,
-				CurrentUsage: AppPlacementCurrentUsage{
-					CPUPercent: app.CPUPercent,
-					MemoryGB:   app.MemoryGB,
-					IOProfile:  app.IOProfile,
-				},
-				Reasons:                reasons,
-				TargetNodeRequirements: targetReq,
-				Priority:               priority,
-			})
-		} else {
-			appsSafe = append(appsSafe, AppSafeToStay{
-				AppID:   app.AppID,
-				AppName: app.AppName,
-				Reason:  "Low resource footprint; safe to keep on this node.",
-			})
-		}
-	}
+	// Apps + placement recommendations
+	appsToMigrate, appsSafe := analyzeApps(raw, cpuComp, memComp, storageComp)
 	report.AppsToMigrate = appsToMigrate
 	report.AppsSafeToStay = appsSafe
 
-	// ------------------- HARDWARE REPLACEMENT PRIORITY ----------------------
-	var priorityOrder []ReplacementPriority
-	priorityOrder = append(priorityOrder, memReplacement...)
-	priorityOrder = append(priorityOrder, diskReplacement...)
+	// Safe to deploy new app
+	report.SafeToDeployNewApp = evaluateSafeToDeploy(cpuComp, memComp, storageComp)
 
-	overallComment := "No immediate hardware replacement needed."
-	if len(priorityOrder) > 0 {
-		overallComment = "Focus first on memory stability, then replace degraded disks. After that, reassess whether CPU throttling persists."
-	}
-
-	report.HardwareReplacementRecommendations = HardwareReplacementRecommendations{
-		PriorityOrder:  priorityOrder,
-		OverallComment: overallComment,
-	}
+	// Hardware replacement recommendations (mem + disks for now)
+	report.HardwareReplacementRecommendations = buildReplacementPlan(allReplacement)
 
 	return report
 }
@@ -708,42 +483,115 @@ func ptrInt64(p *int64) int64 {
 	return *p
 }
 
+// ====================== HTTP SERVER EXTENSION =========================
+
+func fetchNodeRawMetrics() (NodeRawMetrics, error) {
+	client := http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	// Fetch network metrics
+	netResp, err := client.Get(metadataSrvAddr + netMetricsEndpoint)
+	if err != nil {
+		return NodeRawMetrics{}, fmt.Errorf("fetch network metrics: %w", err)
+	}
+	defer netResp.Body.Close()
+
+	var networks []NetworkMetrics
+	if err := json.NewDecoder(netResp.Body).Decode(&networks); err != nil {
+		return NodeRawMetrics{}, fmt.Errorf("decode network metrics: %w", err)
+	}
+
+	// Fetch node raw metrics (ECC, Smart, Thermal, CPU throttling...)
+	nodeResp, err := client.Get(metadataSrvAddr + nodeRawMetricsEndpoint)
+	if err != nil {
+		return NodeRawMetrics{}, fmt.Errorf("fetch node raw metrics: %w", err)
+	}
+	defer nodeResp.Body.Close()
+
+	var raw NodeRawMetrics
+	if err := json.NewDecoder(nodeResp.Body).Decode(&raw); err != nil {
+		return NodeRawMetrics{}, fmt.Errorf("decode node raw metrics: %w", err)
+	}
+
+	// Merge NIC results (EVE exposes them separately)
+	raw.Networks = networks
+
+	return raw, nil
+}
+
+// GET /health/analyze  — fetch from metadata + analyze
+func analyzeLiveHandler(w http.ResponseWriter, r *http.Request) {
+	history, err := loadHistoryFromFile(historyFilePath, metricsHistoryMaxSamples)
+	if err != nil {
+		log.Printf("analyzeLiveHandler: failed to load history: %v", err)
+		http.Error(w, "failed to load metrics history", http.StatusInternalServerError)
+		return
+	}
+	if len(history) == 0 {
+		http.Error(w, "no metrics history available yet", http.StatusServiceUnavailable)
+		return
+	}
+
+	raw := history[len(history)-1] // latest snapshot
+	report := AnalyzeNode(raw, history)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
+}
+
+// POST /health/analyze — analyze provided JSON input
+func analyzeInputHandler(w http.ResponseWriter, r *http.Request) {
+	var raw NodeRawMetrics
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		http.Error(w, "invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+	if raw.CollectedAt.IsZero() {
+		raw.CollectedAt = time.Now().UTC()
+	}
+
+	// Load historical samples from file
+	history, err := loadHistoryFromFile(historyFilePath, metricsHistoryMaxSamples)
+	if err != nil {
+		log.Printf("analyzeInputHandler: failed to load history: %v", err)
+		// Fallback: analyze without history
+		history = nil
+	}
+
+	report := AnalyzeNode(raw, history)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(report)
+}
+
 func main() {
-	client := http.Client{Timeout: 5 * time.Second}
+	mux := http.NewServeMux()
 
-	// Get nework metrics
-	url := metadataSrvAddr + netMetricsEndpoint
-	resp, err := client.Get(url)
-	if err != nil {
-		log.Fatalf("Failed to fetch network metrics: %v", err)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			analyzeLiveHandler(w, r)
+		case http.MethodPost:
+			analyzeInputHandler(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// Start background collector that samples every 10 seconds
+	startMetricsCollector(10 * time.Second)
+
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
 	}
-	defer resp.Body.Close()
 
-	var netMetrics []NetworkMetrics
-	if err := json.NewDecoder(resp.Body).Decode(&netMetrics); err != nil {
-		log.Fatalf("Failed to decode network metrics JSON: %v", err)
+	log.Println("Node Health HTTP API started on :8080")
+	if err := server.ListenAndServe(); err != nil {
+		log.Fatalf("server failed: %v", err)
 	}
-
-	// Get node raw metrics
-	url = metadataSrvAddr + netMetricsEndpoint
-	resp, err = client.Get(url)
-	if err != nil {
-		log.Fatalf("Failed to fetch network metrics: %v", err)
-	}
-	defer resp.Body.Close()
-
-	nodeRawMetrics := NodeRawMetrics{}
-	if err := json.NewDecoder(resp.Body).Decode(&nodeRawMetrics); err != nil {
-		log.Fatalf("Failed to decode network metrics JSON: %v", err)
-	}
-	nodeRawMetrics.Networks = netMetrics
-
-	fmt.Printf("Node raw metrics: %+v", nodeRawMetrics)
-	report := AnalyzeNode(nodeRawMetrics)
-
-	out, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(string(out))
 }

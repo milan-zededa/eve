@@ -1,0 +1,117 @@
+{
+  "node_id": "node-bad-01",
+  "collected_at": "2025-12-02T10:00:00Z",
+  "ecc_modules": [
+    {
+      "controller": "mc0",
+      "label": "DIMM B1",
+      "slot": "B1",
+      "ce_count": 5000,
+      "ue_count": 2
+    },
+    {
+      "controller": "mc0",
+      "label": "DIMM A1",
+      "slot": "A1",
+      "ce_count": 10,
+      "ue_count": 0
+    }
+  ],
+  "smart": [
+    {
+      "device": "/dev/sda",
+      "reallocated_sectors": 25,
+      "pending_sectors": 6,
+      "crc_errors": 12,
+      "wear_level_percent": 80
+    },
+    {
+      "device": "/dev/sdb",
+      "reallocated_sectors": 0,
+      "pending_sectors": 0,
+      "crc_errors": 0,
+      "wear_level_percent": 10
+    }
+  ],
+  "temperatures": [
+    {
+      "name": "cpu_package_0",
+      "location": "cpu",
+      "temperature_c": 88.0
+    },
+    {
+      "name": "chassis_0",
+      "location": "chassis",
+      "temperature_c": 45.0
+    }
+  ],
+  "cpu_throttling": {
+    "core_throttle_count": 150,
+    "package_throttle_count": 90
+  },
+  "psu_sensors": [
+    {
+      "name": "psu0",
+      "metric": "health",
+      "value": 1.0,
+      "unit": "ok"
+    }
+  ],
+  "apps": [
+    {
+      "app_id": "video-analytics-01",
+      "app_name": "Video Analytics Pipeline",
+      "cpu_percent": 80.0,
+      "memory_gb": 10.0,
+      "io_profile": "high_read"
+    },
+    {
+      "app_id": "timeseries-db-01",
+      "app_name": "Time-Series Database",
+      "cpu_percent": 35.0,
+      "memory_gb": 8.0,
+      "io_profile": "high_write"
+    },
+    {
+      "app_id": "log-shipper",
+      "app_name": "Log Shipper",
+      "cpu_percent": 2.0,
+      "memory_gb": 0.5,
+      "io_profile": "low"
+    }
+  ],
+  "networks": [
+    {
+      "IfName": "eth0",
+      "Up": true,
+      "TxBytes": 100000000,
+      "RxBytes": 80000000,
+      "TxDrops": 2000,
+      "RxDrops": 1500,
+      "TxPkts": 2000000,
+      "RxPkts": 2000000,
+      "TxErrors": 150,
+      "RxErrors": 70,
+      "TxACLDrops": 100,
+      "RxACLDrops": 80,
+      "TxACLRateLimitDrops": 50,
+      "RxACLRateLimitDrops": 40
+    },
+    {
+      "IfName": "eth1",
+      "Up": false,
+      "TxBytes": 0,
+      "RxBytes": 0,
+      "TxDrops": 0,
+      "RxDrops": 0,
+      "TxPkts": 0,
+      "RxPkts": 0,
+      "TxErrors": 0,
+      "RxErrors": 0,
+      "TxACLDrops": 0,
+      "RxACLDrops": 0,
+      "TxACLRateLimitDrops": 0,
+      "RxACLRateLimitDrops": 0
+    }
+  ]
+}
