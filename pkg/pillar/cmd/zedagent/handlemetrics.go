@@ -165,6 +165,7 @@ func metricsAndInfoTimerTask(ctx *zedagentContext, handleChannel chan interface{
 			start := time.Now()
 			iteration++
 			publishMetrics(ctx, iteration)
+			publishNodeRawMetrics(ctx)
 			ctx.ps.CheckMaxTimeTopic(wdName, "publishMetrics", start,
 				warningTime, errorTime)
 

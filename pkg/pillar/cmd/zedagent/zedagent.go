@@ -122,6 +122,7 @@ type zedagentContext struct {
 	subAppFlowMonitor         pubsub.Subscription
 	pubGlobalConfig           pubsub.Publication
 	pubMetricsMap             pubsub.Publication
+	pubNodeRawMetrics         pubsub.Publication
 	subGlobalConfig           pubsub.Subscription
 	subEdgeNodeCert           pubsub.Subscription
 	subVaultStatus            pubsub.Subscription
@@ -1161,6 +1162,16 @@ func initPublications(zedagentCtx *zedagentContext) {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	zedagentCtx.pubNodeRawMetrics, err = ps.NewPublication(
+		pubsub.PublicationOptions{
+			AgentName: agentName,
+			TopicType: types.NodeRawMetrics{},
+		})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	getconfigCtx := zedagentCtx.getconfigCtx
 
 	getconfigCtx.pubZedAgentStatus, err = ps.NewPublication(pubsub.PublicationOptions{

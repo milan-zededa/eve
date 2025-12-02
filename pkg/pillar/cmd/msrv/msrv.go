@@ -122,6 +122,8 @@ type Msrv struct {
 
 	pubCipherMetrics pubsub.Publication
 
+	subNodeRawMetrics pubsub.Subscription
+
 	// Subscriptions to gather information about
 	// patch envelopes from volumemgr and zedagent
 	// external envelopes have to be downloaded via
@@ -522,6 +524,19 @@ func (msrv *Msrv) initSubscriptions(persist bool) (err error) {
 		return err
 	}
 
+	msrv.subNodeRawMetrics, err = msrv.PubSub.NewSubscription(pubsub.SubscriptionOptions{
+		AgentName:   "zedagent",
+		MyAgentName: agentName,
+		TopicImpl:   types.NodeRawMetrics{},
+		Activate:    false,
+		WarningTime: warningTime,
+		ErrorTime:   errorTime,
+		Persistent:  persist,
+	})
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -545,6 +560,7 @@ func (msrv *Msrv) Activate() error {
 		msrv.subPatchEnvelopeInfo,
 		msrv.subVolumeStatus,
 		msrv.subContentTreeStatus,
+		msrv.subNodeRawMetrics,
 	}
 
 	for _, sub := range inactiveSubs {
@@ -676,6 +692,9 @@ func (msrv *Msrv) Run(ctx context.Context) (err error) {
 		case change := <-msrv.subGlobalConfig.MsgChan():
 			msrv.subGlobalConfig.ProcessChange(change)
 
+		case change := <-msrv.subNodeRawMetrics.MsgChan():
+			msrv.subNodeRawMetrics.ProcessChange(change)
+
 		case <-ctx.Done():
 			return nil
 
@@ -717,6 +736,8 @@ func (msrv *Msrv) MakeMetadataHandler() http.Handler {
 		r.Get("/wwan/status.json", msrv.handleWWANStatus())
 		r.Get("/wwan/metrics.json", msrv.handleWWANMetrics())
 		r.Get("/networks/metrics.json", msrv.handleNetworkStatusMetrics())
+
+		r.Get("/noderawmetrics/metrics.json", msrv.handleNodeRawMetrics())
 
 		r.Get("/app/info.json", msrv.handleAppInfo())
 

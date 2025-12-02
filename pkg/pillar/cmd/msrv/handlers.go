@@ -880,6 +880,29 @@ func (msrv *Msrv) handleNetworkStatusMetrics() func(http.ResponseWriter, *http.R
 	}
 }
 
+func (msrv *Msrv) handleNodeRawMetrics() func(http.ResponseWriter, *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Fetch node raw metrics
+		nodeRawMetricsObj, err := msrv.subNodeRawMetrics.Get("global")
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusNoContent), http.StatusNoContent)
+			return
+		}
+		nodeRawMetrics := nodeRawMetricsObj.(types.NodeRawMetrics)
+
+		resp, err := json.Marshal(nodeRawMetrics)
+		if err != nil {
+			msg := fmt.Sprintf("Failed to marshal node raw metrics: %v", err)
+			msrv.Log.Error(msg)
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(resp)
+	}
+}
+
 // reverseProxy is a handler which proxies request to target URL
 func (msrv *Msrv) reverseProxy(target *url.URL) func(http.ResponseWriter, *http.Request) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
