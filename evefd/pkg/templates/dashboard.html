@@ -1,0 +1,52 @@
+{{ define "dashboard" }}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Node Health Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<link rel="stylesheet" href="/static/style.css">
+
+</head>
+<body>
+
+<div class="page">
+
+    <header>
+        <div class="left">
+            <h1>Node Health Dashboard</h1>
+            <div class="subtitle">
+                Node: <strong>{{ .NodeID }}</strong>
+            </div>
+        </div>
+        <div class="right">
+            <button id="refresh-btn">⟳ Refresh</button>
+        </div>
+    </header>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" data-tab="overview">Overview</div>
+        <div class="tab" data-tab="components">Components</div>
+        <div class="tab" data-tab="apps">Apps</div>
+        <div class="tab" data-tab="raw">Raw JSON</div>
+    </div>
+
+    <!-- Content -->
+    <div id="content">
+        <!-- JS will populate these sections -->
+        <div id="tab-overview" class="tab-content"></div>
+        <div id="tab-components" class="tab-content hidden"></div>
+        <div id="tab-apps" class="tab-content hidden"></div>
+        <div id="tab-raw" class="tab-content hidden"></div>
+    </div>
+
+    <div id="error-banner" class="error-banner"></div>
+</div>
+
+<script src="/static/dashboard.js"></script>
+
+</body>
+</html>
+{{ end }}
