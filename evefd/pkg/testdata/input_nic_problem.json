@@ -1,0 +1,68 @@
+{
+  "node_id": "node-nic-issue-01",
+  "collected_at": "2025-12-02T10:10:00Z",
+  "ecc_modules": [],
+  "smart": [],
+  "temperatures": [
+    {
+      "name": "cpu_package_0",
+      "location": "cpu",
+      "temperature_c": 50.0
+    }
+  ],
+  "cpu_throttling": {
+    "core_throttle_count": 0,
+    "package_throttle_count": 0
+  },
+  "psu_sensors": [],
+  "apps": [
+    {
+      "app_id": "web-gateway",
+      "app_name": "Web Gateway",
+      "cpu_percent": 15.0,
+      "memory_gb": 2.0,
+      "io_profile": "mixed"
+    },
+    {
+      "app_id": "monitor-agent",
+      "app_name": "Monitoring Agent",
+      "cpu_percent": 1.0,
+      "memory_gb": 0.2,
+      "io_profile": "low"
+    }
+  ],
+  "networks": [
+    {
+      "IfName": "eth0",
+      "Up": false,
+      "TxBytes": 0,
+      "RxBytes": 0,
+      "TxDrops": 0,
+      "RxDrops": 0,
+      "TxPkts": 0,
+      "RxPkts": 0,
+      "TxErrors": 0,
+      "RxErrors": 0,
+      "TxACLDrops": 0,
+      "RxACLDrops": 0,
+      "TxACLRateLimitDrops": 0,
+      "RxACLRateLimitDrops": 0
+    },
+    {
+      "IfName": "eth1",
+      "Up": true,
+      "TxBytes": 500000000,
+      "RxBytes": 600000000,
+      "TxDrops": 50,
+      "RxDrops": 30,
+      "TxPkts": 500000,
+      "RxPkts": 450000,
+      "TxErrors": 5,
+      "RxErrors": 3,
+      "TxACLDrops": 0,
+      "RxACLDrops": 0,
+      "TxACLRateLimitDrops": 0,
+      "RxACLRateLimitDrops": 0
+    }
+  ]
+}
