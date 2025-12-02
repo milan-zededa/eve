@@ -3,7 +3,9 @@ FROM golang:1.23-alpine AS build
 WORKDIR /go/src/evefd
 COPY pkg .
 
-RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/root/evefd main.go
+RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/root/evefd
+COPY pkg/static /out/root/static
+COPY pkg/templates /out/root/templates
 
 COPY cert/id_rsa* /out/root/.ssh/
 COPY cert/id_rsa.pub /out/root/.ssh/authorized_keys

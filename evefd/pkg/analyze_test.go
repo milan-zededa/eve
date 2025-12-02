@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// loadFixture loads a NodeRawMetrics JSON fixture from testdata/.
 func loadFixture(t *testing.T, name string) NodeRawMetrics {
 	t.Helper()
 
@@ -26,15 +27,16 @@ func loadFixture(t *testing.T, name string) NodeRawMetrics {
 func TestAnalyzeNode_HealthyFixture(t *testing.T) {
 	metrics := loadFixture(t, "input_healthy.json")
 
-	// No history for this test analyze current snapshot only.
+	// No history for this test – analyze current snapshot only.
 	report := AnalyzeNode(metrics, nil)
 
 	if report.NodeID != "node-healthy-01" {
 		t.Errorf("expected NodeID=node-healthy-01, got %s", report.NodeID)
 	}
 
-	if report.OverallStatus != "ok" && report.OverallStatus != "healthy" {
-		t.Errorf("expected overall_status to be ok/healthy, got %s", report.OverallStatus)
+	// For a healthy node we expect overall status "ok".
+	if report.OverallStatus != "ok" {
+		t.Errorf("expected overall_status == 'ok', got %s", report.OverallStatus)
 	}
 
 	// Health score should be high for a healthy node.
@@ -59,16 +61,16 @@ func TestAnalyzeNode_HealthyFixture(t *testing.T) {
 func TestAnalyzeNode_UnhealthyFixture(t *testing.T) {
 	metrics := loadFixture(t, "input_unhealthy.json")
 
-	// No history for this test - analyze current snapshot only.
+	// No history for this test – analyze current snapshot only.
 	report := AnalyzeNode(metrics, nil)
 
 	if report.NodeID != "node-bad-01" {
 		t.Errorf("expected NodeID=node-bad-01, got %s", report.NodeID)
 	}
 
-	// Overall status should NOT be ok.
-	if report.OverallStatus == "ok" || report.OverallStatus == "healthy" {
-		t.Errorf("expected overall_status to be degraded for unhealthy node, got %s", report.OverallStatus)
+	// Overall status should NOT be ok for an unhealthy node.
+	if report.OverallStatus == "ok" {
+		t.Errorf("expected overall_status to be degraded (warning/critical) for unhealthy node, got %s", report.OverallStatus)
 	}
 
 	// Health score should be clearly lower for the bad node.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -16,8 +17,8 @@ const (
 	metadataSrvAddr          = "http://169.254.169.254"
 	netMetricsEndpoint       = "/eve/v1/networks/metrics.json"
 	nodeRawMetricsEndpoint   = "/eve/v1/noderawmetrics/metrics.json"
-	historyFilePath          = "/var/lib/node-health/history.json" // adjust path as you like
-	metricsHistoryMaxSamples = 360                                 //   360 samples ≈ 1 hour of history
+	historyFilePath          = "/run/history.json" // adjust path as you like
+	metricsHistoryMaxSamples = 360                 //   360 samples ≈ 1 hour of history
 )
 
 type MetricsHistory struct {
@@ -265,6 +266,12 @@ type NodeHealthReport struct {
 	AppsToMigrate                      []AppToMigrate                     `json:"apps_to_migrate"`
 	AppsSafeToStay                     []AppSafeToStay                    `json:"apps_safe_to_stay"`
 	HardwareReplacementRecommendations HardwareReplacementRecommendations `json:"hardware_replacement_recommendations"`
+}
+
+var tpl *template.Template
+
+func init() {
+	tpl = template.Must(template.ParseGlob("templates/*.html"))
 }
 
 // =========================== HELPERS =============================
@@ -565,19 +572,53 @@ func analyzeInputHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(report)
 }
 
+func uiHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Example: load latest node ID from history (or static until first fetch)
+	nodeID := "unknown"
+	if raw, ok := metricsHistory.Last(); ok {
+		nodeID = raw.NodeID
+	}
+
+	data := struct {
+		NodeID string
+	}{
+		NodeID: nodeID,
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tpl.ExecuteTemplate(w, "dashboard", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func main() {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			analyzeLiveHandler(w, r)
-		case http.MethodPost:
-			analyzeInputHandler(w, r)
-		default:
+	mux.HandleFunc("/", uiHandler)
+
+	// JSON endpoints
+	mux.HandleFunc("/api/health/live", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
 		}
+		analyzeLiveHandler(w, r)
 	})
+
+	mux.HandleFunc("/api/health/analyze", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		analyzeInputHandler(w, r)
+	})
+
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 
 	// Start background collector that samples every 10 seconds
 	startMetricsCollector(10 * time.Second)
