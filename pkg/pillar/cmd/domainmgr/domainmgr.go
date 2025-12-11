@@ -44,9 +44,9 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/sema"
 	"github.com/lf-edge/eve/pkg/pillar/sriov"
 	"github.com/lf-edge/eve/pkg/pillar/types"
-	"github.com/lf-edge/eve/pkg/pillar/utils"
 	"github.com/lf-edge/eve/pkg/pillar/utils/cloudconfig"
 	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
+	volumeutils "github.com/lf-edge/eve/pkg/pillar/utils/volume"
 	"github.com/lf-edge/eve/pkg/pillar/utils/wait"
 	zfsutil "github.com/lf-edge/eve/pkg/pillar/utils/zfs"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -1732,7 +1732,7 @@ func doActivate(ctx *domainContext, config types.DomainConfig,
 			}
 		default:
 			// assume everything else to be disk formats
-			format, err := utils.GetVolumeFormat(log, ds.FileLocation)
+			format, err := volumeutils.GetVolumeFormat(log, ds.FileLocation)
 			if err == nil && format != ds.Format {
 				err = fmt.Errorf("Disk format mismatch, format in config %v and output of qemu-img/zfs get %v\n"+
 					"Note: Format mismatch may be because of disk corruption also.",
