@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -67,4 +68,37 @@ func loadKeyFromFile(path string) (*rsa.PrivateKey, error) {
 	}
 
 	return x509.ParsePKCS1PrivateKey(pemBlock.Bytes)
+}
+
+func loadECDSAKeyFromFile(path string) (*ecdsa.PrivateKey, error) {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	pemBlock, _ := pem.Decode(data)
+	if pemBlock == nil {
+		return nil, errors.New("PEM decode failed")
+	}
+
+	switch pemBlock.Type {
+	case "EC PRIVATE KEY":
+		// SEC 1, RFC 5915
+		return x509.ParseECPrivateKey(pemBlock.Bytes)
+
+	case "PRIVATE KEY":
+		// PKCS#8
+		key, err := x509.ParsePKCS8PrivateKey(pemBlock.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		ecKey, ok := key.(*ecdsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("PKCS#8 key is not ECDSA")
+		}
+		return ecKey, nil
+
+	default:
+		return nil, errors.New("unsupported PEM type: " + pemBlock.Type)
+	}
 }

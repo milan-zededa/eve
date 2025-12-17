@@ -58,4 +58,8 @@ RUN chmod +x /usr/local/bin/wpa-event.sh
 COPY --from=scep-builder /build/scep-client/scep-client /usr/local/bin/scep-client
 RUN chmod +x /usr/local/bin/scep-client
 
+# Script for running the SCEP client
+COPY scripts/run-scep-client.sh /usr/local/bin/run-scep-client.sh
+RUN chmod +x /usr/local/bin/run-scep-client.sh
+
 CMD ["/bin/bash"]

@@ -51,6 +51,13 @@ type runCfg struct {
 	logfmt          string
 	caCertMsg       string
 	dnsName         string
+
+	// SCEP proxy
+	proxyURL            string
+	proxyClientCertPath string
+	proxyClientKeyPath  string
+	proxySrvCertPath    string
+	proxyTlsCaCertPath  string
 }
 
 func run(cfg runCfg) error {
@@ -70,9 +77,41 @@ func run(cfg runCfg) error {
 	}
 	lginfo := level.Info(logger)
 
-	client, err := scepclient.New(cfg.serverURL, logger)
-	if err != nil {
-		return err
+	var err error
+	var client scepclient.Client
+	if cfg.proxyURL != "" {
+		proxyClientArgs := scepProxyArgs{
+			logger:       logger,
+			proxyURLStr:  cfg.proxyURL,
+			serverURLStr: cfg.serverURL,
+		}
+		proxyClientArgs.clientCert, err = loadPEMCertFromFile(cfg.proxyClientCertPath)
+		if err != nil {
+			return err
+		}
+		proxyClientArgs.clientKey, err = loadECDSAKeyFromFile(cfg.proxyClientKeyPath)
+		if err != nil {
+			return err
+		}
+		proxyClientArgs.serverCert, err = loadPEMCertFromFile(cfg.proxySrvCertPath)
+		if err != nil {
+			return err
+		}
+		if cfg.proxyTlsCaCertPath != "" {
+			proxyClientArgs.tlsCaCert, err = loadPEMCertFromFile(cfg.proxyTlsCaCertPath)
+			if err != nil {
+				return err
+			}
+		}
+		client, err = newScepProxy(proxyClientArgs)
+		if err != nil {
+			return err
+		}
+	} else {
+		client, err = scepclient.New(cfg.serverURL, logger)
+		if err != nil {
+			return err
+		}
 	}
 
 	key, err := loadOrMakeKey(cfg.keyPath, cfg.keyBits)
@@ -295,6 +334,13 @@ func main() {
 
 		flDebugLogging = flag.Bool("debug", false, "enable debug logging")
 		flLogJSON      = flag.Bool("log-json", false, "use JSON for log output")
+
+		// SCEP proxy
+		flProxyURL            = flag.String("proxy-url", "", "SCEP proxy URL")
+		flProxyClientCertPath = flag.String("proxy-client-cert", "", "proxy client cert path")
+		flProxyClientKeyPath  = flag.String("proxy-client-key", "", "proxy client (ECDSA) key path, used to sign proxied messages")
+		flProxySrvCertPath    = flag.String("proxy-server-certificate", "", "proxy server certificate path, used to verify proxy signature")
+		flProxyTlsCaCertPath  = flag.String("proxy-tls-ca-certificate", "", "proxy TLS CA certificate path, used to trust the HTTPS server run by the proxy")
 	)
 
 	flag.Parse()
@@ -354,6 +400,13 @@ func main() {
 		logfmt:          logfmt,
 		caCertMsg:       *flCACertMessage,
 		dnsName:         *flDNSName,
+
+		// SCEP proxy
+		proxyURL:            *flProxyURL,
+		proxyClientCertPath: *flProxyClientCertPath,
+		proxyClientKeyPath:  *flProxyClientKeyPath,
+		proxySrvCertPath:    *flProxySrvCertPath,
+		proxyTlsCaCertPath:  *flProxyTlsCaCertPath,
 	}
 
 	if err := run(cfg); err != nil {

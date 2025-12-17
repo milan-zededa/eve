@@ -19,6 +19,7 @@ done
 # Common options
 SCEP_OPTS="
   -debug
+  -server-url http://192.168.70.2:2016/scep
   -private-key /etc/certs/pnac-client.key
   -certificate /etc/certs/pnac-client.pem
   -challenge=secret
@@ -27,19 +28,15 @@ SCEP_OPTS="
 if [ "$WITH_PROXY" -eq 1 ]; then
     echo "🔀 Using SCEP proxy"
 
-    # TODO: specify trusted TLS cert also
     SCEP_OPTS="$SCEP_OPTS
-      --proxy-addr https://192.168.60.2/proxy/scep
+      --proxy-url https://192.168.60.2/proxy/scep
+      --proxy-client-cert /etc/certs/proxy-client.pem
       --proxy-client-key /etc/certs/proxy-client.key
       --proxy-server-certificate /etc/certs/proxy-server.pem
-      --proxy-tls-ca-certificate /etc/certs/tls-ca.pem
+      --proxy-tls-ca-certificate /etc/certs/proxy-tls-ca.pem
     "
 else
     echo "➡️  Using direct SCEP server"
-
-    SCEP_OPTS="$SCEP_OPTS
-      -server-url http://192.168.70.2:2016/scep
-    "
 fi
 
 # Run SCEP client
