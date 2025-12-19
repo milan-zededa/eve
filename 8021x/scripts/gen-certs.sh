@@ -114,8 +114,8 @@ PNAC_ALG="RSA"
 
 gen_ca "${PNAC_PREFIX}" "${PNAC_ALG}"
 
-# TODO: Temporary bootstrap cert
-gen_client_cert "${PNAC_PREFIX}" "${PNAC_ALG}" "supplicant.lab.local"
+# Intentionally do not generate client certificate for PNAC.
+# SCEP will be used to enroll the certificate.
 
 gen_server_cert "${PNAC_PREFIX}" "${PNAC_ALG}" \
     "authenticator.lab.local" \
