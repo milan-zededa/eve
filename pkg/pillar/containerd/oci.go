@@ -490,11 +490,11 @@ func (s *ociSpec) UpdateFromDomain(dom *types.DomainConfig, status *types.Domain
 		}
 
 		m := int64(dom.Memory) * 1024
-		p := uint64(100000)
-		q := int64(100000 * dom.VCpus)
+		//p := uint64(100000)
+		//q := int64(100000 * dom.VCpus)
 		s.Linux.Resources.Memory.Limit = &m
-		s.Linux.Resources.CPU.Period = &p
-		s.Linux.Resources.CPU.Quota = &q
+		//s.Linux.Resources.CPU.Period = &p
+		//s.Linux.Resources.CPU.Quota = &q
 		if len(status.VmConfig.CPUs) != 0 {
 			cpusAsString := make([]string, len(status.VmConfig.CPUs))
 			for i, cpu := range status.VmConfig.CPUs {
