@@ -283,21 +283,20 @@ func (c *DhcpcdConfigurator) NeedsRecreate(oldItem, newItem depgraph.Item) (recr
 // DHCP config. The method is exported only for the purpose of unit testing.
 func (c *DhcpcdConfigurator) DhcpcdArgs(config types.DhcpConfig,
 	ignoreDhcpGws bool, routeMetric uint32) (op string, args []string) {
+	commonArgs := []string{"-f", "/etc/dhcpcd.conf", "-b", "-t", "0"}
+	switch config.Type {
+	case types.NetworkTypeIpv4Only:
+		commonArgs = append(commonArgs, "--noipv4ll", "--ipv4only")
+	case types.NetworkTypeIpv6Only:
+		commonArgs = append(commonArgs, "--ipv6only")
+	default:
+		// Default dual-stack behavior.
+		commonArgs = append(commonArgs, "--noipv4ll")
+	}
+
 	switch config.Dhcp {
 	case types.DhcpTypeClient:
 		op = "--request"
-		args = []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "-b", "-t", "0"}
-		switch config.Type {
-		case types.NetworkTypeIpv4Only:
-			args = []string{"-f", "/etc/dhcpcd.conf", "--noipv4ll", "--ipv4only", "-b", "-t", "0"}
-		case types.NetworkTypeIpv6Only:
-			args = []string{"-f", "/etc/dhcpcd.conf", "--ipv6only", "-b", "-t", "0"}
-		case types.NetworkTypeNOOP:
-		case types.NetworkTypeIPv4:
-		case types.NetworkTypeIPV6:
-		case types.NetworkTypeDualStack:
-		default:
-		}
 		if config.Gateway != nil {
 			if config.Gateway.IsUnspecified() {
 				// The legacy approach of setting "0.0.0.0" to disable the default
@@ -320,9 +319,8 @@ func (c *DhcpcdConfigurator) DhcpcdArgs(config types.DhcpConfig,
 	case types.DhcpTypeStatic:
 		op = "--static"
 		args = []string{fmt.Sprintf("ip_address=%s", config.AddrSubnet)}
-		extras := []string{"-f", "/etc/dhcpcd.conf", "-b", "-t", "0"}
 		if config.Gateway == nil || config.Gateway.IsUnspecified() {
-			extras = append(extras, "--nogateway")
+			args = append(args, "--nogateway")
 		} else if config.Gateway.String() != "" {
 			args = append(args, "--static",
 				fmt.Sprintf("routers=%s", config.Gateway.String()))
@@ -351,12 +349,12 @@ func (c *DhcpcdConfigurator) DhcpcdArgs(config types.DhcpConfig,
 				args = append(args, "--static", fmt.Sprintf("ntp_servers=%s", ntpServer))
 			}
 		}
-		args = append(args, extras...)
 	}
 
 	if routeMetric != 0 {
 		args = append(args, "--metric", strconv.Itoa(int(routeMetric)))
 	}
+	args = append(args, commonArgs...)
 	return op, args
 }
 
@@ -369,14 +367,14 @@ func (c *DhcpcdConfigurator) dhcpcdCmd(op string, extras []string,
 		cmd.Stdout = nil
 		cmd.Stderr = nil
 
-		c.Log.Functionf("Background command %s %v", dhcpcdBinary, args)
+		c.Log.Noticef("Background command %s %v", dhcpcdBinary, args)
 		go func() {
 			if err := cmd.Run(); err != nil {
 				c.Log.Errorf("%s %v: failed: %v", dhcpcdBinary, args, err)
 			}
 		}()
 	} else {
-		c.Log.Functionf("Calling command %s %v\n", dhcpcdBinary, args)
+		c.Log.Noticef("Calling command %s %v\n", dhcpcdBinary, args)
 		out, err := base.Exec(c.Log, dhcpcdBinary, args...).CombinedOutput()
 		if err != nil {
 			err = fmt.Errorf("dhcpcd command %s failed: %w; output: %s",
