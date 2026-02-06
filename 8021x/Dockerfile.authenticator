@@ -8,8 +8,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     unzip \
     dnsmasq \
-    ebtables \
     nftables \
+    iptables \
     tcpdump \
     net-tools \
     strace \
