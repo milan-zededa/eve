@@ -114,6 +114,7 @@ func run(cfg runCfg) error {
 		}
 	}
 
+	// The key object must implement crypto.Signer and crypto.Decrypter
 	key, err := loadOrMakeKey(cfg.keyPath, cfg.keyBits)
 	if err != nil {
 		return err
@@ -242,6 +243,12 @@ func run(cfg runCfg) error {
 		return errors.Wrapf(err, "decrypt pkiEnvelope, msgType: %s, status %s", msgType, respMsg.PKIStatus)
 	}
 
+	// To check that the enrolled certificate matches the private key inside TPM:
+	//
+	// tpm2_readpublic -c 0x81000005 -f pem -o tpm_pub.pem
+	// M1=`openssl rsa -pubin -in tpm_pub.pem -noout -modulus`
+	// M2=`openssl x509 -in /etc/certs/pnac-client.pem -noout -modulus`
+	// test $M1 == $M2; echo $?
 	respCert := respMsg.CertRepMessage.Certificate
 	if err := ioutil.WriteFile(cfg.certPath, pemCert(respCert.Raw), 0666); err != nil {
 		return err
@@ -315,7 +322,7 @@ func main() {
 		flServerURL         = flag.String("server-url", "", "SCEP server url")
 		flChallengePassword = flag.String("challenge", "", "enforce a challenge password")
 		flPKeyPath          = flag.String("private-key", "", "private key path, if there is no key, scepclient will create one")
-		flCertPath          = flag.String("certificate", "", "certificate path, if there is no key, scepclient will create one")
+		flCertPath          = flag.String("certificate", "", "certificate path, if there is no cert, scepclient will create one")
 		flKeySize           = flag.Int("keySize", 2048, "rsa key size")
 		flOrg               = flag.String("organization", "scep-client", "organization for cert")
 		flCName             = flag.String("cn", "scepclient", "common name for certificate")

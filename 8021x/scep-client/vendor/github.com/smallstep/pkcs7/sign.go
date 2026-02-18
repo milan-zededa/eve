@@ -191,14 +191,14 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	)
 	hash, err := getHashForOID(sd.digestOid)
 	if err != nil {
-		return err
+		return fmt.Errorf("getHashForOID failed: %w", err)
 	}
 	h := hash.New()
 	h.Write(sd.data)
 	sd.messageDigest = h.Sum(nil)
 	encryptionOid, err := getOIDForEncryptionAlgorithm(pkey, sd.digestOid)
 	if err != nil {
-		return err
+		return fmt.Errorf("getOIDForEncryptionAlgorithm failed: %w", err)
 	}
 	attrs := &attributes{}
 	attrs.Add(OIDAttributeContentType, sd.sd.ContentInfo.ContentType)
@@ -209,7 +209,7 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	}
 	finalAttrs, err := attrs.ForMarshalling()
 	if err != nil {
-		return err
+		return fmt.Errorf("attrs.ForMarshalling failed: %w", err)
 	}
 	unsignedAttrs := &attributes{}
 	for _, attr := range config.ExtraUnsignedAttributes {
@@ -217,12 +217,12 @@ func (sd *SignedData) AddSignerChain(ee *x509.Certificate, pkey crypto.PrivateKe
 	}
 	finalUnsignedAttrs, err := unsignedAttrs.ForMarshalling()
 	if err != nil {
-		return err
+		return fmt.Errorf("unsignedAttrs.ForMarshalling() failed: %w", err)
 	}
 	// create signature of signed attributes
 	signature, err := signAttributes(finalAttrs, pkey, hash)
 	if err != nil {
-		return err
+		return fmt.Errorf("signAttributes failed: %w", err)
 	}
 	signer := signerInfo{
 		AuthenticatedAttributes:   finalAttrs,

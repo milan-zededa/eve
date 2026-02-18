@@ -51,6 +51,8 @@ run-lab: clean
 	docker run -d --rm --name pnac-supplicant \
 		--network bridge \
 		--privileged \
+		--device /dev/tpm0:/dev/tpm0 \
+		--device /dev/tpmrm0:/dev/tpmrm0 \
 		milan-zededa/pnac-supplicant sleep infinity
 
 	PID_SUPP=$$(docker inspect -f '{{.State.Pid}}' pnac-supplicant); \

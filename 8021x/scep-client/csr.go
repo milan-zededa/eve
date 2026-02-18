@@ -1,8 +1,8 @@
 package main
 
 import (
+	"crypto"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -18,8 +18,10 @@ const (
 )
 
 type csrOptions struct {
-	cn, org, country, ou, locality, province, dnsName, challenge string
-	key                                                          *rsa.PrivateKey
+	cn, org, country       string
+	ou, locality, province string
+	dnsName, challenge     string
+	key                    crypto.PrivateKey // key must implement crypto.Signer and crypto.Decrypter !
 }
 
 func loadOrMakeCSR(path string, opts *csrOptions) (*x509.CertificateRequest, error) {
@@ -68,16 +70,6 @@ func subjOrNil(input string) []string {
 		return nil
 	}
 	return []string{input}
-}
-
-// convert DER to PEM format
-func pemCSR(derBytes []byte) []byte {
-	pemBlock := &pem.Block{
-		Type:    csrPEMBlockType,
-		Headers: nil,
-		Bytes:   derBytes,
-	}
-	return pem.EncodeToMemory(pemBlock)
 }
 
 // load PEM encoded CSR from file

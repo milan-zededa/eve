@@ -584,12 +584,12 @@ func NewCSRRequest(csr *x509.CertificateRequest, tmpl *PKIMessage, opts ...Optio
 	}
 	e7, err := pkcs7.Encrypt(derBytes, recipients)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pkcs7.Encrypt failed: %w", err)
 	}
 
 	signedData, err := pkcs7.NewSignedData(e7)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pkcs7.NewSignedData failed: %w", err)
 	}
 
 	// create transaction ID from public key hash
@@ -629,12 +629,12 @@ func NewCSRRequest(csr *x509.CertificateRequest, tmpl *PKIMessage, opts ...Optio
 
 	// sign attributes
 	if err := signedData.AddSigner(tmpl.SignerCert, tmpl.SignerKey, config); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("signedData.AddSigner failed: %w", err)
 	}
 
 	rawPKIMessage, err := signedData.Finish()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("signedData.Finish failed: %w", err)
 	}
 
 	cr := &CSRReqMessage{

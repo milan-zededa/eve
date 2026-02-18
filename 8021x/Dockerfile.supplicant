@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y \
     tcpdump \
     net-tools \
     strace \
+    tpm2-tools \
+    tpm2-openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for certs
@@ -41,6 +43,8 @@ RUN mkdir -p /etc/ssl/certs /etc/ssl/private
 
 # Copy config
 COPY config/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf
+COPY config/wpa_supplicant-pkcs11.conf /etc/wpa_supplicant/wpa_supplicant-pkcs11.conf
+COPY config/openssl.conf /etc/ssl/openssl.cnf
 
 # Certificates
 COPY certs /etc/certs
@@ -63,5 +67,8 @@ RUN chmod +x /usr/local/bin/scep-client
 # Script for running the SCEP client
 COPY scripts/run-scep-client.sh /usr/local/bin/run-scep-client.sh
 RUN chmod +x /usr/local/bin/run-scep-client.sh
+
+# Set the TCTI for the tpm2-openssl provider
+ENV TPM2OPENSSL_TCTI="device:/dev/tpmrm0"
 
 CMD ["/bin/bash"]
