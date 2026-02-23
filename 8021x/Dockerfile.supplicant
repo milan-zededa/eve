@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # =========================
 # Stage 2: Final runtime image
 # =========================
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     wpasupplicant \
@@ -34,8 +34,14 @@ RUN apt-get update && apt-get install -y \
     tcpdump \
     net-tools \
     strace \
+    pkcs11-provider \
     tpm2-tools \
+    libtpm2-pkcs11-tools \
+    libtpm2-pkcs11-1 \
     tpm2-openssl \
+    libengine-pkcs11-openssl \
+    vim \
+    sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for certs
@@ -44,7 +50,6 @@ RUN mkdir -p /etc/ssl/certs /etc/ssl/private
 # Copy config
 COPY config/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf
 COPY config/wpa_supplicant-pkcs11.conf /etc/wpa_supplicant/wpa_supplicant-pkcs11.conf
-COPY config/openssl.conf /etc/ssl/openssl.cnf
 
 # Certificates
 COPY certs /etc/certs
@@ -59,6 +64,8 @@ COPY scripts/wpa-event.sh /usr/local/bin/wpa-event.sh
 RUN chmod +x /usr/local/bin/wpa-event.sh
 COPY scripts/get-ip.sh /usr/local/bin/get-ip.sh
 RUN chmod +x /usr/local/bin/get-ip.sh
+COPY scripts/make-pkcs11-key.sh /usr/local/bin/make-pkcs11-key.sh
+RUN chmod +x /usr/local/bin/make-pkcs11-key.sh
 
 # Install SCEP client
 COPY --from=scep-builder /build/scep-client/scep-client /usr/local/bin/scep-client
@@ -68,7 +75,9 @@ RUN chmod +x /usr/local/bin/scep-client
 COPY scripts/run-scep-client.sh /usr/local/bin/run-scep-client.sh
 RUN chmod +x /usr/local/bin/run-scep-client.sh
 
-# Set the TCTI for the tpm2-openssl provider
 ENV TPM2OPENSSL_TCTI="device:/dev/tpmrm0"
+ENV TPM2TOOLS_TCTI="device:/dev/tpmrm0"
+ENV TPM2_PKCS11_TCTI="device:/dev/tpmrm0"
+ENV PKCS11_MODULE="/usr/lib/x86_64-linux-gnu/pkcs11/libtpm2_pkcs11.so"
 
 CMD ["/bin/bash"]

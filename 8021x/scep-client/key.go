@@ -80,7 +80,7 @@ func (t *TpmPrivateKey) Decrypt(rand io.Reader, msg []byte, opts crypto.Decrypte
 // To check the TPM2 provider for openssl:
 //
 // export TPM2OPENSSL_TCTI="device:/dev/tpm0"
-// openssl list -providers -provider tpm2
+// openssl list -providers
 // openssl rsa -provider tpm2  -in "handle:0x81000005" -pubout
 func loadOrMakeKey(path string, rsaBits int) (crypto.Signer, error) {
 	const tpmHandle = tpmutil.Handle(0x81000005)
