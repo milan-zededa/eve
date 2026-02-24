@@ -32,7 +32,7 @@ func GetHandler(log *base.LogObject) Handler {
 	persistFsType := persist.ReadPersistType()
 	switch persistFsType {
 	case types.PersistZFS:
-		return &ZFSHandler{log: log}
+		return nil // &ZFSHandler{log: log}
 	case types.PersistExt4:
 		return &Ext4Handler{log: log}
 	default:
