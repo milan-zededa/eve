@@ -65,6 +65,7 @@ type NetworkPortStatus struct {
 	MTU              uint16
 	WirelessCfg      WirelessConfig
 	WirelessStatus   WirelessStatus
+	PNAC             PNACStatus
 	ConfigSource     PortConfigSource
 	ProxyConfig
 	L2LinkConfig

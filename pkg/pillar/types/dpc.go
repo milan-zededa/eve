@@ -689,6 +689,7 @@ type NetworkPortConfig struct {
 	ProxyConfig
 	L2LinkConfig
 	WirelessCfg WirelessConfig `json:",omitempty"`
+	PNAC        PNACConfig     `json:",omitempty"`
 	// TestResults - Errors from parsing plus success/failure from testing
 	TestResults
 	IgnoreDhcpNtpServers  bool             `json:",omitempty"` // Ignore NTP servers from DHCP
