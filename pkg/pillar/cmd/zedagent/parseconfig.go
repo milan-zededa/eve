@@ -148,6 +148,7 @@ func parseConfig(getconfigCtx *getconfigContext, config *zconfig.EdgeDevConfig,
 		// DeviceIoList has some defaults for Usage and UsagePolicy
 		// used by systemAdapters
 		physioChanged := parseDeviceIoListConfig(getconfigCtx, config)
+		pnacChanged := parsePNACConfig(getconfigCtx, config)
 		// It is important to parse Bonds before VLANs.
 		bondsChanged := parseBonds(getconfigCtx, config)
 		vlansChanged := parseVlans(getconfigCtx, config)
@@ -155,11 +156,11 @@ func parseConfig(getconfigCtx *getconfigContext, config *zconfig.EdgeDevConfig,
 		networksChanged := parseNetworkXObjectConfig(getconfigCtx, config)
 		sourceChanged := getconfigCtx.lastConfigSource != source
 		// system adapter configuration that we publish, depends
-		// on Physio, VLAN, Bond and Networks configuration.
+		// on Physio, PNAC, VLAN, Bond and Networks configuration.
 		// If any of these change, we should re-parse system adapters and
 		// publish updated configuration.
 		forceSystemAdaptersParse := physioChanged || networksChanged || vlansChanged ||
-			bondsChanged || sourceChanged
+			bondsChanged || sourceChanged || pnacChanged
 		parseSystemAdapterConfig(getconfigCtx, config, source, forceSystemAdaptersParse)
 
 		if source != fromBootstrap {
@@ -1239,7 +1240,8 @@ func propagateError(higherLayerPort, lowerLayerPort *types.NetworkPortConfig) {
 	}
 }
 
-func propagatePhyioAttrsToPort(port *types.NetworkPortConfig, phyio *types.PhysicalIOAdapter) {
+func propagatePhyioAttrsToPort(getconfigCtx *getconfigContext,
+	port *types.NetworkPortConfig, phyio *types.PhysicalIOAdapter) {
 	port.Phylabel = phyio.Phylabel
 	port.IfName = phyio.Phyaddr.Ifname
 	port.USBAddr = phyio.Phyaddr.UsbAddr
@@ -1270,6 +1272,9 @@ func propagatePhyioAttrsToPort(port *types.NetworkPortConfig, phyio *types.Physi
 			handleMissingIfname(port, phyio)
 		}
 	}
+	if pnac := getconfigCtx.pnacs[phyio.Logicallabel]; pnac != nil {
+		port.PNAC = *pnac
+	}
 }
 
 func handleMissingIfname(port *types.NetworkPortConfig, phyio *types.PhysicalIOAdapter) {
@@ -1285,9 +1290,10 @@ func handleMissingIfname(port *types.NetworkPortConfig, phyio *types.PhysicalIOA
 
 // Make NetworkPortConfig entry for PhysicalIO which is below an L2 port.
 // The port configuration will contain only labels and the interface name.
-func makeL2PhyioPort(phyio *types.PhysicalIOAdapter) *types.NetworkPortConfig {
+func makeL2PhyioPort(getconfigCtx *getconfigContext,
+	phyio *types.PhysicalIOAdapter) *types.NetworkPortConfig {
 	phyioPort := &types.NetworkPortConfig{Logicallabel: phyio.Logicallabel}
-	propagatePhyioAttrsToPort(phyioPort, phyio)
+	propagatePhyioAttrsToPort(getconfigCtx, phyioPort, phyio)
 	return phyioPort
 }
 
@@ -1296,7 +1302,8 @@ func makeL2PhyioPort(phyio *types.PhysicalIOAdapter) *types.NetworkPortConfig {
 // Recursively adds port entries for all adapter below this one.
 // The port configuration will contain only labels, the interface name
 // and L2 configuration.
-func makeL2Port(l2Adapter *L2Adapter) (ports []*types.NetworkPortConfig) {
+func makeL2Port(getconfigCtx *getconfigContext,
+	l2Adapter *L2Adapter) (ports []*types.NetworkPortConfig) {
 	ports = append(ports, &types.NetworkPortConfig{
 		IfName:       l2Adapter.config.IfName,
 		Phylabel:     l2Adapter.config.Phylabel,
@@ -1306,10 +1313,10 @@ func makeL2Port(l2Adapter *L2Adapter) (ports []*types.NetworkPortConfig) {
 		TestResults: l2Adapter.config.TestResults,
 	})
 	for _, phyio := range l2Adapter.lowerPhysPorts {
-		ports = append(ports, makeL2PhyioPort(phyio))
+		ports = append(ports, makeL2PhyioPort(getconfigCtx, phyio))
 	}
 	for _, lowerL2 := range l2Adapter.lowerL2Ports {
-		ports = append(ports, makeL2Port(lowerL2)...)
+		ports = append(ports, makeL2Port(getconfigCtx, lowerL2)...)
 	}
 	return ports
 }
@@ -1388,7 +1395,7 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 		phyioFreeUplink = phyio.UsagePolicy.FreeUplink
 		log.Functionf("Found phyio for %s: free %t, oldController: %t",
 			sysAdapter.Name, phyioFreeUplink, oldController)
-		propagatePhyioAttrsToPort(port, phyio)
+		propagatePhyioAttrsToPort(getconfigCtx, port, phyio)
 	} else {
 		// Note that if controller sends VLAN or bond config,
 		// it means that it is new enough to not use FreeUplink anymore.
@@ -1397,10 +1404,10 @@ func parseOneSystemAdapterConfig(getconfigCtx *getconfigContext,
 		propagateError(port, l2Adapter.config)
 		// Add NetworkPortConfig entries for lower-layer adapters.
 		for _, phyio := range l2Adapter.lowerPhysPorts {
-			ports = append(ports, makeL2PhyioPort(phyio))
+			ports = append(ports, makeL2PhyioPort(getconfigCtx, phyio))
 		}
 		for _, lowerL2 := range l2Adapter.lowerL2Ports {
-			ports = append(ports, makeL2Port(lowerL2)...)
+			ports = append(ports, makeL2Port(getconfigCtx, lowerL2)...)
 		}
 	}
 
@@ -1681,6 +1688,58 @@ func parseDeviceIoListConfig(getconfigCtx *getconfigContext,
 	getconfigCtx.pubPhysicalIOAdapters.Publish("zedagent", phyIoAdapterList)
 
 	log.Functionf("parseDeviceIoListConfig: Done")
+	return true
+}
+
+var pnacPrevConfigHash []byte
+
+func parsePNACConfig(getconfigCtx *getconfigContext, config *zconfig.EdgeDevConfig) bool {
+	pnacs := config.GetPnacs()
+	h := sha256.New()
+	for _, pnac := range pnacs {
+		computeConfigElementSha(h, pnac)
+	}
+	configHash := h.Sum(nil)
+	same := bytes.Equal(configHash, pnacPrevConfigHash)
+	if same {
+		return false
+	}
+	pnacPrevConfigHash = configHash
+
+	getconfigCtx.pnacs = make(map[string]*types.PNACConfig)
+	for _, pnac := range config.GetPnacs() {
+		if pnac.GetLogicallabel() == "" {
+			errStr := fmt.Sprintf("PNAC entry missing logical label; "+
+				"ignoring config: %+v", pnac)
+			log.Errorf("parsePNACConfig: %s", errStr)
+			continue
+		}
+
+		// Check that the referenced physical IO exists and is Ethernet NIC.
+		physIO := lookupDeviceIoLogicallabel(getconfigCtx, pnac.GetLogicallabel())
+		if physIO == nil {
+			errStr := fmt.Sprintf(
+				"PNAC logical label %q references a non-existent physical IO; "+
+					"ignoring config", pnac.GetLogicallabel())
+			log.Errorf("parsePNACConfig: %s", errStr)
+			continue
+		}
+
+		physIOType := types.IoType(physIO.Ptype)
+		if physIOType != types.IoNetEth && physIOType != types.IoNetEthPF {
+			errStr := fmt.Sprintf(
+				"PNAC logical label %q references non-Ethernet physical IO (type: %v); "+
+					"ignoring config", pnac.GetLogicallabel(), physIOType)
+			log.Errorf("parsePNACConfig: %s", errStr)
+			continue
+		}
+		getconfigCtx.pnacs[pnac.GetLogicallabel()] = &types.PNACConfig{
+			Enabled:                   true,
+			EAPIdentity:               pnac.GetEapIdentity(),
+			EAPMethod:                 pnac.GetEapMethod(),
+			CertEnrollmentProfileName: pnac.GetCertEnrollmentProfileName(),
+		}
+	}
 	return true
 }
 

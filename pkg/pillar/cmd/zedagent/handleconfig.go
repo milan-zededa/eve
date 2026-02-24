@@ -121,6 +121,9 @@ type getconfigContext struct {
 	pubAppInstanceConfig pubsub.Publication
 	bootOrderUpdateMx    sync.Mutex
 
+	// parsed PNAC configurations
+	pnacs map[string]*types.PNACConfig // key: logical label
+
 	// parsed L2 adapters
 	vlans []L2Adapter
 	bonds []L2Adapter
