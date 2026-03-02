@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
 // MockNetworkMonitor is used for unit testing.
@@ -33,6 +34,7 @@ type MockInterface struct {
 	HwAddr  net.HardwareAddr
 	DNS     []DNSInfo
 	DHCP    DHCPInfo
+	PNAC    types.PNACStatus
 }
 
 // AddOrUpdateInterface : allows to simulate an event of interface being added
@@ -285,6 +287,23 @@ func (m *MockNetworkMonitor) ListRoutes(filters RouteFilters) (rts []Route, err 
 		rts = append(rts, route)
 	}
 	return rts, nil
+}
+
+// GetPNACStatus returns the current PNAC (Port Network Access Control) status
+// for the specified interface.
+func (m *MockNetworkMonitor) GetPNACStatus(ifIndex int) (types.PNACStatus, error) {
+	m.Lock()
+	defer m.Unlock()
+	mockIf, exists := m.interfaces[ifIndex]
+	if !exists {
+		return types.PNACStatus{}, m.ifNotFoundErr(ifIndex)
+	}
+	return mockIf.PNAC, nil
+}
+
+// GetPNACMetrics returns nothing in this mock NetworkMonitor.
+func (m *MockNetworkMonitor) GetPNACMetrics(ifIndex int) (types.PNACMetrics, error) {
+	return types.PNACMetrics{}, nil
 }
 
 // ClearCache does nothing.

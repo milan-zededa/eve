@@ -179,6 +179,8 @@ const (
 	KubeAppFailover LogObjectType = "kube_app_failover"
 	// EvalStatusLogType : type for EvalStatus log entries
 	EvalStatusLogType LogObjectType = "eval_status"
+	// EnrolledCertStatusLogType : type for EnrolledCertificateStatus log entries.
+	EnrolledCertStatusLogType LogObjectType = "enrolled_cert_status"
 )
 
 // RelationObjectType :

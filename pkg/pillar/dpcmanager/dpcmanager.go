@@ -96,20 +96,23 @@ type DpcManager struct {
 	AgentMetrics *controllerconn.AgentMetrics
 
 	// Current configuration
-	dpcList          types.DevicePortConfigList
-	lpsConfig        map[string]*lpsPortConfig // key : port logical label
-	adapters         types.AssignableAdapters
-	globalCfg        types.ConfigItemValueMap
-	hasGlobalCfg     bool
-	rsConfig         types.RadioSilence
-	rsStatus         types.RadioSilence
-	enableLastResort bool
-	devUUID          uuid.UUID
-	flowlogEnabled   bool
-	clusterStatus    types.EdgeNodeClusterStatus
-	airGapMode       bool
-	locURL           string
-	kubeUserServices types.KubeUserServices
+	dpcList               types.DevicePortConfigList
+	lpsConfig             map[string]*lpsPortConfig // key : port logical label
+	adapters              types.AssignableAdapters
+	globalCfg             types.ConfigItemValueMap
+	hasGlobalCfg          bool
+	rsConfig              types.RadioSilence
+	rsStatus              types.RadioSilence
+	enableLastResort      bool
+	devUUID               uuid.UUID
+	flowlogEnabled        bool
+	clusterStatus         types.EdgeNodeClusterStatus
+	airGapMode            bool
+	locURL                string
+	kubeUserServices      types.KubeUserServices
+	vaultIsReady          bool
+	enrolledCerts         []types.EnrolledCertificateStatus
+	dhcpReacquireCounters map[string]int // key: port logical label
 	// Boot-time configuration
 	dpclPresentAtBoot bool
 
@@ -126,8 +129,9 @@ type DpcManager struct {
 	wwanStatus      types.WwanStatus
 
 	// Channels
-	inputCommands chan inputCommand
-	networkEvents <-chan netmonitor.Event
+	inputCommands        chan inputCommand
+	networkEvents        <-chan netmonitor.Event
+	dhcpReacquireSignals chan string // value : port logical label
 
 	// Timers
 	dpcTestTimer          *time.Timer
@@ -140,6 +144,7 @@ type DpcManager struct {
 	geoRedoInterval       time.Duration
 	geoRetryInterval      time.Duration
 	lastPublishedLocInfo  types.WwanLocationInfo
+	dhcpReacquireDelay    time.Duration
 
 	// Netdump
 	netDumper       *netdump.NetDumper // nil if netdump is disabled
@@ -221,20 +226,24 @@ const (
 	commandUpdateClusterStatus
 	commandUpdateLOCUrl
 	commandUpdateKubeUserServices
+	commandUpdateVaultReadiness
+	commandUpdateEnrolledCerts
 )
 
 type inputCommand struct {
 	cmd              command
-	dpc              types.DevicePortConfig      // for commandAddDPC and commandDelDPC
-	gcp              types.ConfigItemValueMap    // for commandUpdateGCP
-	aa               types.AssignableAdapters    // for commandUpdateAA
-	rs               types.RadioSilence          // for commandUpdateRS
-	devUUID          uuid.UUID                   // for commandUpdateDevUUID
-	wwanStatus       types.WwanStatus            // for commandProcessWwanStatus
-	flowlogEnabled   bool                        // for commandUpdateFlowlogState
-	clusterStatus    types.EdgeNodeClusterStatus // for commandUpdateClusterStatus
-	locURL           string                      // for commandUpdateLOCUrl
-	kubeUserServices types.KubeUserServices      // for commandUpdateKubeUserServices
+	dpc              types.DevicePortConfig            // for commandAddDPC and commandDelDPC
+	gcp              types.ConfigItemValueMap          // for commandUpdateGCP
+	aa               types.AssignableAdapters          // for commandUpdateAA
+	rs               types.RadioSilence                // for commandUpdateRS
+	devUUID          uuid.UUID                         // for commandUpdateDevUUID
+	wwanStatus       types.WwanStatus                  // for commandProcessWwanStatus
+	flowlogEnabled   bool                              // for commandUpdateFlowlogState
+	clusterStatus    types.EdgeNodeClusterStatus       // for commandUpdateClusterStatus
+	locURL           string                            // for commandUpdateLOCUrl
+	kubeUserServices types.KubeUserServices            // for commandUpdateKubeUserServices
+	vaultIsReady     bool                              // for commandUpdateVaultReadiness
+	enrolledCerts    []types.EnrolledCertificateStatus // for commandUpdateEnrolledCerts
 }
 
 type dpcVerify struct {
@@ -259,6 +268,8 @@ func (m *DpcManager) Init(ctx context.Context) error {
 	}
 	m.dpcList.CurrentIndex = -1
 	m.lpsConfig = make(map[string]*lpsPortConfig)
+	m.dhcpReacquireSignals = make(chan string)
+	m.dhcpReacquireCounters = make(map[string]int)
 	// We start assuming controller connectivity works
 	m.dpcVerify.controllerConnWorks = true
 
@@ -341,6 +352,10 @@ func (m *DpcManager) run(ctx context.Context) {
 				m.doUpdateLOCUrl(ctx, inputCmd.locURL)
 			case commandUpdateKubeUserServices:
 				m.doUpdateKubeUserServices(ctx, inputCmd.kubeUserServices)
+			case commandUpdateVaultReadiness:
+				m.doUpdateVaultReadiness(ctx, inputCmd.vaultIsReady)
+			case commandUpdateEnrolledCerts:
+				m.doUpdateEnrolledCerts(ctx, inputCmd.enrolledCerts)
 			}
 			m.resumeVerifyIfAsyncDone(ctx)
 
@@ -470,7 +485,14 @@ func (m *DpcManager) run(ctx context.Context) {
 				m.updateDNS()
 			case netmonitor.DNSInfoChange:
 				m.updateDNS()
+			case netmonitor.PNACEvent:
+				m.processPNACEvent(ev)
 			}
+
+		case portLL := <-m.dhcpReacquireSignals:
+			m.dhcpReacquireCounters[portLL]++
+			m.reconcileStatus = m.DpcReconciler.Reconcile(ctx, m.reconcilerArgs())
+			m.resumeVerifyIfAsyncDone(ctx)
 
 		case <-ctx.Done():
 			return
@@ -484,17 +506,49 @@ func (m *DpcManager) run(ctx context.Context) {
 
 func (m *DpcManager) reconcilerArgs() dpcreconciler.Args {
 	args := dpcreconciler.Args{
-		GCP:              m.globalCfg,
-		AA:               m.adapters,
-		RS:               m.rsConfig,
-		FlowlogEnabled:   m.flowlogEnabled,
-		ClusterStatus:    m.clusterStatus,
-		KubeUserServices: m.kubeUserServices,
+		GCP:                   m.globalCfg,
+		AA:                    m.adapters,
+		RS:                    m.rsConfig,
+		FlowlogEnabled:        m.flowlogEnabled,
+		ClusterStatus:         m.clusterStatus,
+		KubeUserServices:      m.kubeUserServices,
+		VaultReady:            m.vaultIsReady,
+		EnrolledCerts:         m.enrolledCerts,
+		DHCPReacquireCounters: m.dhcpReacquireCounters,
 	}
 	if dpc, haveDPC := m.getCurrentDPC(); haveDPC {
 		args.DPC = dpc
 	}
 	return args
+}
+
+// processPNACEvent handles PNAC (802.1X) port authentication state changes.
+// When the port's authentication state changes, the network switch may
+// reassign it to a different access VLAN. In that case, the DHCP client
+// must reacquire its lease to get a new IP address appropriate for the
+// new VLAN. This is skipped if DHCP reacquire is disabled (dhcpReacquireDelay == 0).
+func (m *DpcManager) processPNACEvent(event netmonitor.PNACEvent) {
+	// Publish new PNAC state.
+	m.updateDNS()
+	if m.dhcpReacquireDelay == 0 {
+		return
+	}
+	// Force DHCP lease reacquisition unless disabled.
+	dpc, haveDPC := m.getCurrentDPC()
+	if !haveDPC {
+		return
+	}
+	portConfig := dpc.LookupPortByIfName(event.IfName)
+	if portConfig == nil || portConfig.Dhcp != types.DhcpTypeClient {
+		return
+	}
+	portLL := portConfig.Logicallabel
+	go func() {
+		m.Log.Noticef("Will force DHCP lease reacquisition for port %q after %v",
+			portLL, m.dhcpReacquireDelay)
+		<-time.After(m.dhcpReacquireDelay)
+		m.dhcpReacquireSignals <- portLL
+	}()
 }
 
 // AddDPC : add a new DPC into the list of configurations to work with.
@@ -593,6 +647,22 @@ func (m *DpcManager) UpdateKubeUserServices(services types.KubeUserServices) {
 	}
 }
 
+// UpdateVaultReadiness notifies DpcManager about a change in Vault readiness.
+func (m *DpcManager) UpdateVaultReadiness(isReady bool) {
+	m.inputCommands <- inputCommand{
+		cmd:          commandUpdateVaultReadiness,
+		vaultIsReady: isReady,
+	}
+}
+
+// UpdateEnrolledCerts : apply an updated set of SCEP-enrolled certificates.
+func (m *DpcManager) UpdateEnrolledCerts(certs []types.EnrolledCertificateStatus) {
+	m.inputCommands <- inputCommand{
+		cmd:           commandUpdateEnrolledCerts,
+		enrolledCerts: certs,
+	}
+}
+
 // GetDNS returns device network state information.
 func (m *DpcManager) GetDNS() types.DeviceNetworkStatus {
 	return m.deviceNetStatus
@@ -618,6 +688,8 @@ func (m *DpcManager) doUpdateGCP(ctx context.Context, gcp types.ConfigItemValueM
 
 	airGapModeState := m.globalCfg.GlobalValueTriState(types.AirGapMode)
 	m.airGapMode = airGapModeState == types.TS_ENABLED
+	m.dhcpReacquireDelay = time.Second *
+		time.Duration(m.globalCfg.GlobalValueInt(types.PnacDHCPReacquireDelay))
 
 	if m.dpcTestInterval != testInterval {
 		if testInterval == 0 {
@@ -775,4 +847,27 @@ func (m *DpcManager) doUpdateKubeUserServices(ctx context.Context,
 	services types.KubeUserServices) {
 	m.kubeUserServices = services
 	m.reconcileStatus = m.DpcReconciler.Reconcile(ctx, m.reconcilerArgs())
+}
+
+func (m *DpcManager) doUpdateVaultReadiness(ctx context.Context, isReady bool) {
+	m.vaultIsReady = isReady
+	m.reconcileStatus = m.DpcReconciler.Reconcile(ctx, m.reconcilerArgs())
+}
+
+func (m *DpcManager) doUpdateEnrolledCerts(ctx context.Context,
+	certs []types.EnrolledCertificateStatus) {
+	m.enrolledCerts = certs
+	m.reconcileStatus = m.DpcReconciler.Reconcile(ctx, m.reconcilerArgs())
+	// Update reported PNAC status.
+	m.updateDNS()
+}
+
+func (m *DpcManager) getEnrolledCertStatus(
+	profileName string) (cert *types.EnrolledCertificateStatus) {
+	for _, enrolledCert := range m.enrolledCerts {
+		if enrolledCert.CertEnrollmentProfileName == profileName {
+			return &enrolledCert
+		}
+	}
+	return nil
 }

@@ -48,6 +48,15 @@ type ProcessManager struct {
 	// Watchdog is an optional pointer to a WatchdogKicker.
 	// If set, Kick() will be called periodically during waits.
 	Watchdog *WatchdogKicker
+
+	// LogOutput enables capturing of the child process stdout and stderr
+	// and forwarding them to the ProcessManager logger.
+	// Supported only when WillFork is false (i.e. the process does not daemonize).
+	LogOutput bool
+
+	pid          int
+	stdoutLogger *processLogger
+	stderrLogger *processLogger
 }
 
 // Start launches the process, optionally allowing the process to fork itself
@@ -76,12 +85,19 @@ func (pm *ProcessManager) Start(ctx context.Context) error {
 			return err
 		}
 	} else {
+		if pm.LogOutput {
+			pm.stdoutLogger = newProcessLogger(pm.Log.Functionf, pm.Cmd)
+			pm.stderrLogger = newProcessLogger(pm.Log.Errorf, pm.Cmd)
+			execCmd.Stdout = pm.stdoutLogger
+			execCmd.Stderr = pm.stderrLogger
+		}
 		if err := execCmd.Start(); err != nil {
 			err = fmt.Errorf("failed to start command %s (args: %v; PID: %s): %w",
 				pm.Cmd, pm.Args, pm.getPidOfExitedCmd(execCmd), err)
 			pm.Log.Error(err)
 			return err
 		}
+		pm.pid = execCmd.Process.Pid
 	}
 
 	// Wait for the process to appear alive.
@@ -121,12 +137,25 @@ func (pm *ProcessManager) Stop(ctx context.Context) error {
 		pm.Watchdog.Kick()
 		time.Sleep(500 * time.Millisecond)
 	}
+
+	if pm.stdoutLogger != nil {
+		pm.stdoutLogger.Flush()
+	}
+	if pm.stderrLogger != nil {
+		pm.stderrLogger.Flush()
+	}
 	return nil
 }
 
 // PID returns the numeric PID of the managed process by reading the PID file.
 func (pm *ProcessManager) PID() (int, error) {
-	return GetPidFromFile(pm.PidFile)
+	if pm.pid != 0 {
+		return pm.pid, nil
+	}
+	if pm.PidFile != "" {
+		return GetPidFromFile(pm.PidFile)
+	}
+	return 0, errors.New("PID is not available")
 }
 
 // IsRunning checks if the process exists and is alive.

@@ -202,7 +202,8 @@ func dhcpcdArgs(ifName string) string {
 	}
 	configurator := generic.DhcpcdConfigurator{Log: logObj}
 	op, args := configurator.DhcpcdArgs(
-		dhcpcd.DhcpConfig, dhcpcd.IgnoreDhcpGateways, dhcpcd.RouteMetric)
+		dhcpcd.DhcpConfig, dhcpcd.IgnoreDhcpGateways, dhcpcd.RouteMetric,
+		dhcpcd.EnableVendorClassID)
 	return fmt.Sprintf("%s %s", op, strings.Join(args, " "))
 }
 
