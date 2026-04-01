@@ -177,10 +177,8 @@ func publishKubeClusterInfo(ctx *zedagentContext, dest destinationBitset) {
 		return
 	}
 	cfgItems := ctx.pubEdgeNodeClusterConfig.GetAll()
-	clusterCfg, ok := cfgItems["global"].(types.EdgeNodeClusterConfig)
-	if !ok {
-		return
-	}
+	var clusterCfg types.EdgeNodeClusterConfig
+	clusterCfg, _ = cfgItems["global"].(types.EdgeNodeClusterConfig)
 
 	// Setup Container
 	var infoMsg = &info.ZInfoMsg{}
