@@ -4,6 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/lf-edge/eve-libs/depgraph"
 	api "github.com/lf-edge/eve/evetest/grpcapi/go"
 	"github.com/lf-edge/eve/evetest/sdn/vm/pkg/maclookup"
@@ -11,7 +17,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 	"google.golang.org/protobuf/proto"
-	"net"
 )
 
 // Bond : Bond interface.
@@ -169,6 +174,14 @@ func (c *BondConfigurator) aggregateInterface(bond *netlink.Bond,
 		log.Error(err)
 		return err
 	}
+	// virtio-net reports unknown speed and duplex. The 802.3ad (LACP) bonding
+	// driver requires known speed to send LACPDUs. Set a default speed/duplex
+	// on virtio-net interfaces so that LACP can operate.
+	if bond.Mode == netlink.BOND_MODE_802_3AD && isVirtioNet(netIf.IfName) {
+		if err := setDefaultLinkSpeed(netIf.IfName); err != nil {
+			log.Warnf("Failed to set default speed on %s: %v", netIf.IfName, err)
+		}
+	}
 	aggrLink, err := netlink.LinkByName(netIf.IfName)
 	if err != nil {
 		return err
@@ -187,6 +200,22 @@ func (c *BondConfigurator) aggregateInterface(bond *netlink.Bond,
 		return err
 	}
 	return nil
+}
+
+// isVirtioNet returns true if the given interface is backed by the virtio_net driver.
+func isVirtioNet(ifName string) bool {
+	driverPath, err := os.Readlink(filepath.Join("/sys/class/net", ifName, "device/driver"))
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(driverPath, "/virtio_net")
+}
+
+// setDefaultLinkSpeed sets speed to 1000Mbps full-duplex on the given interface
+// using ethtool. This is needed for virtio-net which reports unknown speed/duplex.
+func setDefaultLinkSpeed(ifName string) error {
+	return exec.Command("ethtool", "-s", ifName,
+		"speed", "1000", "duplex", "full").Run()
 }
 
 func (c *BondConfigurator) disaggregateInterface(aggrIfMAC net.HardwareAddr) error {
