@@ -6,6 +6,11 @@ package linuxitems
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
 	"github.com/vishvananda/netlink"
 
 	"github.com/lf-edge/eve-libs/depgraph"
@@ -177,6 +182,16 @@ func (c *BondConfigurator) aggregateInterface(bond *netlink.Bond, ifName string)
 	if err != nil {
 		return err
 	}
+	// Workaround for virtualized environments (e.g. testing with QEMU/virtio-net):
+	// virtio-net reports unknown speed and duplex. The 802.3ad (LACP) implementation
+	// in the bonding driver requires known speed to function — without it, the LACP
+	// state machine will not send LACPDUs. Set a default speed/duplex on virtio-net
+	// interfaces so that LACP can operate.
+	if bond.Mode == netlink.BOND_MODE_802_3AD && isVirtioNet(ifName) {
+		if err := setDefaultLinkSpeed(ifName); err != nil {
+			c.Log.Warnf("Failed to set default speed on %s: %v", ifName, err)
+		}
+	}
 	// Interface must be down before it can be put under a bond.
 	err = netlink.LinkSetDown(aggrLink)
 	if err != nil {
@@ -208,6 +223,22 @@ func isFailoverBondMode(mode types.BondMode) bool {
 	default:
 		return false
 	}
+}
+
+// isVirtioNet returns true if the given interface is backed by the virtio_net driver.
+func isVirtioNet(ifName string) bool {
+	driverPath, err := os.Readlink(filepath.Join("/sys/class/net", ifName, "device/driver"))
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(driverPath, "/virtio_net")
+}
+
+// setDefaultLinkSpeed sets speed to 1000Mbps full-duplex on the given interface
+// using ethtool. This is needed for virtio-net which reports unknown speed/duplex.
+func setDefaultLinkSpeed(ifName string) error {
+	return exec.Command("ethtool", "-s", ifName,
+		"speed", "1000", "duplex", "full").Run()
 }
 
 func (c *BondConfigurator) disaggregateInterface(aggrIfName string) error {
