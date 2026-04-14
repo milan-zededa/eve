@@ -58,6 +58,14 @@ type NetworkMonitor interface {
 	// GetPNACMetrics returns IEEE 802.1X PNAC (Port-Based Network Access Control)
 	// metrics for the specified interface.
 	GetPNACMetrics(ifIndex int) (types.PNACMetrics, error)
+	// GetBondStatus : retrieve runtime status of a bond interface.
+	// Returns an error if the interface is not a bond or does not exist.
+	GetBondStatus(ifIndex int) (BondStatus, error)
+	// GetBondMetrics : retrieve metrics for a bond interface and its slaves.
+	// Returns an error if the interface is not a bond or does not exist.
+	// Note: BondMetrics.LogicalLabel and BondSlaveMetrics.LogicalLabel are
+	// returned unset (NetworkMonitor does not work with logical labels).
+	GetBondMetrics(ifIndex int) (types.BondMetrics, error)
 	// ClearCache : clear cached mappings between interface names, interface indexes,
 	// attributes, assigned addresses, DNS info, DHCP info and default GWs.
 	// It is reasonable to do this once in a while because the monitor can miss some
@@ -220,3 +228,59 @@ type PNACEvent struct {
 }
 
 func (e PNACEvent) isNetworkEvent() {}
+
+// BondStatus : runtime status of a bond interface as reported by the kernel.
+type BondStatus struct {
+	// Mode is the bonding mode as reported by the kernel.
+	Mode types.BondMode
+	// ActiveSlaveIfIndex is the ifindex of the currently active slave.
+	// Applicable for active-backup, balance-tlb and balance-alb modes.
+	// Zero if there is no active slave.
+	ActiveSlaveIfIndex int
+	// Monitoring parameters.
+	Miimon                uint32
+	UpDelay               uint32
+	DownDelay             uint32
+	ArpInterval           uint32
+	ArpIPTargets          []net.IP
+	PeerNotificationDelay uint32
+	ArpMissedMax          uint32
+	// LACPInfo contains 802.3ad aggregator info.
+	// Only set when bond mode is 802.3ad.
+	LACPInfo *BondLACPInfo
+	// Slaves contains per-slave status.
+	Slaves []BondSlaveStatus
+}
+
+// BondSlaveStatus : per-slave status within a bond.
+type BondSlaveStatus struct {
+	// IfIndex of the slave interface.
+	IfIndex int
+	// MIIUp indicates whether the slave's MII link is up.
+	MIIUp bool
+	// AggregatorID the slave belongs to (802.3ad only).
+	AggregatorID uint16
+	// ActorChurnState (802.3ad only).
+	ActorChurnState types.BondLACPChurnState
+	// PartnerChurnState (802.3ad only).
+	PartnerChurnState types.BondLACPChurnState
+}
+
+// BondLACPInfo : 802.3ad aggregator info for a bond.
+type BondLACPInfo struct {
+	AggregatorID uint16
+	ActorKey     uint16
+	PartnerKey   uint16
+	PartnerMAC   net.HardwareAddr
+}
+
+// BondActiveSlaveChange : the active slave of a bond has changed.
+type BondActiveSlaveChange struct {
+	// BondIfIndex is the ifindex of the bond master interface.
+	BondIfIndex int
+	// ActiveSlaveIfIndex is the ifindex of the new active slave.
+	// Zero if there is no active slave.
+	ActiveSlaveIfIndex int
+}
+
+func (e BondActiveSlaveChange) isNetworkEvent() {}

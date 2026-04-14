@@ -645,6 +645,9 @@ func publishMetrics(ctx *zedagentContext, iteration int) {
 	// Report PNAC metrics.
 	addPNACMetrics(ctx, ReportDeviceMetric)
 
+	// Report bond metrics.
+	addBondMetrics(ctx, ReportDeviceMetric)
+
 	ReportMetrics.MetricContent = new(metrics.ZMetricMsg_Dm)
 	if x, ok := ReportMetrics.GetMetricContent().(*metrics.ZMetricMsg_Dm); ok {
 		x.Dm = ReportDeviceMetric
@@ -2019,5 +2022,35 @@ func addPNACMetrics(ctx *zedagentContext, reportDevMetrics *metrics.DeviceMetric
 				InvalidEapolFramesRx:   pnacMetrics.EAPOLInvalidFramesRx,
 				EapLengthErrorFramesRx: pnacMetrics.EAPLengthErrorFramesRx,
 			})
+	}
+}
+
+func addBondMetrics(ctx *zedagentContext, reportDevMetrics *metrics.DeviceMetric) {
+	metricsListObj, err := ctx.subBondMetricsList.Get("global")
+	if err != nil {
+		return
+	}
+	metricsList, ok := metricsListObj.(types.BondMetricsList)
+	if !ok {
+		return
+	}
+	for _, bond := range metricsList.Bonds {
+		pbBond := &metrics.BondMetrics{
+			Logicallabel: bond.LogicalLabel,
+		}
+		for _, slave := range bond.Slaves {
+			pbSlave := &metrics.BondSlaveMetrics{
+				Logicallabel:     slave.LogicalLabel,
+				LinkFailureCount: slave.LinkFailureCount,
+			}
+			if slave.LACP != nil {
+				pbSlave.Lacp = &metrics.BondSlaveLACPMetrics{
+					ActorChurnedCount:   slave.LACP.ActorChurnedCount,
+					PartnerChurnedCount: slave.LACP.PartnerChurnedCount,
+				}
+			}
+			pbBond.Slaves = append(pbBond.Slaves, pbSlave)
+		}
+		reportDevMetrics.BondMetrics = append(reportDevMetrics.BondMetrics, pbBond)
 	}
 }

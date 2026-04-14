@@ -494,6 +494,265 @@ func (m *LinuxNetworkMonitor) GetInterfaceDefaultGWs(ifIndex int) (gws []net.IP,
 	return gws, nil
 }
 
+// GetBondStatus retrieves the runtime status of a bond interface.
+func (m *LinuxNetworkMonitor) GetBondStatus(ifIndex int) (BondStatus, error) {
+	link, err := netlink.LinkByIndex(ifIndex)
+	if err != nil {
+		return BondStatus{}, fmt.Errorf("failed to get link for ifindex %d: %w", ifIndex, err)
+	}
+	bond, ok := link.(*netlink.Bond)
+	if !ok {
+		return BondStatus{}, fmt.Errorf("interface %s (ifindex %d) is not a bond",
+			link.Attrs().Name, ifIndex)
+	}
+	status := BondStatus{
+		// netlink.BondMode values match types.BondMode numerically.
+		// netlink is 0-based, types is 1-based (0=Unspecified)
+		Mode:         types.BondMode(bond.Mode + 1),
+		Miimon:       uint32(bond.Miimon),
+		UpDelay:      uint32(bond.UpDelay),
+		DownDelay:    uint32(bond.DownDelay),
+		ArpInterval:  uint32(bond.ArpInterval),
+		ArpIPTargets: bond.ArpIpTargets,
+	}
+	if bond.ActiveSlave > 0 {
+		status.ActiveSlaveIfIndex = bond.ActiveSlave
+	}
+	// Parse /proc/net/bonding/<name> for fields not available via netlink:
+	// - LACP aggregator info (IFLA_BOND_AD_INFO is not implemented in the netlink library)
+	// - Per-slave LACP churn state (not exposed via netlink at all)
+	// - Per-slave aggregator ID (available via netlink but we parse it together)
+	// - Peer notification delay and ARP missed max (newer kernel attributes
+	//   not present in the vendored netlink library)
+	procInfo, err := parseProcBondInfo(bond.Attrs().Name)
+	if err != nil {
+		m.Log.Warnf("GetBondStatus: failed to parse /proc for %s: %v",
+			bond.Attrs().Name, err)
+	} else {
+		status.PeerNotificationDelay = procInfo.peerNotificationDelay
+		status.ArpMissedMax = procInfo.arpMissedMax
+		if bond.Mode == netlink.BOND_MODE_802_3AD {
+			status.LACPInfo = procInfo.lacpInfo
+		}
+		for _, slave := range procInfo.slaves {
+			slaveIfIndex, exists, err := m.GetInterfaceIndex(slave.ifName)
+			if err != nil || !exists {
+				continue
+			}
+			status.Slaves = append(status.Slaves, BondSlaveStatus{
+				IfIndex:           slaveIfIndex,
+				MIIUp:             slave.miiUp,
+				AggregatorID:      slave.aggregatorID,
+				ActorChurnState:   slave.actorChurnState,
+				PartnerChurnState: slave.partnerChurnState,
+			})
+		}
+	}
+	return status, nil
+}
+
+// procBondInfo contains parsed data from /proc/net/bonding/<name>.
+type procBondInfo struct {
+	lacpInfo              *BondLACPInfo
+	slaves                []procBondSlaveInfo
+	peerNotificationDelay uint32
+	arpMissedMax          uint32
+}
+
+type procBondSlaveInfo struct {
+	ifName            string
+	miiUp             bool
+	aggregatorID      uint16
+	actorChurnState   types.BondLACPChurnState
+	partnerChurnState types.BondLACPChurnState
+}
+
+// parseProcBondInfo parses /proc/net/bonding/<name> for bond-level LACP info
+// and per-slave status (aggregator ID, churn states).
+func parseProcBondInfo(bondName string) (procBondInfo, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/net/bonding/%s", bondName))
+	if err != nil {
+		return procBondInfo{}, err
+	}
+	var info procBondInfo
+	info.lacpInfo = &BondLACPInfo{}
+	var currentSlave *procBondSlaveInfo
+	inActiveAggregator := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Active Aggregator Info") {
+			inActiveAggregator = true
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		switch key {
+		case "Slave Interface":
+			info.slaves = append(info.slaves, procBondSlaveInfo{ifName: val})
+			currentSlave = &info.slaves[len(info.slaves)-1]
+			inActiveAggregator = false
+		case "MII Status":
+			if currentSlave != nil {
+				currentSlave.miiUp = (val == "up")
+			}
+		case "Aggregator ID":
+			id, _ := strconv.ParseUint(val, 10, 16)
+			if currentSlave != nil && !inActiveAggregator {
+				currentSlave.aggregatorID = uint16(id)
+			} else if inActiveAggregator {
+				info.lacpInfo.AggregatorID = uint16(id)
+			}
+		case "Actor Key":
+			if inActiveAggregator {
+				key, _ := strconv.ParseUint(val, 10, 16)
+				info.lacpInfo.ActorKey = uint16(key)
+			}
+		case "Partner Key":
+			if inActiveAggregator {
+				key, _ := strconv.ParseUint(val, 10, 16)
+				info.lacpInfo.PartnerKey = uint16(key)
+			}
+		case "Partner Mac Address":
+			if inActiveAggregator {
+				info.lacpInfo.PartnerMAC, _ = net.ParseMAC(val)
+			}
+		case "Actor Churn State":
+			if currentSlave != nil {
+				currentSlave.actorChurnState = parseChurnState(val)
+			}
+		case "Partner Churn State":
+			if currentSlave != nil {
+				currentSlave.partnerChurnState = parseChurnState(val)
+			}
+		case "Peer Notification Delay (ms)":
+			v, _ := strconv.ParseUint(val, 10, 32)
+			info.peerNotificationDelay = uint32(v)
+		case "ARP Missed Max":
+			v, _ := strconv.ParseUint(val, 10, 32)
+			info.arpMissedMax = uint32(v)
+		}
+	}
+	return info, nil
+}
+
+// GetBondMetrics retrieves metrics for a bond interface and its slaves.
+func (m *LinuxNetworkMonitor) GetBondMetrics(ifIndex int) (types.BondMetrics, error) {
+	link, err := netlink.LinkByIndex(ifIndex)
+	if err != nil {
+		return types.BondMetrics{}, fmt.Errorf(
+			"failed to get link for ifindex %d: %w", ifIndex, err)
+	}
+	bond, ok := link.(*netlink.Bond)
+	if !ok {
+		return types.BondMetrics{}, fmt.Errorf(
+			"interface %s (ifindex %d) is not a bond", link.Attrs().Name, ifIndex)
+	}
+	isLACP := bond.Mode == netlink.BOND_MODE_802_3AD
+
+	// Parse /proc/net/bonding/<name> for LACP counters (not available via netlink).
+	var procSlaves map[string]procBondSlaveMetrics
+	if isLACP {
+		procSlaves, err = parseProcBondSlaveMetrics(bond.Attrs().Name)
+		if err != nil {
+			m.Log.Warnf("GetBondMetrics: failed to parse /proc for %s: %v",
+				bond.Attrs().Name, err)
+		}
+	}
+
+	// Get per-slave metrics via netlink (link failure count) and /proc (LACP counters).
+	var bondMetrics types.BondMetrics
+	links, err := netlink.LinkList()
+	if err != nil {
+		return types.BondMetrics{}, fmt.Errorf("failed to list links: %w", err)
+	}
+	for _, l := range links {
+		if l.Attrs().MasterIndex != ifIndex {
+			continue
+		}
+		slaveInfo := l.Attrs().Slave
+		if slaveInfo == nil {
+			continue
+		}
+		bondSlave, ok := slaveInfo.(*netlink.BondSlave)
+		if !ok {
+			continue
+		}
+		slaveMetrics := types.BondSlaveMetrics{
+			IfName:           l.Attrs().Name,
+			LinkFailureCount: uint64(bondSlave.LinkFailureCount),
+		}
+		if isLACP {
+			if ps, found := procSlaves[l.Attrs().Name]; found {
+				slaveMetrics.LACP = &types.BondSlaveLACPMetrics{
+					ActorChurnedCount:   ps.actorChurnedCount,
+					PartnerChurnedCount: ps.partnerChurnedCount,
+				}
+			}
+		}
+		bondMetrics.Slaves = append(bondMetrics.Slaves, slaveMetrics)
+	}
+	return bondMetrics, nil
+}
+
+type procBondSlaveMetrics struct {
+	actorChurnedCount   uint64
+	partnerChurnedCount uint64
+}
+
+// parseProcBondSlaveMetrics parses /proc/net/bonding/<name> for per-slave
+// LACP counters not available via netlink.
+func parseProcBondSlaveMetrics(bondName string) (map[string]procBondSlaveMetrics, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/net/bonding/%s", bondName))
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]procBondSlaveMetrics)
+	var currentIfName string
+	var current procBondSlaveMetrics
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		switch key {
+		case "Slave Interface":
+			if currentIfName != "" {
+				result[currentIfName] = current
+			}
+			currentIfName = val
+			current = procBondSlaveMetrics{}
+		case "Actor Churned Count":
+			current.actorChurnedCount, _ = strconv.ParseUint(val, 10, 64)
+		case "Partner Churned Count":
+			current.partnerChurnedCount, _ = strconv.ParseUint(val, 10, 64)
+		}
+	}
+	if currentIfName != "" {
+		result[currentIfName] = current
+	}
+	return result, nil
+}
+
+func parseChurnState(s string) types.BondLACPChurnState {
+	switch s {
+	case "none":
+		return types.BondLACPChurnNone
+	case "monitoring":
+		return types.BondLACPChurnMonitoring
+	case "churned":
+		return types.BondLACPChurnChurned
+	default:
+		return types.BondLACPChurnNone
+	}
+}
+
 // ListRoutes returns routes currently present in the routing tables.
 // The set of routes to list can be filtered.
 // ListRoutes is not backed by the cache.
@@ -785,6 +1044,8 @@ func (m *LinuxNetworkMonitor) watcher() {
 	// Remember previously published IfChange notifications to avoid
 	// spurious events.
 	lastIfChange := make(map[int]IfChange)
+	// Track active slave per bond for BondActiveSlaveChange events.
+	lastActiveSlave := make(map[int]int) // bond ifindex -> active slave ifindex
 
 	for {
 		select {
@@ -824,6 +1085,21 @@ func (m *LinuxNetworkMonitor) watcher() {
 			}
 			m.cacheLock.Unlock()
 			m.publishEvent(event)
+
+			// Detect bond active slave changes from RTM_NEWLINK updates.
+			if bond, isBond := linkUpdate.Link.(*netlink.Bond); isBond {
+				activeSlave := bond.ActiveSlave
+				prev, known := lastActiveSlave[ifIndex]
+				if !known || prev != activeSlave {
+					lastActiveSlave[ifIndex] = activeSlave
+					if known {
+						m.publishEvent(BondActiveSlaveChange{
+							BondIfIndex:        ifIndex,
+							ActiveSlaveIfIndex: activeSlave,
+						})
+					}
+				}
+			}
 
 		case addrUpdate, ok := <-addrChan:
 			if !ok {

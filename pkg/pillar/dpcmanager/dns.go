@@ -79,6 +79,10 @@ func (m *DpcManager) updateDNS() {
 		if lpsConfigErr != nil {
 			m.deviceNetStatus.Ports[ix].LpsConfigError = lpsConfigErr.Error()
 		}
+		// If this is a bond port, add runtime bond status.
+		if port.L2Type == types.L2LinkTypeBond {
+			m.getBondStatus(&m.deviceNetStatus.Ports[ix], port, dpc)
+		}
 		// If this is a cellular network connectivity, add status information
 		// obtained from the wwan service.
 		m.deviceNetStatus.Ports[ix].WirelessStatus.WType = port.WirelessCfg.WType
@@ -436,4 +440,148 @@ func (m *DpcManager) getPNACStatus(portStatus *types.NetworkPortStatus,
 	if errMsg != "" {
 		portStatus.RecordFailure(errMsg)
 	}
+}
+
+func (m *DpcManager) getBondStatus(
+	portStatus *types.NetworkPortStatus,
+	portConfig types.NetworkPortConfig,
+	dpc types.DevicePortConfig) {
+
+	bondIfIndex, err := m.getBondIfIndex(portConfig.IfName)
+	if err != nil {
+		return
+	}
+	bondStatus, err := m.NetworkMonitor.GetBondStatus(bondIfIndex)
+	if err != nil {
+		m.Log.Warnf("getBondStatus: failed to get bond status for %s: %v",
+			portConfig.IfName, err)
+		return
+	}
+
+	portStatus.BondStatus.Mode = bondStatus.Mode
+
+	// Active slave: resolve ifindex to logical label.
+	if bondStatus.ActiveSlaveIfIndex > 0 {
+		slaveAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(bondStatus.ActiveSlaveIfIndex)
+		if err == nil {
+			if slavePort := dpc.LookupPortByIfName(slaveAttrs.IfName); slavePort != nil {
+				portStatus.BondStatus.ActiveSlave = slavePort.Logicallabel
+			}
+		}
+	}
+
+	// MII monitoring.
+	if bondStatus.Miimon > 0 {
+		portStatus.BondStatus.MIIMonitor = types.BondMIIMonitorStatus{
+			Enabled:         true,
+			PollingInterval: bondStatus.Miimon,
+			UpDelay:         bondStatus.UpDelay,
+			DownDelay:       bondStatus.DownDelay,
+		}
+	}
+
+	// ARP monitoring.
+	if bondStatus.ArpInterval > 0 {
+		portStatus.BondStatus.ARPMonitor = types.BondARPMonitorStatus{
+			Enabled:         true,
+			PollingInterval: bondStatus.ArpInterval,
+			IPTargets:       bondStatus.ArpIPTargets,
+			MissedMax:       bondStatus.ArpMissedMax,
+		}
+	}
+
+	// LACP status.
+	isLACP := bondStatus.LACPInfo != nil
+	if isLACP {
+		portStatus.BondStatus.LACP = types.BondLACPStatus{
+			Enabled:            true,
+			LACPRate:           portConfig.Bond.LacpRate,
+			ActiveAggregatorID: bondStatus.LACPInfo.AggregatorID,
+			PartnerMAC:         bondStatus.LACPInfo.PartnerMAC,
+			ActorKey:           bondStatus.LACPInfo.ActorKey,
+			PartnerKey:         bondStatus.LACPInfo.PartnerKey,
+		}
+	}
+
+	// Per-slave status (published for all bond modes).
+	for _, slave := range bondStatus.Slaves {
+		slaveAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(slave.IfIndex)
+		if err != nil {
+			continue
+		}
+		slaveLL := slaveAttrs.IfName
+		if slavePort := dpc.LookupPortByIfName(slaveAttrs.IfName); slavePort != nil {
+			slaveLL = slavePort.Logicallabel
+		}
+		slaveStatus := types.BondSlaveStatus{
+			Logicallabel: slaveLL,
+			MIIUp:        slave.MIIUp,
+		}
+		if isLACP {
+			slaveStatus.LACP = &types.BondSlaveLACPStatus{
+				AggregatorID:      slave.AggregatorID,
+				ActorChurnState:   slave.ActorChurnState,
+				PartnerChurnState: slave.PartnerChurnState,
+			}
+		}
+		portStatus.BondStatus.Slaves = append(portStatus.BondStatus.Slaves, slaveStatus)
+	}
+}
+
+// logBondActiveSlaveChange logs a bond active slave change using the already
+// updated DeviceNetworkStatus to resolve labels.
+func (m *DpcManager) logBondActiveSlaveChange(bondIfIndex int) {
+	bondAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(bondIfIndex)
+	if err != nil {
+		// Probably a stale notification, ignore.
+		return
+	}
+	// Find the corresponding port in DNS. The bond interface may have been
+	// renamed to "k" + originalName when bridged by NIM (the bridge takes
+	// the original name), so also try without the "k" prefix.
+	portIfName := bondAttrs.IfName
+	port := m.deviceNetStatus.LookupPortByIfName(portIfName)
+	if port == nil && bondAttrs.MasterIfIndex != 0 {
+		// Bond is under a bridge -- the bridge has the original port name.
+		masterAttrs, err := m.NetworkMonitor.GetInterfaceAttrs(bondAttrs.MasterIfIndex)
+		if err == nil && masterAttrs.IfType == "bridge" {
+			port = m.deviceNetStatus.LookupPortByIfName(masterAttrs.IfName)
+		}
+	}
+	bondLabel := portIfName
+	activeSlave := "none"
+	if port != nil {
+		bondLabel = port.Logicallabel
+		if port.BondStatus.ActiveSlave != "" {
+			activeSlave = port.BondStatus.ActiveSlave
+		}
+	}
+	m.Log.Noticef("Bond %s active slave changed to %s", bondLabel, activeSlave)
+}
+
+// getBondIfIndex returns the ifindex of the actual bond interface for the given
+// port interface name. When the adapter is bridged by NIM, port.IfName refers
+// to the bridge while the bond is renamed to "k" + port.IfName.
+func (m *DpcManager) getBondIfIndex(portIfName string) (int, error) {
+	ifIndex, exists, err := m.NetworkMonitor.GetInterfaceIndex(portIfName)
+	if !exists || err != nil {
+		return 0, fmt.Errorf("interface %s not found", portIfName)
+	}
+	attrs, err := m.NetworkMonitor.GetInterfaceAttrs(ifIndex)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get attrs for %s: %w", portIfName, err)
+	}
+	if attrs.IfType == "bond" {
+		return ifIndex, nil
+	}
+	if attrs.IfType == "bridge" {
+		// The bond was renamed to "k" + portIfName and placed under this bridge.
+		kernIfName := "k" + portIfName
+		kernIfIndex, exists, err := m.NetworkMonitor.GetInterfaceIndex(kernIfName)
+		if exists && err == nil {
+			return kernIfIndex, nil
+		}
+	}
+	return 0, fmt.Errorf("interface %s is neither a bond nor a bridge with a bond",
+		portIfName)
 }
