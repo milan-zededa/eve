@@ -50,6 +50,7 @@ func (z *zedkube) collectKubeStats() {
 		pods, err := getAppKubePods(clientset)
 		if err != nil {
 			log.Errorf("collectKubeStats: can't get pods %v", err)
+			return
 		}
 		for _, pod := range pods {
 			if strings.HasPrefix(pod.ObjectMeta.Name, "virt-launcher-") { // skip virt-launcher pods
@@ -63,16 +64,16 @@ func (z *zedkube) collectKubeStats() {
 		virtClient, err := getVirtClient()
 		if err != nil {
 			log.Errorf("collectKubeStats: can't get virtClient %v", err)
-		} else {
-			vmis, err := getAppVMIs(virtClient)
-			if err != nil {
-				log.Errorf("collectKubeStats: can't get VMIs %v", err)
-				return
-			}
-			for _, vmi := range vmis {
-				vmiInfo := getAppVMIInfo(vmi)
-				vmisInfo = append(vmisInfo, *vmiInfo)
-			}
+			return
+		}
+		vmis, err := getAppVMIs(virtClient)
+		if err != nil {
+			log.Errorf("collectKubeStats: can't get VMIs %v", err)
+			return
+		}
+		for _, vmi := range vmis {
+			vmiInfo := getAppVMIInfo(vmi)
+			vmisInfo = append(vmisInfo, *vmiInfo)
 		}
 
 		// Publish the cluster info, first w/ nodes and app pods and VMIs
