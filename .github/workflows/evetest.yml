@@ -1,0 +1,106 @@
+# Top-level evetest workflow: one job per test suite.
+# Each job calls the reusable evetest-job.yml workflow and can independently
+# grow a strategy.matrix later (e.g. for different hypervisors or filesystems).
+#
+# Prerequisites on the runner host:
+#   - evetest-runner self-hosted runner registered (see evetest/runner/README.md)
+#   - evetest broker running (make -C evetest run-broker-container)
+
+name: evetest
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    uses: ./.github/workflows/evetest-job.yml
+    with:
+      test-suite: TestBootstrapSuite
+
+  device-connectivity:
+    uses: ./.github/workflows/evetest-job.yml
+    with:
+      test-suite: TestDeviceConnectivitySuite
+
+  app-connectivity:
+    strategy:
+      fail-fast: false
+      matrix:
+        hypervisor: [kvm, xen]
+    uses: ./.github/workflows/evetest-job.yml
+    with:
+      test-suite: TestApplicationConnectivitySuite
+      hypervisor: ${{ matrix.hypervisor }}
+      run-label: ${{ matrix.hypervisor }}
+
+  lps:
+    uses: ./.github/workflows/evetest-job.yml
+    with:
+      test-suite: TestLPSSuite
+
+  cluster:
+    name: "cluster (tpm=${{ matrix.tpm }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        tpm: ["true", "false"]
+    uses: ./.github/workflows/evetest-job.yml
+    with:
+      test-suite: TestNodeClusterSuite
+      tpm-enabled: ${{ matrix.tpm }}
+      run-label: "tpm-${{ matrix.tpm }}"
+
+  total-coverage:
+    needs: [bootstrap, device-connectivity, app-connectivity, lps, cluster]
+    if: ${{ !cancelled() }}
+    runs-on: evetest-runner
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: evetest/go.mod
+          cache: false
+
+      - name: Download per-suite coverage artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: coverage-*
+          path: /tmp/all-coverage
+          merge-multiple: false
+
+      - name: Merge and report total coverage
+        run: |
+          COVER_DIRS=""
+          if [[ -d /tmp/all-coverage ]]; then
+            COVER_DIRS=$(find /tmp/all-coverage -type f -name "covcounters.*" \
+              -exec dirname {} \; | sort -u | paste -sd,)
+          fi
+          if [[ -z "$COVER_DIRS" ]]; then
+            echo "No coverage data found across any test suite." | tee -a $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          mkdir -p /tmp/merged-coverage
+          go tool covdata merge -i "$COVER_DIRS" -o /tmp/merged-coverage
+          echo "### Total Coverage" >> $GITHUB_STEP_SUMMARY
+          go tool covdata percent -i /tmp/merged-coverage | tee -a $GITHUB_STEP_SUMMARY
+          go tool covdata textfmt -i /tmp/merged-coverage -o /tmp/coverage.txt
+          TOTAL=$(cd pkg/pillar && go tool cover -func=/tmp/coverage.txt | tail -1)
+          echo "$TOTAL"
+          echo "**$TOTAL**" >> $GITHUB_STEP_SUMMARY
+          (cd pkg/pillar && go tool cover -html=/tmp/coverage.txt -o /tmp/coverage.html)
+
+      - name: Upload HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-coverage-html
+          path: /tmp/coverage.html
+          if-no-files-found: ignore
+
+      - name: Clean up
+        if: always()
+        run: rm -rf /tmp/all-coverage /tmp/merged-coverage /tmp/coverage.txt /tmp/coverage.html

@@ -1,0 +1,153 @@
+# Reusable workflow: run a single evetest job on the evetest-runner.
+# Called by evetest.yml, one job per test suite.
+#
+# Prerequisites on the runner host:
+#   - evetest-runner self-hosted runner registered (see evetest/runner/README.md)
+#   - evetest broker running (make -C evetest run-broker-container)
+
+name: evetest-job
+
+on:
+  workflow_call:
+    inputs:
+      test-suite:
+        description: 'Test suite name (e.g. TestBootstrapSuite)'
+        required: true
+        type: string
+      hypervisor:
+        description: 'Hypervisor to use (kvm, xen). Empty means use test default.'
+        required: false
+        type: string
+        default: ''
+      tpm-enabled:
+        description: 'Enable TPM (true/false). Empty means use test default.'
+        required: false
+        type: string
+        default: ''
+      run-label:
+        description: 'Label appended to artifact names to disambiguate matrix runs.'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  run:
+    runs-on: evetest-runner
+
+    env:
+      EVETEST_ORG: milan4zededa
+      EVETEST_EVE_REPO: milan4zededa/eve
+      EVETEST_EVE_VERSION: 0.0.0-evetest-b564283e
+      EVETEST_SDN_REPO: milan4zededa/evetest-sdn
+      EVETEST_SDN_VERSION: v0.0.1
+      EVETEST_PREFERRED_ARCH: amd64
+      EVETEST_OUTPUT_FORMAT: json
+      EVETEST_COLLECT_COVERAGE: "true"
+      EVETEST_LOG_LEVEL: debug
+      EVETEST_SUITE_MAX_FAILURES: "-1"
+      EVETEST_HYPERVISOR: ${{ inputs.hypervisor }}
+      EVETEST_TPM: ${{ inputs.tpm-enabled }}
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      # EVETEST_COLLECT_ARTIFACTS uses $HOME which can't be expanded in job-level env.
+      - name: Set artifact path
+        run: echo "EVETEST_COLLECT_ARTIFACTS=$HOME/artifacts" >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: evetest/go.mod
+          cache: false
+
+      - name: Add GOPATH/bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Install gotestfmt
+        run: go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+
+      - name: Install evetest CLI
+        run: make -C evetest install-cli
+
+      # Raw JSON streams live to the Actions log line-by-line.
+      # The JSON is also saved to $EVETEST_COLLECT_ARTIFACTS by entrypoint.sh.
+      - name: Run evetest
+        run: |
+          set -o pipefail
+          mkdir -p $EVETEST_COLLECT_ARTIFACTS
+          make -C evetest evetest NAME=${{ inputs.test-suite }} \
+            | jq -Rrj --unbuffered '
+                if startswith("{") then
+                  try (fromjson | .Output // empty) catch (. + "\n")
+                else
+                  . + "\n"
+                end
+              '
+
+      # Translate the container-side artifact path (/artifacts/...) to the host path.
+      - name: Find artifact directory
+        if: always()
+        run: |
+          LAST=$(cat $EVETEST_COLLECT_ARTIFACTS/.last-artifact-dir 2>/dev/null)
+          if [[ -n "$LAST" ]]; then
+            echo "ARTIFACT_DIR=$EVETEST_COLLECT_ARTIFACTS/$(basename $LAST)" >> $GITHUB_ENV
+          fi
+
+      # Format the saved JSON with gotestfmt for a human-readable summary.
+      - name: Format test results
+        if: always()
+        continue-on-error: true
+        run: |
+          JSON="${ARTIFACT_DIR}/gotest.json"
+          if [[ -f "$JSON" ]]; then
+            cat "$JSON" | gotestfmt || true
+            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+            jq -r 'select((.Action == "pass" or .Action == "fail" or .Action == "skip") and .Test != null)
+                   | (if .Action == "pass" then "✅" elif .Action == "skip" then "⏭️" else "❌" end) + " " + .Test
+                     + if .Elapsed then " (" + (.Elapsed | tostring) + "s)" else "" end' \
+              "$JSON" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No gotest.json found (test may have failed to start)." | tee -a $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          # Build a comma-separated list of directories containing covcounters
+          # files anywhere under the artifact tree, for covdata merge -i.
+          COVER_DIRS=$(find "${ARTIFACT_DIR}" -type f -name "covcounters.*" \
+            -exec dirname {} \; | sort -u | paste -sd,)
+          if [[ -z "$COVER_DIRS" ]]; then
+            echo "No coverage data found."
+            exit 0
+          fi
+          mkdir -p /tmp/merged-coverage
+          go tool covdata merge -i "$COVER_DIRS" -o /tmp/merged-coverage
+          echo "### Coverage" >> $GITHUB_STEP_SUMMARY
+          go tool covdata percent -i /tmp/merged-coverage | tee -a $GITHUB_STEP_SUMMARY
+          go tool covdata textfmt -i /tmp/merged-coverage -o /tmp/coverage.txt
+          TOTAL=$(cd pkg/pillar && go tool cover -func=/tmp/coverage.txt | tail -1)
+          echo "$TOTAL"
+          echo "**$TOTAL**" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ inputs.test-suite }}${{ inputs.run-label != '' && format('-{0}', inputs.run-label) || '' }}
+          path: /tmp/merged-coverage/
+          if-no-files-found: ignore
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evetest-${{ inputs.test-suite }}${{ inputs.run-label != '' && format('-{0}', inputs.run-label) || '' }}
+          path: ${{ env.ARTIFACT_DIR }}/
+          if-no-files-found: warn
+
+      - name: Clean up local artifacts
+        if: always()
+        run: rm -rf "$EVETEST_COLLECT_ARTIFACTS" /tmp/merged-coverage /tmp/coverage.txt
