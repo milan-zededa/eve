@@ -132,7 +132,9 @@ func handleDeferredVolumeCreate(ctx *volumemgrContext, key string, config *types
 
 	created, err := volumehandlers.GetVolumeHandler(log, ctx, status).Populate()
 	if err != nil {
-		status.SetError(err.Error(), time.Now())
+		// Use SetErrorWithSource so the error is cleared automatically by doUpdateVol
+		// when the volume is successfully created (see updatestatus.go IsErrorSource check).
+		status.SetErrorWithSource(err.Error(), types.VolumeStatus{}, time.Now())
 		publishVolumeStatus(ctx, status)
 		updateVolumeRefStatus(ctx, status)
 		if err := createOrUpdateAppDiskMetrics(ctx, agentName, status); err != nil {
