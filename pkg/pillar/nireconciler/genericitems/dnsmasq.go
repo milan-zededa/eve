@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -411,6 +412,12 @@ func (c *DnsmasqConfigurator) Modify(ctx context.Context, oldItem, newItem dg.It
 		if err := c.delDHCPHostFile(oldDnsmasq.Name(), host); err != nil {
 			return err
 		}
+		// Evict the lease held by the departing MAC. Upstream dnsmasq does
+		// not auto-prune a lease when the matching dhcp-host stanza disappears,
+		// so without this step the next app to be allocated the same IP would
+		// see "not using configured address ... because it is leased to ..."
+		// and dnsmasq would hand it a different IP instead.
+		c.releaseDHCPLease(oldDnsmasq.ListenIf.IfName, host)
 	}
 	for _, host := range newDHCPHosts {
 		if err := c.addDHCPHostFile(newDnsmasq, host); err != nil {
@@ -890,6 +897,24 @@ func (c *DnsmasqConfigurator) delDHCPHostFile(instanceName string,
 		return err
 	}
 	return nil
+}
+
+// releaseDHCPLease tells the running dnsmasq instance bound to listenIfName to
+// drop any lease it still holds for the given MAC/IP. Best-effort: dnsmasq may
+// not be running yet (Create path) or the lease may already be gone — either is
+// fine, so failures are only logged.
+// IPv6 entries are skipped: dhcp_release6 needs the client DUID (which EVE does
+// not track), and Local NIs with IPv6 addressing are not supported anyway.
+func (c *DnsmasqConfigurator) releaseDHCPLease(listenIfName string, entry MACToIP) {
+	if entry.IP.To4() == nil {
+		return
+	}
+	cmd := exec.Command("dhcp_release", listenIfName, entry.IP.String(),
+		entry.MAC.String())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		c.Log.Warnf("dhcp_release %s %s %s failed: %v (output: %s)",
+			listenIfName, entry.IP, entry.MAC, err, strings.TrimSpace(string(out)))
+	}
 }
 
 func (c *DnsmasqConfigurator) initProcessManager(instanceName string) proc.ProcessManager {

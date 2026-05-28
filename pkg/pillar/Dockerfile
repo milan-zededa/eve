@@ -8,7 +8,7 @@ ARG BUILD_PKGS_BASE="git gcc linux-headers libc-dev make linux-pam-dev m4 findut
                      libintl libuuid libtirpc libblkid libcrypto3 zlib tar"
 
 # we use the same image in several places
-ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:325b12087b386811fdb9d3c0adffa5fb94a34b95
+ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:0e27a936cb26e7864025a55fade015700a2ddbf7
 
 FROM lfedge/eve-uefi:382f2b44657fe57bb2c941c1571c0b27e5a9ddf0 AS uefi-build
 FROM lfedge/eve-dom0-ztools:d5f5afd215f264447472b3bf329af23d67244662 AS zfs
@@ -153,7 +153,7 @@ ENV BUILD_PKGS patch
 ENV PKGS alpine-baselayout musl-utils libtasn1-progs pciutils yajl xz bash iptables ip6tables iproute2 \
     coreutils dmidecode libbz2 libuuid ipset curl radvd ethtool util-linux e2fsprogs libcrypto3 xorriso \
     qemu-img jq e2fsprogs-extra keyutils ca-certificates ip6tables-openrc iptables-openrc ipset-openrc hdparm \
-    libintl libtirpc libblkid zlib rsync chrony wireless-tools wpa_supplicant dnsmasq
+    libintl libtirpc libblkid zlib rsync chrony wireless-tools wpa_supplicant dnsmasq dnsmasq-utils
 RUN eve-alpine-deploy.sh
 
 # Snapshot collector's own apk DB (alpine PKGS installed above) before the
