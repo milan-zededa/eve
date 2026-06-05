@@ -672,7 +672,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				Endpoint: &api.Endpoint{
@@ -704,7 +705,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				Endpoint: &api.Endpoint{
@@ -736,7 +738,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				Endpoint: &api.Endpoint{
@@ -768,7 +771,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				// bad-dns3 has no static entries and no upstream servers — resolves nothing.
@@ -811,7 +815,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				Endpoint: &api.Endpoint{
@@ -843,7 +848,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 			{
 				Endpoint: &api.Endpoint{
@@ -875,7 +881,8 @@ var ManyDNSServers = &api.NetworkModel{
 						},
 					},
 				},
-				UpstreamServers: []string{"8.8.8.8", "1.1.1.1"},
+				UpstreamServers:  []string{"8.8.8.8", "1.1.1.1"},
+				StaticEntriesTtl: 60,
 			},
 		},
 		HttpServers: []*api.HTTPServer{

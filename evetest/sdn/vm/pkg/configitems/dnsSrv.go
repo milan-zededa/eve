@@ -34,6 +34,9 @@ type DNSServer struct {
 	// UpstreamServers : list of IP addresses of public DNS servers to forward
 	// requests to (unless there is a static entry).
 	UpstreamServers []net.IP
+	// StaticEntriesTTL : TTL in seconds for static (address=) entries.
+	// When 0, dnsmasq defaults to 0s (not cached by querying resolvers).
+	StaticEntriesTTL uint32
 }
 
 // DNSEntry : Mapping between FQDN and an IP address.
@@ -79,7 +82,8 @@ func (s DNSServer) Equal(other depgraph.Item) bool {
 	}
 	return s.NetNamespace == s2.NetNamespace &&
 		s.VethName == s2.VethName &&
-		s.VethPeerIfName == s2.VethPeerIfName
+		s.VethPeerIfName == s2.VethPeerIfName &&
+		s.StaticEntriesTTL == s2.StaticEntriesTTL
 }
 
 // External returns false.
@@ -157,6 +161,9 @@ func (c *DNSServerConfigurator) createDnsmasqConfFile(server DNSServer) error {
 	}
 	file.WriteString("no-resolv\n")
 	// Static DNS entries.
+	if len(server.StaticEntries) > 0 && server.StaticEntriesTTL > 0 {
+		file.WriteString(fmt.Sprintf("local-ttl=%d\n", server.StaticEntriesTTL))
+	}
 	for _, entry := range server.StaticEntries {
 		file.WriteString(fmt.Sprintf("address=/%s/%s\n", entry.FQDN, entry.IP.String()))
 	}
