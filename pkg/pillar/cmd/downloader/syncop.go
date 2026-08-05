@@ -140,7 +140,16 @@ func handleSyncOp(ctx *downloaderContext, key string,
 		// pass in the config.Name instead of 'filename' which
 		// does not contain the prefix of the relative path with '/'s
 		remoteName = config.Name
+		// dst.Fqdn carries a scheme (constructDatastoreContext's
+		// url.JoinPath above requires an absolute URL to join dpath/
+		// filename onto), but the SFTP transport (zedUpload/sftputil)
+		// dials a bare "host:port" and does its own naive DNS-name
+		// extraction on it, so the scheme must be stripped here or it
+		// ends up trying to resolve the literal hostname "sftp".
 		serverURL = dst.Fqdn
+		if u, err := url.Parse(serverURL); err == nil {
+			serverURL = u.Host
+		}
 
 	case zconfig.DsType_DsHttp.String(), zconfig.DsType_DsHttps.String(), "":
 		// APIKey holds the auth scheme (e.g. "Bearer", "Basic", "NTLM"),
