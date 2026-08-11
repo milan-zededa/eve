@@ -38,6 +38,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -64,6 +65,7 @@ import (
 	"github.com/lf-edge/eve/pkg/kube/kube-init/monitor"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/prereqs"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/pubsubclient"
+	"github.com/lf-edge/eve/pkg/kube/kube-init/quorum"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/role"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/state"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/update"
@@ -109,6 +111,8 @@ const (
 	EvHealthTick                       // health-check timer fired
 	EvHealthDone                       // health-check worker finished
 	EvSingleToCluster                  // monitor: ENC appeared
+	EvQuorumRecovery                   // monitor: recovery generation changed
+	EvRecoveryDone                     // quorum runner finished
 	EvClusterToSingle                  // monitor: ENC removed
 	EvTransitionDone                   // clustermode runner finished
 	EvError                            // async work returned err
@@ -234,6 +238,7 @@ const (
 	StateClusterTransition              // single↔HA runner
 	StateShuttingDown                   // clean daemon exit
 	StateWitnessIdle                    // witness configured off, nothing running
+	StateQuorumRecovery                 // converging to the controller's recovery generation
 )
 
 // String renders State for logging. Switch-based for the same
@@ -273,6 +278,8 @@ func (s State) String() string {
 		return "SHUTTING_DOWN"
 	case StateWitnessIdle:
 		return "WITNESS_IDLE"
+	case StateQuorumRecovery:
+		return "QUORUM_RECOVERY"
 	}
 	return fmt.Sprintf("UNKNOWN(%d)", s)
 }
@@ -338,6 +345,7 @@ const (
 	restartFullRecycle     restartReason = 4 // == monitor.RestartFullRecycle
 	restartSingleToCluster restartReason = 5 // == monitor.RestartSingleToCluster
 	restartClusterToSingle restartReason = 6 // == monitor.RestartClusterToSingle
+	restartQuorumRecovery  restartReason = 7 // == monitor.RestartQuorumRecovery
 )
 
 func restartReasonString(r restartReason) string {
@@ -354,6 +362,8 @@ func restartReasonString(r restartReason) string {
 		return "full-recycle"
 	case restartSingleToCluster:
 		return "single-to-cluster"
+	case restartQuorumRecovery:
+		return "quorum-recovery"
 	case restartClusterToSingle:
 		return "cluster-to-single"
 	}
@@ -424,6 +434,13 @@ type daemon struct {
 	// startAsync happens-after the write, so handleInit sees the
 	// published struct after EvPrereqsDone arrives.
 	initRes *initResult
+
+	// recovery is the action QUORUM_RECOVERY is performing.
+	recovery quorum.Intent
+
+	// deferredClusterToSingle records a withdrawal that arrived while a
+	// recovery was in flight, to be applied once it finishes.
+	deferredClusterToSingle bool
 
 	// witnessIP is the address this witness serves etcd on, remembered
 	// from the last CONFIGURING so status reports can echo it.
@@ -547,6 +564,37 @@ type daemon struct {
 // main
 // ===========================================================================
 
+// crashLogPath is where the runtime is told to write panics. Its own
+// file because the daemon log goes through lumberjack, which is a writer
+// rather than a file, and the runtime needs a file descriptor.
+var crashLogPath = role.Pick(
+	"/persist/kubelog/k3s-init-crash.log",
+	"/persist/kubelog/witness-crash.log")
+
+// setupCrashLog persists panics, and reports one left by a previous run.
+//
+// The runtime writes them straight to stderr, which for this service is a
+// FIFO nothing archives, so a crash used to leave the daemon log ending
+// mid-sentence and no trace anywhere: indistinguishable from a clean stop.
+// SetCrashOutput adds a file without taking the report away from stderr,
+// so the container collector still sees it too.
+func setupCrashLog() {
+	if fi, err := os.Stat(crashLogPath); err == nil && fi.Size() > 0 {
+		log.Printf("WARNING: a previous run left a crash report in %s (%d bytes)",
+			crashLogPath, fi.Size())
+	}
+	f, err := os.OpenFile(crashLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("warning: open crash log %s: %v", crashLogPath, err)
+		return
+	}
+	// Deliberately not closed: the runtime writes through this for the
+	// life of the process, and it is one descriptor.
+	if err := debug.SetCrashOutput(f, debug.CrashOptions{}); err != nil {
+		log.Printf("warning: direct panics to %s: %v", crashLogPath, err)
+	}
+}
+
 func main() {
 	// Tee logs to stderr (container log collector) and a rotated
 	// file under /persist so logs survive container restart.
@@ -567,6 +615,7 @@ func main() {
 	log.SetFlags(log.Ldate | log.Ltime)
 	log.Printf("starting %s daemon (pid=%d, arch=%s)",
 		role.AgentName(), os.Getpid(), runtime.GOARCH)
+	setupCrashLog()
 
 	// Construct the pubsub manager. kube-init uses this to
 	// subscribe to EdgeNodeClusterStatus / KubeConfig /
@@ -657,8 +706,13 @@ func main() {
 		monRestartCh:    make(chan monitor.RestartReason, 4),
 		psMgr:           psMgr,
 		signals:         deploy.NewBus(),
-		bootAt:          time.Now(),
-		stateEnteredAt:  time.Now(),
+		// Built here rather than on the way into STARTING_K3S so it is
+		// never nil: a quorum recovery reaches CONFIGURING before k3s
+		// has ever started, and both of its actions stop k3s first.
+		// Construction allocates and nothing more; Start is what runs.
+		supervisor:     k3s.NewSupervisor(),
+		bootAt:         time.Now(),
+		stateEnteredAt: time.Now(),
 		// RegisterPublisher ran above, so transitions may publish
 		// their status snapshots from the very first one.
 		statusPublishReady: true,
@@ -790,6 +844,46 @@ func (d *daemon) handleEvent(ctx context.Context, ev Event) {
 		log.Printf("retrying state %s", d.state)
 		d.enterStateFn(ctx)
 		return
+	case EvQuorumRecovery:
+		// Handled here rather than per-state for the same reason as the
+		// withdrawal below, and more acutely. The node that most needs
+		// to converge is the one whose cluster has lost quorum, and it
+		// never reaches RUNNING: it either sits with a k3s that starts
+		// and never serves, or crash-loops between STARTING_K3S and
+		// BACKOFF against a datastore whose cluster no longer exists.
+		// Queueing would defer it to a RUNNING that never arrives, and
+		// nothing else returns it to CONFIGURING, where the decision is
+		// made.
+		//
+		// Stopping k3s first, rather than jumping to CONFIGURING, keeps
+		// the ordinary restart path: stop, run the pre-restart hooks,
+		// re-render the config, then decide. QUORUM_RECOVERY is
+		// excluded because it is already acting, and the transitions
+		// below own the supervisor for the length of their own work.
+		// Not before CONFIGURING. The states below it are the bring-up
+		// sequence, which is what gives the node its k3s install and its
+		// container runtime, and the way out of them runs through
+		// CONFIGURING, which evaluates the recovery itself seconds later.
+		// Acting earlier skips STARTING_CTRD outright, because the way
+		// back from a recovery is to CONFIGURING, leaving the node with
+		// no containerd: IMPORTING then blocks forever on a socket that
+		// will never appear.
+		//
+		// Relies on the states being declared in bring-up order, which
+		// TestBringUpStatesPrecedeConfiguring pins.
+		if d.state < StateConfiguring {
+			log.Printf("quorum recovery deferred to CONFIGURING (in %s)", d.state)
+			return
+		}
+		if d.state != StateQuorumRecovery && d.state != StateClusterTransition &&
+			d.state != StateShuttingDown {
+			d.restartReason = restartQuorumRecovery
+			d.backoff = minBackoff
+			d.transition(ctx, StateStoppingK3s, "quorum-recovery")
+			return
+		}
+		d.queueRestart(restartQuorumRecovery)
+		return
 	case EvClusterToSingle:
 		// Handled here rather than per-state because it must not wait
 		// for RUNNING. Withdrawing the cluster config makes EVE drop
@@ -800,6 +894,19 @@ func (d *daemon) handleEvent(ctx context.Context, ev Event) {
 		// ConvertToSingleNode and reboots into the /var/lib restore.
 		// CLUSTER_TRANSITION is the exception: its handler queues the
 		// request rather than re-entering itself mid-transition.
+		if _, midRecovery, err := quorum.ReadIntent(); err != nil {
+			log.Printf("WARNING: check recovery intent: %v", err)
+		} else if midRecovery {
+			// Converting now would mark ConvertToSingleNode and reboot
+			// into a /var/lib restore, on a node part way through a
+			// forced etcd reset. Remembered outright rather than queued:
+			// a withdrawal must not be dropped by a higher-priority
+			// restart arriving after it, and the controller signals it
+			// once, on a transition the monitor will not repeat.
+			log.Printf("cluster-to-single deferred: a quorum recovery is in progress")
+			d.deferredClusterToSingle = true
+			return
+		}
 		if d.state != StateClusterTransition && d.state != StateShuttingDown {
 			d.restartReason = restartClusterToSingle
 			d.backoff = minBackoff
@@ -839,6 +946,8 @@ func (d *daemon) handleEvent(ctx context.Context, ev Event) {
 		d.handleClusterTransition(ctx, ev)
 	case StateWitnessIdle:
 		d.handleWitnessIdle(ctx, ev)
+	case StateQuorumRecovery:
+		d.handleQuorumRecovery(ctx, ev)
 	case StateShuttingDown:
 		// absorb everything
 	}
@@ -919,6 +1028,20 @@ func (d *daemon) handleConfiguring(ctx context.Context, ev Event) {
 		d.retryCurrentState(ctx)
 
 	case EvConfigureDone:
+		// Checked here because CONFIGURING is on every path to
+		// STARTING_K3S, including a cold boot. A node whose cluster
+		// lost quorum never reaches RUNNING, so anything hung off the
+		// steady state would never run on the node that needs it most.
+		if act, err := d.pendingRecovery(); err != nil {
+			d.lastError = err
+			log.Printf("CONFIGURING: recovery check: %v — retrying in %v",
+				err, errorRetryDelay)
+			d.retryCurrentState(ctx)
+			return
+		} else if act != quorum.ActionNone {
+			d.transition(ctx, StateQuorumRecovery, "recovery/"+act.String())
+			return
+		}
 		d.transition(ctx, StateStartingK3s, "configure-done")
 
 	case EvSocketRestart, EvSIGHUP:
@@ -1407,7 +1530,7 @@ func (d *daemon) handleRunningHooks(ctx context.Context, ev Event) {
 			// Rendering is a few file writes.
 			d.phase = PhaseSteady
 			d.transition(ctx, StateConfiguring, "hooks-done")
-		} else if reason == restartFullRecycle {
+		} else if reason == restartFullRecycle || reason == restartQuorumRecovery {
 			d.phase = PhaseRecycle
 			d.transition(ctx, StateConfiguring, "hooks-done/recycle")
 		} else {
@@ -1623,6 +1746,9 @@ func (d *daemon) enterState(ctx context.Context) {
 
 	case StateWitnessIdle:
 		d.enterWitnessIdle(ctx)
+
+	case StateQuorumRecovery:
+		d.enterQuorumRecovery(ctx)
 	}
 }
 
@@ -1791,6 +1917,92 @@ func (d *daemon) watchWitnessConfig(ctx context.Context) {
 				return
 			}
 		}
+	}
+}
+
+// pendingRecovery asks quorum what this node owes, and remembers it for
+// the state that carries it out. Witness excluded: it converges through
+// its own membership marker.
+func (d *daemon) pendingRecovery() (quorum.Action, error) {
+	if role.IsWitness() {
+		return quorum.ActionNone, nil
+	}
+	in, needed, err := quorum.Evaluate()
+	if err != nil || !needed {
+		return quorum.ActionNone, err
+	}
+	d.recovery = in
+	return in.Action, nil
+}
+
+// enterQuorumRecovery performs the action, then records it.
+func (d *daemon) enterQuorumRecovery(ctx context.Context) {
+	in := d.recovery
+	log.Printf("QUORUM_RECOVERY — %s for generation %s", in.Action, in.Generation)
+	d.startAsync(ctx, func(workCtx context.Context) error {
+		cs, err := k3s.GetClusterStatus()
+		if err != nil {
+			return err
+		}
+		// Written before anything destructive, so a crash mid-action
+		// resumes the same action rather than re-deciding against a
+		// cluster status that may have moved on since.
+		if err := quorum.WriteIntent(in); err != nil {
+			return err
+		}
+		if in.Action == quorum.ActionPromote {
+			if err := quorum.Promote(workCtx, d.supervisor, cs); err != nil {
+				return err
+			}
+		}
+		if err := quorum.WriteApplied(in.Generation); err != nil {
+			return err
+		}
+		return quorum.ClearIntent()
+	}, EvRecoveryDone)
+}
+
+func (d *daemon) handleQuorumRecovery(ctx context.Context, ev Event) {
+	switch ev.Type {
+	case EvRecoveryDone:
+		d.lastError = nil
+		// Still fenced, so nothing is joining and any witness member
+		// found is left over from before the recovery: its device died
+		// without the chance to leave, and its entry holds the witness
+		// address that the replacement will claim.
+		witness.PruneMembers(ctx)
+		// The witness may join the recovered cluster again. Released
+		// here rather than inside the action so a failed promote keeps
+		// it held across the retry.
+		if err := quorum.ReleaseWitnessFence(); err != nil {
+			log.Printf("WARNING: release witness fence: %v", err)
+		}
+		if d.deferredClusterToSingle {
+			// The controller withdrew this node's cluster config while
+			// the recovery ran. Nothing further is worth converging to.
+			d.deferredClusterToSingle = false
+			d.restartReason = restartClusterToSingle
+			d.backoff = minBackoff
+			d.transition(ctx, StateClusterTransition, "recovery-done/cluster-to-single")
+			return
+		}
+		// Back through CONFIGURING: the drop-ins still describe the
+		// cluster as it was, and re-rendering them against current
+		// status is what makes a promoted node the seed.
+		d.phase = PhaseSteady
+		d.transition(ctx, StateConfiguring, "recovery-done")
+
+	case EvError:
+		d.lastError = ev.Err
+		log.Printf("QUORUM_RECOVERY error: %v — retrying in %v", ev.Err, errorRetryDelay)
+		d.retryCurrentState(ctx)
+
+	case EvSocketRestart, EvSIGHUP, EvConfigChange, EvClusterRecycle,
+		EvSingleToCluster:
+		// Queued, never applied mid-action: the intent on disk names
+		// what this node is part way through, and starting something
+		// else now would leave it half converged.
+		d.queueRestart(restartForEvent(ev.Type))
 	}
 }
 
@@ -2045,10 +2257,6 @@ func (d *daemon) enterStartingK3s(ctx context.Context) {
 			}
 			log.Printf("WARNING: stop stale supervisor: %v (continuing to Start)", err)
 		}
-	}
-
-	if d.supervisor == nil {
-		d.supervisor = k3s.NewSupervisor()
 	}
 
 	if err := d.supervisor.Start(); err != nil {
@@ -2669,6 +2877,8 @@ func restartForEvent(evType EventType) restartReason {
 		return restartFullRecycle
 	case EvSingleToCluster:
 		return restartSingleToCluster
+	case EvQuorumRecovery:
+		return restartQuorumRecovery
 	case EvClusterToSingle:
 		return restartClusterToSingle
 	}
