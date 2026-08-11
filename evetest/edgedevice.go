@@ -790,9 +790,13 @@ func (d *EdgeDevice) waitForRevert(targetShortVersion string) {
 	}
 }
 
-// ExpectReboots declares that the device will reboot count times on its
-// own, as a required consequence of a configuration change rather than at
-// the test's request.
+// ExpectAdditionalReboots declares that the device will reboot count more
+// times on its own, as a required consequence of a configuration change
+// rather than at the test's request.
+//
+// Additional, because it adds to the running total rather than stating
+// what the total should be: the framework's own reboot-driven flows
+// have already contributed to it.
 //
 // Close audits observed reboots against expected ones, so a reboot EVE
 // performs by design is reported as a failure unless it is declared. The
@@ -806,7 +810,7 @@ func (d *EdgeDevice) waitForRevert(targetShortVersion string) {
 // Declare it before applying the config that causes it: the audit only
 // compares totals, but a declaration that races the observation reads as
 // an accident in the log.
-func (d *EdgeDevice) ExpectReboots(count int) {
+func (d *EdgeDevice) ExpectAdditionalReboots(count int) {
 	for i := 0; i < count; i++ {
 		d.th.incExpectedRebootCount(d.devName)
 	}
@@ -2538,10 +2542,17 @@ func (d *EdgeDevice) WatchNTPSources() (
 }
 
 // GetClusterInfo returns the last recorded information about the Kubernetes
-// cluster, or nil if no such info message has been received yet.
-func (d *EdgeDevice) GetClusterInfo() *eveinfo.ZInfoKubeCluster {
+// cluster and the time the device stamped it, so that snapshots from
+// different devices can be ordered. Returns nil and a zero time if no such
+// info message has been received yet.
+//
+// The snapshot may be arbitrarily old: only the elected leader publishes
+// cluster info, so a device that has lost the election (or has been powered
+// off) keeps reporting whatever it last sent, indefinitely.
+func (d *EdgeDevice) GetClusterInfo() (*eveinfo.ZInfoKubeCluster, time.Time) {
 	devUUID := d.getDevUUID()
 	var result *eveinfo.ZInfoKubeCluster
+	var at time.Time
 	d.iterateInfoMsgs(devUUID,
 		func(msg *eveinfo.ZInfoMsg) bool {
 			return msg.GetZtype() == eveinfo.ZInfoTypes_ZiKubeCluster &&
@@ -2549,9 +2560,10 @@ func (d *EdgeDevice) GetClusterInfo() *eveinfo.ZInfoKubeCluster {
 		},
 		func(msg *eveinfo.ZInfoMsg) {
 			result = msg.GetClusterInfo()
+			at = msg.GetAtTimeStamp().AsTime()
 		},
 	)
-	return result
+	return result, at
 }
 
 // WatchClusterInfo subscribes to Kubernetes cluster info updates and returns a
@@ -2598,7 +2610,7 @@ func (d *EdgeDevice) WaitForClusterNodeIsReady(timeout time.Duration) {
 	updates, stop := d.WatchClusterInfo()
 	defer stop()
 
-	if info := d.GetClusterInfo(); info != nil && clusterNodeReady(info, d.devName) {
+	if info, _ := d.GetClusterInfo(); info != nil && clusterNodeReady(info, d.devName) {
 		d.th.log.Infof("Cluster node %q is already ready", d.devName)
 		return
 	}

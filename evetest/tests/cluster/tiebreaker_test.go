@@ -159,8 +159,9 @@ func expectKubectlFields(t *WithT, device *evetest.EdgeDevice,
 //
 // Network model
 // -------------
-//   - netmodels.SeparateClusterPort -- the same model TestThreeNodesCluster
-//     uses: eth0 for mgmt and apps, eth1 for the cluster interconnect.
+//   - netmodels.SeparateClusterPort(devName[:]...) -- the same model
+//     TestThreeNodesCluster uses: eth0 for mgmt and apps, eth1 for the
+//     cluster interconnect.
 //
 // Device configuration
 // --------------------
@@ -199,7 +200,7 @@ func TestTieBreakerCluster(test *testing.T) {
 	}
 
 	requiredNetModel := evetest.RequireNetworkModel{
-		NetworkModel: netmodels.SeparateClusterPort,
+		NetworkModel: netmodels.SeparateClusterPort(devName[:]...),
 	}
 	var requirements []evetest.Requirement
 	requirements = append(requirements, requiredDevices[:]...)
