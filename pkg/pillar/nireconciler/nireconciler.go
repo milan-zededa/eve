@@ -147,6 +147,9 @@ type Port struct {
 	StaticIP          *net.IPNet
 	IgnoreDhcpIPs     bool
 	VLANSubinterfaces []VLANSubinterface
+	// IsClusterPort is true if this port is the interface designated as the
+	// EVE-k cluster interface (EdgeNodeClusterConfig.ClusterInterface).
+	IsClusterPort bool
 }
 
 // Equal compares two ports for equality.
@@ -161,6 +164,7 @@ func (p Port) Equal(p2 Port) bool {
 		generics.EqualSetsFn(p.NTPServers, p2.NTPServers, netutils.EqualIPs) &&
 		netutils.EqualIPNets(p.StaticIP, p2.StaticIP) &&
 		p.IgnoreDhcpIPs == p2.IgnoreDhcpIPs &&
+		p.IsClusterPort == p2.IsClusterPort &&
 		generics.EqualSets(p.VLANSubinterfaces, p2.VLANSubinterfaces)
 }
 

@@ -155,6 +155,7 @@ func (z *zedrouter) getNIPortConfig(
 			StaticIP:          netutils.NewIPNet(port.ConfiguredIP, port.ConfiguredSubnet),
 			IgnoreDhcpIPs:     port.IgnoredDhcpIPs,
 			VLANSubinterfaces: vlanSubIfs,
+			IsClusterPort:     z.clusterIfName != "" && port.IfName == z.clusterIfName,
 		})
 	}
 	return portConfigs
@@ -219,6 +220,12 @@ func (z *zedrouter) updateNIPorts(niConfig types.NetworkInstanceConfig,
 				if z.deviceNetworkStatus.IsPortUsedAsVlanParent(port.Logicallabel) {
 					errorMsgs = append(errorMsgs,
 						fmt.Sprintf("VLAN-parent port %s cannot be used in multi-port "+
+							"Switch Network Instance", port.Logicallabel))
+					continue
+				}
+				if z.clusterIfName != "" && port.IfName == z.clusterIfName {
+					errorMsgs = append(errorMsgs,
+						fmt.Sprintf("cluster port %s cannot be used in multi-port "+
 							"Switch Network Instance", port.Logicallabel))
 					continue
 				}
@@ -736,7 +743,8 @@ func (z *zedrouter) niBridgeIsCreatedByNIM(niConfig types.NetworkInstanceConfig)
 		// Zedrouter creates bridge for switch NI with multiple ports.
 		return false
 	}
-	// If the (single) port is also used for mgmt or Local NI, NIM is responsible
-	// for bridging the port.
-	return singlePort.Dhcp == types.DhcpTypeStatic || singlePort.Dhcp == types.DhcpTypeClient
+	// If the (single) port is also used for mgmt or Local NI, or is the cluster
+	// port, NIM is responsible for bridging the port.
+	return singlePort.Dhcp == types.DhcpTypeStatic || singlePort.Dhcp == types.DhcpTypeClient ||
+		(z.clusterIfName != "" && singlePort.IfName == z.clusterIfName)
 }
