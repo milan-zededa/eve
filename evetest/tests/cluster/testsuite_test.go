@@ -11,8 +11,8 @@ import (
 
 // TestNodeClusterSuite is the top-level entry point for cluster tests.
 // It reuses the evetest harness (Adam controller, SDN, broker) across
-// the subtests for efficiency. All subtests pin the device to the Kubevirt
-// hypervisor (aka eve-k).
+// the subtests for efficiency wherever possible. All subtests pin the device
+// to the Kubevirt hypervisor (aka eve-k).
 //
 // The single-node subtests run before the three-node ones, and the happy-path
 // purge runs before the fault-injecting VMIRS test, so a failure in the
@@ -20,6 +20,11 @@ import (
 // is placed after the other three-node subtests because it is the one that
 // builds its cluster from scratch rather than resetting the device config,
 // which makes it the most expensive to set up.
+//
+// TestTwoNodeHACluster runs last. It requests its own two-device,
+// SeparateClusterPort topology, distinct from the three-device one used
+// above, and is placed last simply because it has different requirements
+// from all the other tests.
 //
 // Test parameters
 // ---------------
@@ -68,6 +73,9 @@ func TestNodeClusterSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestVMAppPurgeDuringFailover,
+		},
+		evetest.TestCase{
+			Test: TestTwoNodeHACluster,
 		},
 	)
 }

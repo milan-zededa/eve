@@ -175,7 +175,7 @@ func TestKvmToKRepartition(test *testing.T) {
 	// intermediate resize boot is invisible to the controller, so the audit at
 	// teardown would see one reboot the upgrade did not account for. Declared
 	// before the update that causes it, so the declaration cannot race it.
-	device.ExpectReboots(1)
+	device.ExpectAdditionalReboots(1)
 	log.Infof("kvm→k hop: arming the offline %s", decision)
 	device.UpgradeEVE(p.targetVersion, evetest.HypervisorKubevirt,
 		evetest.BaseOSDatastoreHTTP, true, false)
