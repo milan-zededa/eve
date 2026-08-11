@@ -81,7 +81,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/leodido/go-urn v1.2.4 // indirect
-	github.com/lf-edge/eve-api/go v0.0.0-20260812180240-99d02ddcfcb0 // indirect
+	github.com/lf-edge/eve-api/go v0.0.0-20260828151117-a8d23291464a // indirect
 	github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/spdystream v0.5.1 // indirect
@@ -132,3 +132,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.1 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20260831132840-f28c39e79b7f

@@ -107,8 +107,6 @@ github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
 github.com/leodido/go-urn v1.2.4 h1:XlAE/cm/ms7TE/VMVoduSpNBoyc2dOxHs5MZSwAN63Q=
 github.com/leodido/go-urn v1.2.4/go.mod h1:7ZrI8mTSeBSHl/UaRyKQW1qZeMgak41ANeCNaVckg+4=
-github.com/lf-edge/eve-api/go v0.0.0-20260812180240-99d02ddcfcb0 h1:vFrZPWDaFupy4K1fYIRDJOnW8aaGNMZ1/1DkNRXrZe0=
-github.com/lf-edge/eve-api/go v0.0.0-20260812180240-99d02ddcfcb0/go.mod h1:6HxNA/qKJVEqwpuOFkcQ0h3QyotvAs/cjHLC961FPOY=
 github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d h1:tUBb9M6u42LXwHAYHyh22wJeUUQlTpDkXwRXalpRqbo=
 github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d/go.mod h1:Nn3juMJJ1G8dyHOebdZyS4jOB/fuxAd5fIajBaWjHr8=
 github.com/lf-edge/eve/pkg/pillar v0.0.0-20260421125048-8d3825045e4e h1:MGhvM4TrXHYyssTTcEkpc79zatoZ1oJRrrbjTU++ps0=
@@ -117,6 +115,8 @@ github.com/luthermonson/go-proxmox v0.8.0 h1:KwrgeLrTXTlAezj7zt/tU4bm70VFQiJfej/
 github.com/luthermonson/go-proxmox v0.8.0/go.mod h1:Q6ByFv9Zak9NvJwZJ36HMN5qwIZVj0isxf8u4YIk6lE=
 github.com/magefile/mage v1.14.0 h1:6QDX3g6z1YvJ4olPhT1wksUcSa/V0a1B+pJb73fBjyo=
 github.com/magefile/mage v1.14.0/go.mod h1:z5UZb/iS3GoOSn0JgWuiw7dxlurVYTu+/jHXqQg881A=
+github.com/milan-zededa/eve-api/go v0.0.0-20260831132840-f28c39e79b7f h1:cKBvTxpwnJtznBzRCMqX8Wb+eT9eKMTU2afy4l811xg=
+github.com/milan-zededa/eve-api/go v0.0.0-20260831132840-f28c39e79b7f/go.mod h1:6HxNA/qKJVEqwpuOFkcQ0h3QyotvAs/cjHLC961FPOY=
 github.com/moby/docker-image-spec v1.3.1 h1:jMKff3w6PgbfSa69GfNg+zN/XLhfXJGnEx3Nl2EsFP0=
 github.com/moby/docker-image-spec v1.3.1/go.mod h1:eKmb5VW8vQEh/BAr2yvVNvuiJuY6UIocYsFu/DxxRpo=
 github.com/moby/moby/api v1.55.0 h1:2/sexvQyqIWS8pRSCFddBfpW2qE7vR7FCL+vN8pxwMc=
