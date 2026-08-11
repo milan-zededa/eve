@@ -330,7 +330,7 @@ github.com/lf-edge/eve-api/go/profile
 # github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20240315102754-0f6d1f182e0d
 ## explicit; go 1.20
 github.com/lf-edge/eve/pkg/kube/cnirpc
-# github.com/lf-edge/eve/pkg/pillar v0.0.0-20260723060853-d8f4dcef88b3
+# github.com/lf-edge/eve/pkg/pillar v0.0.0-20260831121325-7f505115b184 => ../../pillar
 ## explicit; go 1.25.0
 github.com/lf-edge/eve/pkg/pillar/base
 github.com/lf-edge/eve/pkg/pillar/flextimer
@@ -1109,3 +1109,4 @@ sigs.k8s.io/yaml
 # k8s.io/client-go => k8s.io/client-go v0.34.1
 # k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad
 # github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20260831132840-f28c39e79b7f
+# github.com/lf-edge/eve/pkg/pillar => ../../pillar

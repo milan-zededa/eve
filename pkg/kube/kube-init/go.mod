@@ -5,7 +5,7 @@ go 1.25.12
 require (
 	github.com/containerd/containerd/v2 v2.2.5
 	github.com/containerd/errdefs v1.0.0
-	github.com/lf-edge/eve/pkg/pillar v0.0.0-20260723060853-d8f4dcef88b3
+	github.com/lf-edge/eve/pkg/pillar v0.0.0-20260831121325-7f505115b184
 	github.com/satori/go.uuid v1.2.1-0.20180404165556-75cca531ea76
 	github.com/sirupsen/logrus v1.9.4
 	github.com/vishvananda/netlink v1.3.1
@@ -134,3 +134,5 @@ require (
 )
 
 replace github.com/lf-edge/eve-api/go => github.com/milan-zededa/eve-api/go v0.0.0-20260831132840-f28c39e79b7f
+
+replace github.com/lf-edge/eve/pkg/pillar => ../../pillar
