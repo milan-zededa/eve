@@ -6,12 +6,15 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lf-edge/eve/pkg/kube/kube-init/deploy"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/monitor"
+	"github.com/lf-edge/eve/pkg/kube/kube-init/role"
+	"github.com/lf-edge/eve/pkg/kube/kube-init/witness"
 )
 
 // newTestDaemon constructs a daemon whose enterStateFn is a no-op
@@ -43,6 +46,7 @@ func TestTransitionTable(t *testing.T) {
 		initReason restartReason
 		event      Event
 		wantState  State
+		asWitness  bool
 		checkFn    func(*testing.T, *daemon)
 	}{
 		// === INIT ===
@@ -636,6 +640,95 @@ func TestTransitionTable(t *testing.T) {
 				}
 			},
 		},
+		// === witness role ===
+		// The witness's reduced state set, asserted as transitions
+		// rather than as a list: it never enters STARTING_CTRD (no user
+		// containerd without a kubelet), IMPORTING (no images),
+		// WAIT_K3S_READY (no apiserver of its own) or DEPLOYING/SNAPSHOT
+		// (no components).
+		{
+			name:      "witness Installing/InstallDone->Configuring",
+			initState: StateInstalling,
+			event:     Event{Type: EvInstallDone},
+			asWitness: true,
+			wantState: StateConfiguring,
+		},
+		{
+			// Still via WAIT_K3S_READY: k3s staying up does not mean
+			// the witness joined, and a failed join leaves it running.
+			name:      "witness StartingK3s/K3sStarted->WaitK3sReady",
+			initState: StateStartingK3s,
+			initPhase: PhaseSteady,
+			event:     Event{Type: EvK3sStarted},
+			asWitness: true,
+			wantState: StateWaitK3sReady,
+		},
+		{
+			name:      "witness WaitK3sReady/K3sReady->Running",
+			initState: StateWaitK3sReady,
+			initPhase: PhaseSteady,
+			event:     Event{Type: EvK3sReady},
+			asWitness: true,
+			wantState: StateRunning,
+		},
+		{
+			name:      "witness Configuring/NotWanted->WitnessIdle",
+			initState: StateConfiguring,
+			event: Event{
+				Type: EvError,
+				Err:  fmt.Errorf("configure: %w", witness.ErrNotWanted),
+			},
+			asWitness: true,
+			wantState: StateWitnessIdle,
+			checkFn: func(t *testing.T, d *daemon) {
+				if d.lastError != nil {
+					t.Errorf("not-wanted is not an error, got lastError = %v",
+						d.lastError)
+				}
+			},
+		},
+		{
+			name:      "witness WitnessIdle/ConfigChange->Configuring",
+			initState: StateWitnessIdle,
+			event:     Event{Type: EvConfigChange},
+			asWitness: true,
+			wantState: StateConfiguring,
+		},
+		{
+			// A real error still retries in place rather than parking.
+			name:      "witness Configuring/Error retries",
+			initState: StateConfiguring,
+			event:     Event{Type: EvError, Err: errors.New("boom")},
+			asWitness: true,
+			wantState: StateConfiguring,
+		},
+		{
+			name:      "witness RunningHooks/HooksDone->Configuring",
+			initState: StateRunningHooks,
+			event:     Event{Type: EvHooksDone},
+			asWitness: true,
+			wantState: StateConfiguring,
+		},
+		{
+			name:       "kube RunningHooks/HooksDone->StartingK3s",
+			initState:  StateRunningHooks,
+			initReason: restartConfigChange,
+			event:      Event{Type: EvHooksDone},
+			wantState:  StateStartingK3s,
+		},
+		{
+			name:      "kube Installing/InstallDone->StartingCtrd",
+			initState: StateInstalling,
+			event:     Event{Type: EvInstallDone},
+			wantState: StateStartingCtrd,
+		},
+		{
+			name:      "kube StartingK3s/K3sStarted->Importing",
+			initState: StateStartingK3s,
+			initPhase: PhaseSteady,
+			event:     Event{Type: EvK3sStarted},
+			wantState: StateImporting,
+		},
 		{
 			name:      "ClusterTransition/SingleToCluster queued (do not interrupt)",
 			initState: StateClusterTransition,
@@ -652,6 +745,9 @@ func TestTransitionTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.asWitness {
+				defer role.Override(role.Witness)()
+			}
 			d := newTestDaemon()
 			d.state = tt.initState
 			d.phase = tt.initPhase
@@ -678,7 +774,7 @@ func TestGlobalSIGTERM(t *testing.T) {
 		StateInit, StateInstalling, StateStartingCtrd, StateConfiguring,
 		StateStartingK3s, StateImporting, StateWaitK3sReady, StateDeploying,
 		StateSnapshot, StateRunning, StateBackoff, StateStoppingK3s,
-		StateRunningHooks, StateClusterTransition,
+		StateRunningHooks, StateClusterTransition, StateWitnessIdle,
 	}
 	ctx := context.Background()
 	for _, s := range allStates {
@@ -700,7 +796,7 @@ func TestGlobalSocketStop(t *testing.T) {
 		StateInit, StateInstalling, StateStartingCtrd, StateConfiguring,
 		StateStartingK3s, StateImporting, StateWaitK3sReady, StateDeploying,
 		StateSnapshot, StateRunning, StateBackoff, StateStoppingK3s,
-		StateRunningHooks, StateClusterTransition,
+		StateRunningHooks, StateClusterTransition, StateWitnessIdle,
 	}
 	ctx := context.Background()
 	for _, s := range allStates {
@@ -1256,4 +1352,33 @@ func TestJoinStageResetsWhenATransitionCompletes(t *testing.T) {
 		t.Errorf("joinStageReached = %d, want %d", d.joinStageReached,
 			joinStageRank(StateWaitK3sReady))
 	}
+}
+
+// TestGraphReplyByRole covers the one k3s-sctl answer that could
+// mislead: the deploy graph is built without reference to the role and
+// its signal bus is only ever published to by DeployAll, so a witness
+// answering normally would report pkg/kube's components as WAITING
+// forever.
+func TestGraphReplyByRole(t *testing.T) {
+	t.Run("the witness refuses", func(t *testing.T) {
+		defer role.Override(role.Witness)()
+		got := (&daemon{}).graphReply()
+		if !strings.HasPrefix(got, "ERR:") {
+			t.Errorf("graphReply() = %q, want an ERR reply", got)
+		}
+		if strings.Contains(got, "longhorn") {
+			t.Errorf("graphReply() leaked the kube graph: %q", got)
+		}
+	})
+
+	t.Run("the kube role still gets its graph", func(t *testing.T) {
+		defer role.Override(role.Kube)()
+		got := (&daemon{signals: deploy.NewBus()}).graphReply()
+		if strings.HasPrefix(got, "ERR:") {
+			t.Fatalf("graphReply() = %q, want a graph", got)
+		}
+		if !strings.Contains(got, "longhorn") {
+			t.Errorf("graphReply() = %q, want the deploy graph", got)
+		}
+	})
 }
