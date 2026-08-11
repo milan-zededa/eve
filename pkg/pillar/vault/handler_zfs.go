@@ -16,6 +16,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	etpm "github.com/lf-edge/eve/pkg/pillar/evetpm"
 	"github.com/lf-edge/eve/pkg/pillar/types"
+	fileutils "github.com/lf-edge/eve/pkg/pillar/utils/file"
 	"github.com/lf-edge/eve/pkg/pillar/zfs"
 	"golang.org/x/sys/unix"
 )
@@ -106,6 +107,9 @@ func (h *ZFSHandler) SetupDefaultVault() error {
 				return fmt.Errorf("error creating zfs etcd zvol %s, error=%v",
 					types.EtcdZvol, err)
 			}
+			if err := createWitnessZvolIfRequested(h.log, "", false); err != nil {
+				return err
+			}
 			if err := CreateZvolVault(h.log, types.SealedDataset, "", false); err != nil {
 				return fmt.Errorf("error creating zfs non-tpm vault %s, error=%v",
 					types.SealedDataset, err)
@@ -158,6 +162,16 @@ func (h *ZFSHandler) unlockVault(vaultPath string) error {
 				err, stdOut, stdErr)
 			return err
 		}
+		// Same for the witness zvol, which the witness container mounts.
+		// Only present when the install reserved it, so absence is normal.
+		if zfs.DatasetExist(h.log, types.WitnessZvol) {
+			args := []string{"load-key", types.WitnessZvol}
+			if stdOut, stdErr, err := execCmd(types.ZFSBinary, args...); err != nil {
+				h.log.Errorf("Error loading key for witness vol vault: %v, %s, %s",
+					err, stdOut, stdErr)
+				return err
+			}
+		}
 		if err := MountVaultZvol(h.log, vaultPath); err != nil {
 			h.log.Errorf("Error unlocking vault: %v", err)
 			return err
@@ -186,6 +200,9 @@ func (h *ZFSHandler) createVault(vaultPath string) error {
 	if base.IsHVTypeKube() {
 		if err := CreateZvolEtcd(h.log, types.EtcdZvol, zfsKeyFile, true); err != nil {
 			return fmt.Errorf("error creating zfs etcd zvol %s, error=%v", types.EtcdZvol, err)
+		}
+		if err := createWitnessZvolIfRequested(h.log, zfsKeyFile, true); err != nil {
+			return err
 		}
 		if err := CreateZvolVault(h.log, vaultPath, zfsKeyFile, true); err != nil {
 			h.log.Errorf("Error creating zfs vault %s, error=%v", vaultPath, err)
@@ -474,6 +491,24 @@ func CreateZvolVault(log *base.LogObject, datasetName string, zfsKeyFile string,
 
 // CreateZvolEtcd Create and mount an empty vault dataset zvol
 func CreateZvolEtcd(log *base.LogObject, datasetName string, zfsKeyFile string, encrypted bool) error {
+	return createEtcdSizedZvol(log, datasetName, zfsKeyFile, encrypted, "Etcd")
+}
+
+// CreateZvolWitness creates the zvol backing the 2-node-HA witness's
+// etcd. Sized like the etcd zvol, because a witness is a full etcd
+// voting member: it replicates the entire keyspace and raft log, so its
+// database grows to the same size as any other member's. "Lightweight"
+// describes the witness's compute footprint, not its storage.
+func CreateZvolWitness(log *base.LogObject, datasetName string, zfsKeyFile string, encrypted bool) error {
+	return createEtcdSizedZvol(log, datasetName, zfsKeyFile, encrypted, "Witness")
+}
+
+// createEtcdSizedZvol creates and formats an etcd-shaped zvol: fixed
+// size from InstallOptionEtcdSizeGB, 4 KiB blocks to match etcd's write
+// granularity, and compression off so it does not add latency to the
+// fsync on every raft append. what names the zvol in error messages.
+func createEtcdSizedZvol(log *base.LogObject, datasetName string, zfsKeyFile string,
+	encrypted bool, what string) error {
 	etcdSizeGb, err := getEtcdSizeSetting()
 	if err != nil {
 		log.Errorf("Using default %d GB, can't read etcd size setting: %v", etcdSizeGb, err)
@@ -482,18 +517,61 @@ func CreateZvolEtcd(log *base.LogObject, datasetName string, zfsKeyFile string, 
 
 	err = zfs.CreateVaultVolumeDataset(log, datasetName, zfsKeyFile, encrypted, etcdSizeBytes, "off", base.EtcdVolBlockSizeBytes)
 	if err != nil {
-		return fmt.Errorf("Vault Etcd zvol creation error: %v", err)
+		return fmt.Errorf("Vault %s zvol creation error: %v", what, err)
 	}
 
 	devPath := zfs.GetZvolPath(datasetName)
 	// Sometimes we wait for /dev path to the zvol to appear
 	// Since this only occurs on first boot, we can afford to be patient
 	if err = waitPath(log, devPath, vaultZvolPathWaitSeconds); err != nil {
-		return fmt.Errorf("Vault Etcd zvol dev path missing: %v", err)
+		return fmt.Errorf("Vault %s zvol dev path missing: %v", what, err)
 	}
 
 	if err = formatZvol(log, devPath, vaultFsType); err != nil {
-		return fmt.Errorf("Vault Etcd zvol format error: %v", err)
+		return fmt.Errorf("Vault %s zvol format error: %v", what, err)
+	}
+	return nil
+}
+
+// witnessZvolRequested reports whether InstallOptionWitnessZvol was
+// given on the kernel command line at install time.
+//
+// The reservation has to happen here, before CreateZvolVault claims the
+// remaining pool: these zvols are thick-provisioned, so once the vault
+// has taken the rest there is no space left to carve a witness zvol out
+// of. That is also why this cannot be enabled later on a device already
+// in the field; those fall back to a vault-backed directory instead.
+func witnessZvolRequested(log *base.LogObject) bool {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		log.Errorf("Not reserving witness zvol, can't read /proc/cmdline: %v", err)
+		return false
+	}
+	for _, arg := range strings.Fields(string(data)) {
+		if arg == base.InstallOptionWitnessZvol {
+			return true
+		}
+	}
+	return false
+}
+
+// createWitnessZvolIfRequested reserves the witness zvol when the
+// install option asked for it. Must run before CreateZvolVault.
+func createWitnessZvolIfRequested(log *base.LogObject, zfsKeyFile string, encrypted bool) error {
+	if !witnessZvolRequested(log) {
+		return nil
+	}
+	log.Noticef("%s given; reserving witness zvol %s",
+		base.InstallOptionWitnessZvol, types.WitnessZvol)
+	if err := CreateZvolWitness(log, types.WitnessZvol, zfsKeyFile, encrypted); err != nil {
+		return fmt.Errorf("error creating zfs witness zvol %s, error=%v",
+			types.WitnessZvol, err)
+	}
+	// Record the reservation so the witness knows to wait for the device
+	// node rather than fall back to vault-backed storage.
+	if err := fileutils.WriteRename(types.WitnessZvolMarker, []byte{}); err != nil {
+		return fmt.Errorf("error writing witness zvol marker %s, error=%v",
+			types.WitnessZvolMarker, err)
 	}
 	return nil
 }
