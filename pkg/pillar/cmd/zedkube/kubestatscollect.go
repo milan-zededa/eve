@@ -7,6 +7,7 @@ package zedkube
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -99,6 +100,7 @@ func (z *zedkube) collectKubeStats() {
 		}
 		// Publish the cluster info
 		clusterInfo := types.KubeClusterInfo{
+			Witness:   parseWitnessStatus(nodes),
 			Nodes:     nodesInfo,
 			AppPods:   podsInfo,
 			AppVMIs:   vmisInfo,
@@ -207,9 +209,49 @@ func getKubeNodeInfo(node corev1.Node, z *zedkube) *types.KubeNodeInfo {
 		Schedulable:        schedulable,
 		Admission:          admission,
 		NodeID:             node.Labels["node-uuid"],
+		Recovery:           parseNodeRecovery(node),
 	}
 
 	return &nodeInfo
+}
+
+// parseNodeRecovery reads back the quorum-recovery status a node stamps
+// on itself. Only that node knows it, so this is the same route the
+// node-uuid label already takes into this message.
+//
+// A malformed annotation is dropped rather than failing the collection:
+// one node's bad annotation must not cost the report every other node's
+// status.
+func parseNodeRecovery(node corev1.Node) *types.KubeQuorumRecoveryStatus {
+	raw, ok := node.Annotations[types.NodeRecoveryAnnotation]
+	if !ok {
+		return nil
+	}
+	var status types.KubeQuorumRecoveryStatus
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		log.Errorf("parseNodeRecovery: node %s: %v", node.Name, err)
+		return nil
+	}
+	return &status
+}
+
+// parseWitnessStatus reads the witness's status from the annotation of
+// whichever node hosts it. The witness has no Node object of its own,
+// having no kubelet, so it reports through its host.
+func parseWitnessStatus(nodes []corev1.Node) *types.WitnessStatus {
+	for _, node := range nodes {
+		raw, ok := node.Annotations[types.NodeWitnessAnnotation]
+		if !ok {
+			continue
+		}
+		var status types.WitnessStatus
+		if err := json.Unmarshal([]byte(raw), &status); err != nil {
+			log.Errorf("parseWitnessStatus: node %s: %v", node.Name, err)
+			continue
+		}
+		return &status
+	}
+	return nil
 }
 
 func getAppKubePods(ctx context.Context, clientset *kubernetes.Clientset) ([]corev1.Pod, error) {
