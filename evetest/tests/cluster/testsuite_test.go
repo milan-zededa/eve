@@ -11,12 +11,26 @@ import (
 
 // TestNodeClusterSuite is the top-level entry point for cluster tests.
 // It reuses the evetest harness (Adam controller, SDN, broker) across
-// the subtests for efficiency. All subtests pin the device to the Kubevirt
-// hypervisor (aka eve-k).
+// the subtests for efficiency wherever possible. All subtests pin the device
+// to the Kubevirt hypervisor (aka eve-k).
 //
 // The single-node subtests run before the three-node one, and the happy-path
 // purge runs before the fault-injecting VMIRS test, so a failure in the
 // ordinary app lifecycle is not masked by chaos.
+//
+// Every cluster subtest re-creates its devices, because
+// clusterDeviceRequirements sets CreateFromScratchWithLiveImage, which
+// maybeReuseDevices always rejects. No subtest inherits cluster state from
+// the one before it.
+//
+// TestClusterToSingleConversion is ordered after TestThreeNodesCluster
+// regardless, since it converts a node out of a cluster and reads better
+// as a variation following the plain three-node formation it starts from.
+//
+// TestTwoNodeHACluster runs last. It requests its own two-device,
+// SeparateClusterPort topology, distinct from the three-device one used
+// above, and is placed last simply because it has different requirements
+// from all the other tests.
 //
 // Test parameters
 // ---------------
@@ -58,6 +72,9 @@ func TestNodeClusterSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestDNIDandBackupDNID,
+		},
+		evetest.TestCase{
+			Test: TestTwoNodeHACluster,
 		},
 	)
 }

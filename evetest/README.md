@@ -939,7 +939,7 @@ same terminal session beforehand.
 |----------|-------------|---------|
 | `EVETEST_ORG` | Docker Hub organization for evetest and evetest-broker images | `lfedge` |
 | `EVETEST_EVE_REPO` | EVE image repository | `lfedge/eve` |
-| `EVETEST_ADAM_VERSION` | Adam controller version *(build-time only, see note below)* | `0.0.81` |
+| `EVETEST_ADAM_VERSION` | Adam controller version *(build-time only, see note below)* | `0.0.84` |
 | `EVETEST_SDN_VERSION` | SDN emulator version | `1.2` |
 
 > **`EVETEST_ADAM_VERSION` requires evetest container rebuild.** Unlike the other
@@ -951,6 +951,16 @@ same terminal session beforehand.
 > To test against a different (e.g. custom-built) Adam version, rebuild the image first:
 > `make build-container EVETEST_ADAM_VERSION=<version>`, then run tests as usual
 > against that locally-built image.
+>
+> **If the Adam image was built locally** (e.g. `docker build -t lfedge/adam:<version> .`
+> in your own `adam` checkout) rather than pulled from a registry, the build may fail
+> with `failed to resolve source metadata for docker.io/lfedge/adam:<version>: not found`
+> even though `docker images` shows it present. This happens when your active `docker
+> buildx` builder uses the `docker-container` driver, which runs in its own isolated
+> BuildKit instance with no visibility into the host's local image store (`docker buildx
+> ls` shows which driver is active). Work around it by pointing this one build at the
+> `default` builder (which shares the host's Docker image store), without changing your
+> global default: `BUILDX_BUILDER=default make build-container EVETEST_ADAM_VERSION=<version>`.
 
 ### Broker Variables (for distributed mode)
 

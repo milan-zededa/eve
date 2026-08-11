@@ -71,7 +71,7 @@ func TestKvmToKRepartitionGeometry(test *testing.T) {
 	}()
 	// The offline repartition boots once more than an upgrade does; declared
 	// before the update that causes it.
-	device.ExpectReboots(1)
+	device.ExpectAdditionalReboots(1)
 	log.Infof("kvm→k hop: running the repartition")
 	device.UpgradeEVE(p.targetVersion, evetest.HypervisorKubevirt,
 		evetest.BaseOSDatastoreHTTP, true, false)
