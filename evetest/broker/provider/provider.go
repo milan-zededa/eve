@@ -185,6 +185,15 @@ type DeviceSpec struct {
 
 	// NetworkInterfaces defines the network configuration for the device.
 	NetworkInterfaces []NetworkInterfaceSpec
+
+	// NetworkBootFirst requests that the device try to boot over the network
+	// (PXE/iPXE) before its attached disk, for one boot only -- the boot
+	// order then reverts to disk-first for any subsequent reset within the
+	// same device lifetime (e.g. the reboot a network installer performs
+	// after writing EVE onto the target disk). Used for devices provisioned
+	// with a blank target disk and no installer/live image content attached
+	// (see BuildImageRequest.network_boot).
+	NetworkBootFirst bool
 }
 
 // NetworkInterfaceSpec defines a single network interface for a device.

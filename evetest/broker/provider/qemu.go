@@ -336,7 +336,7 @@ func (p *QemuProvider) GetSupportedDeviceArchs() ([]api.ArchType, error) {
 
 // Capabilities returns the full capability set: the qemu provider runs on the
 // local host and applies the host-level tweaks required to forward link-local
-// L2 protocols, and supports emulated TPM.
+// L2 protocols, and supports emulated TPM. It also supports network boot.
 func (p *QemuProvider) Capabilities() []api.Capability {
 	return fullCapabilitySet()
 }
@@ -1499,6 +1499,18 @@ func (dev *qemuDevice) buildArgs() []string {
 		args = append(args,
 			"-smbios", fmt.Sprintf("type=1,serial=%s", dev.spec.SerialNumber),
 		)
+	}
+
+	if dev.spec.NetworkBootFirst {
+		// Try the disk first, falling through to the network (PXE/iPXE) only
+		// when it has nothing bootable -- the standard BIOS/UEFI boot-order
+		// fallthrough semantics, not a QEMU-specific "one-shot" flag. While the
+		// target disk is blank, "c" (hd) fails and firmware falls through to
+		// "n" (network); once the network installer has written EVE onto it,
+		// "c" succeeds outright and network is never attempted again. This
+		// needs no reconfiguration step after installation, and the same
+		// static setting is correct for the device's entire lifetime.
+		args = append(args, "-boot", "order=cn")
 	}
 
 	if dev.spec.WithTPM {

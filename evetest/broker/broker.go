@@ -636,7 +636,14 @@ func (b *broker) BuildImage(
 
 	var eveImage buildEVEImageResult
 	var templateKey string
-	if b.provider.DiskImageStrategy() == provider.DiskImageLegacyBuild {
+	if req.NetworkBoot {
+		eveImage, err = buildNetworkBootImage(ctx, log, buildNetworkBootImageParams{
+			imageDirPath:    imageDirPath,
+			dockerImageName: dockerImageName,
+			diskSize:        req.DiskBytes,
+			extraDiskBytes:  req.ExtraDiskBytes,
+		})
+	} else if b.provider.DiskImageStrategy() == provider.DiskImageLegacyBuild {
 		eveImage, err = buildEVEImage(ctx, log, buildEVEImageParams{
 			imageDirPath:    imageDirPath,
 			dockerImageName: dockerImageName,
@@ -696,6 +703,7 @@ func (b *broker) BuildImage(
 			Disks:               firstBootDisks,
 			UEFIFirmwareDirPath: eveImage.firmwareDir,
 			Arch:                imageArch,
+			NetworkBootFirst:    req.NetworkBoot,
 
 			// These fields are set by SetupDevices.
 			CPUs:              0,

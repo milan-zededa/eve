@@ -175,6 +175,10 @@ const (
 	// imgServerHTTPSPort is the default HTTPS port (443), matching the port
 	// HTTPStorage assumes when UseHTTPS is set and ServerPort is left unset.
 	imgServerHTTPSPort = 443
+	// imgServerTFTPPort is the standard TFTP port (69). Unlike the other
+	// image server ports, this one is not just a convention: TFTP clients
+	// (PXE ROMs, iPXE) always use port 69, it is not configurable via DHCP.
+	imgServerTFTPPort = 69
 
 	sdnTunName = "sdn-tun"
 	sdnTunMTU  = 1500
@@ -274,6 +278,10 @@ type TestHarness struct {
 	// server, over TLS with a certificate signed by the harness's own CA
 	// (see DsType_DsHttps / HTTPStorage.UseHTTPS, GetCACertPEM).
 	imgServerTLSListener net.Listener
+
+	// TFTP listener serving the same imgServerDir, for devices network-booting
+	// via iPXE/PXE (see DHCP.netboot_server_ip).
+	tftpServerConn net.PacketConn
 
 	// SDN
 	sdnConn   *grpc.ClientConn
@@ -705,6 +713,26 @@ func Init(t *testing.T) *T {
 	go th.runSFTPServer(th.sftpServerListener, th.imgServerDir)
 	th.log.Infof("SFTP server listening on sftp://%s/ (serving %s)", sftpListenAddr, th.imgServerDir)
 
+	// Start a TFTP server on the same image-server interface, serving the
+	// same directory, for devices network-booting via iPXE/PXE (see
+	// DHCP.netboot_server_ip). TFTP always uses port 69 -- unlike the
+	// other image-server ports, this is not a convention devices could be
+	// told to use otherwise, real PXE ROMs/iPXE hardcode it.
+	tftpListenAddr := net.JoinHostPort(imgServerIPv4.String(), strconv.Itoa(imgServerTFTPPort))
+	tftpUDPAddr, err := net.ResolveUDPAddr("udp", tftpListenAddr)
+	if err != nil {
+		th.t.Fatalf("failed to resolve TFTP server address %s: %v", tftpListenAddr, err)
+	}
+	th.tftpServerConn, err = net.ListenUDP("udp", tftpUDPAddr)
+	if err != nil {
+		th.t.Fatalf("failed to listen on TFTP server address %s: %v", tftpListenAddr, err)
+	}
+	tftpServer := th.newImgServerTFTPServer()
+	go func() {
+		_ = tftpServer.Serve(th.tftpServerConn)
+	}()
+	th.log.Infof("TFTP server listening on udp://%s/ (serving %s)", tftpListenAddr, th.imgServerDir)
+
 	// Create broker client.
 	brokerAddr := viper.GetString(constants.BrokerAddressEnv)
 	if brokerAddr == "" {
@@ -870,6 +898,13 @@ func Close() {
 	if th.sftpServerListener != nil {
 		if err := th.sftpServerListener.Close(); err != nil {
 			th.log.Warnf("Failed to close SFTP server listener: %v", err)
+		}
+	}
+
+	// Stop the TFTP server.
+	if th.tftpServerConn != nil {
+		if err := th.tftpServerConn.Close(); err != nil {
+			th.log.Warnf("Failed to close TFTP server connection: %v", err)
 		}
 	}
 
@@ -1071,6 +1106,29 @@ func Setup(requirements ...Requirement) {
 		devices[devName] = devState
 		th.prepareEVEDeviceForOnboarding(devState)
 		th.prepareImageForEVEDevice(devState)
+		if devReq.DeviceReusePolicy == CreateFromScratchWithNetworkBoot {
+			// Collect every MAC address the network model assigns to this
+			// device -- by this point (see the port loop above) each port
+			// already has an EveMacAddress, whether set explicitly by the
+			// model or auto-generated here. buildNetbootArtifacts needs all
+			// of them to stage a matching EFI/BOOT/grub.cfg-01-<mac> for
+			// each, since grub's own per-client config lookup is the only
+			// way to hand this device its own installer ISO (see
+			// buildNetbootArtifacts' doc comment).
+			var macs []net.HardwareAddr
+			for _, port := range netModel.Ports {
+				if port.GetEveDeviceName() != devName {
+					continue
+				}
+				mac, err := net.ParseMAC(port.GetEveMacAddress())
+				if err != nil {
+					th.t.Fatalf("Port %s of device %s has an invalid EveMacAddress %q: %v",
+						port.GetLogicalLabel(), devName, port.GetEveMacAddress(), err)
+				}
+				macs = append(macs, mac)
+			}
+			th.buildNetbootArtifacts(devState, macs)
+		}
 	}
 	sdnUplinkIPs := th.setupEVEDevices(devices, netModel)
 	th.devicesM.Lock()
@@ -1300,6 +1358,16 @@ func GetImageServerSFTPPort() uint16 {
 // certificate trusting it).
 func GetImageServerHTTPSPort() uint16 {
 	return imgServerHTTPSPort
+}
+
+// GetImageServerInstallerISOFilename returns the path, relative to the image
+// server's root, of deviceName's network-install ISO (see
+// TestHarness.buildNetbootArtifacts). Every other netboot artifact (ipxe.efi,
+// ipxe.efi.cfg, EFI/BOOT/*) is shared at the image server's root -- only the
+// installer ISO is device-specific, since it alone carries this device's own
+// injected onboarding cert/config.
+func GetImageServerInstallerISOFilename(deviceName string) string {
+	return "installer-" + deviceName + ".iso"
 }
 
 // GetCACertPEM returns the PEM encoding of the harness's own CA certificate

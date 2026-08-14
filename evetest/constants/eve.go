@@ -19,6 +19,12 @@ const (
 	// Used by both the broker (to bound the installer wait) and the harness (to extend
 	// the SetupDevices RPC deadline when installation is requested).
 	EVEInstallationTimeout = 10 * time.Minute
+	// NetworkBootInstallationTimeout is the maximum time allowed for a device to boot
+	// over the network (DHCP/TFTP/HTTP) and complete the EVE installer, on top of
+	// EVEInstallationTimeout's budget for the installer itself. Network transfer of
+	// the iPXE bootloader and installer.iso is slower and less predictable than
+	// reading from a locally attached disk image.
+	NetworkBootInstallationTimeout = 10 * time.Minute
 )
 
 const (
