@@ -297,6 +297,7 @@ func nodeArchs(ctx context.Context, client *proxmox.Client,
 // same as qemu/libvirt. The host hookscript (proxmoxHookscriptVolID, a deployment
 // prerequisite installed by the Proxmox broker installer) applies the link-local
 // L2 forwarding tweaks on the xconnect bridges, and TPM is supported via tpmstate0.
+// It also supports network boot.
 func (p *ProxmoxProvider) Capabilities() []api.Capability {
 	return fullCapabilitySet()
 }
@@ -984,8 +985,19 @@ func (p *ProxmoxProvider) buildVMOptions(dev *proxmoxDevice, diskRefs []string,
 	// Disks, imported from the images uploaded to the import storage.
 	options = append(options, diskOptions(p.conf.Storage, diskRefs)...)
 	if len(diskRefs) > 0 {
+		bootOrder := "virtio0"
+		if spec.NetworkBootFirst {
+			// Standard BIOS/UEFI boot-order fallthrough: firmware tries
+			// virtio0 first, falling through to net0 (PXE/iPXE) only while
+			// the target disk has nothing bootable. Once a network installer
+			// has written EVE onto it, virtio0 succeeds outright and network
+			// is never attempted again -- this same static setting is correct
+			// for the device's entire lifetime, no reconfiguration needed
+			// after installation (net0 is dev.ifaces[0]'s model; see below).
+			bootOrder += ";net0"
+		}
 		options = append(options, proxmox.VirtualMachineOption{
-			Name: "boot", Value: "order=virtio0",
+			Name: "boot", Value: "order=" + bootOrder,
 		})
 	}
 
