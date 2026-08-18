@@ -209,7 +209,9 @@ do_installer_net() {
   # by default, BOOT*.EFI looks for grub.cfg in its source location at EFI/BOOT/grub.cfg, so put it there
   cat <<'EOF' > /installer/EFI/BOOT/grub.cfg
 echo "Downloading installer. This may take some time. Please wait patiently."
-loopback loop0 ($cmddevice)/installer.iso
+set installer_name=installer.iso
+export installer_name
+loopback loop0 ($cmddevice)/$installer_name
 set root=loop0
 set isnetboot=true
 export isnetboot
