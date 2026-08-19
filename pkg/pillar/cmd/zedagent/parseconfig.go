@@ -866,7 +866,6 @@ func parseAppInstanceConfig(getconfigCtx *getconfigContext,
 		default:
 			appInstance.AffinityType = types.PreferredDuringScheduling
 		}
-
 		// Verify that it fits and if not publish with error
 		checkAndPublishAppInstanceConfig(getconfigCtx.pubAppInstanceConfig, appInstance)
 		getconfigCtx.bootOrderUpdateMx.Unlock()

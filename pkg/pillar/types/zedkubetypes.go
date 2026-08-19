@@ -620,9 +620,18 @@ func (s KubeUserServices) Equal(s2 KubeUserServices) bool {
 // enables the on-boot descheduler trigger.
 const VmiDescheduleEventBoot = "boot"
 
+// VmiDescheduleEventJoin is the KubernetesVmiDescheduleEvents token that
+// enables the trigger for this node newly becoming an app's designated
+// node while already running. A live single-to-cluster join never
+// restarts zedkube, so it needs a trigger of its own distinct from boot;
+// the scheduler also never revisits a pod already running elsewhere, so
+// only this (or boot) ever moves one.
+const VmiDescheduleEventJoin = "join"
+
 // VmiDescheduleConfig holds the set of trigger events for VMI descheduling.
 type VmiDescheduleConfig struct {
 	OnBoot bool // trigger descheduler once per boot
+	OnJoin bool // trigger when this node newly becomes an app's designated node
 }
 
 // KubeConfig : A root level structure to pass config from pillar to kube service container
