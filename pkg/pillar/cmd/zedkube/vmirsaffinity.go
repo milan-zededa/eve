@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	virtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
 
@@ -44,6 +45,13 @@ import (
 // that's only temporarily down keeps its Node object, so this can't misfire
 // the instant it reconnects, only once it's actually been replaced.
 //
+// The nodeExists check is skipped when the controller has just reassigned
+// this app's DNID to this node while it is still designated live (see
+// designationChanged): that reassignment is itself authoritative, and
+// waiting for the old node to be pruned from the cluster would leave
+// rescaleDesignatedVMIs cycling the VMIRS onto a template that still
+// points at it.
+//
 // Patching only spec.template.spec.affinity does not disturb a VMI already
 // running: a ReplicaSet controller consults the template only when creating
 // a NEW replica to satisfy the desired count, never retroactively for a
@@ -59,7 +67,26 @@ func (z *zedkube) reconcileVMIRSAffinity(wdFunc func()) {
 	if len(items) == 0 {
 		return
 	}
-	if !anyDesignatedVMI(items) {
+	designated := anyDesignatedVMI(items)
+	// Logged on change rather than per tick: whether this node is the
+	// designated one for any VMI app decides whether it reconciles
+	// affinity at all, so a silent "no" is the first thing to rule out
+	// when an app does not move.
+	if designated != z.lastAnyDesignatedVMI || !z.anyDesignatedVMILogged {
+		// The join event fires on the true->false->true edge only, and
+		// only once this process has already seen a baseline: the first
+		// sighting after this agent starts is this device's own boot,
+		// which the boot event already covers, not a designation this
+		// process watched happen.
+		if z.anyDesignatedVMILogged && designated && !z.lastAnyDesignatedVMI {
+			z.designationChanged = true
+		}
+		z.lastAnyDesignatedVMI = designated
+		z.anyDesignatedVMILogged = true
+		log.Noticef("reconcileVMIRSAffinity: this node is the designated node "+
+			"for at least one VMI app: %t (of %d app configs)", designated, len(items))
+	}
+	if !designated {
 		// Nothing for this node to reconcile; skip the kubeconfig/client
 		// construction cost on this tick.
 		return
@@ -81,7 +108,7 @@ func (z *zedkube) reconcileVMIRSAffinity(wdFunc func()) {
 		return
 	}
 
-	reconcileVMIRSAffinityWithClient(z.nodeName, virtClient, nodeClient, items, wdFunc)
+	reconcileVMIRSAffinityWithClient(z.nodeName, virtClient, nodeClient, items, z.designationChanged, wdFunc)
 }
 
 // anyDesignatedVMI reports whether any item is a VMI-backed app for which
@@ -97,8 +124,12 @@ func anyDesignatedVMI(items map[string]interface{}) bool {
 	return false
 }
 
+// Rewrites the affinity of every VMIRS this node owns that no longer
+// matches its app config. Only the template is rewritten: a running
+// pod's affinity is immutable, so the app moves when the descheduler
+// evicts it, not here.
 func reconcileVMIRSAffinityWithClient(nodeName string, virtClient kubecli.KubevirtClient,
-	nodeClient kubernetes.Interface, items map[string]interface{}, wdFunc func()) {
+	nodeClient kubernetes.Interface, items map[string]interface{}, forceReassignment bool, wdFunc func()) {
 	for _, item := range items {
 		wdFunc()
 
@@ -133,8 +164,10 @@ func reconcileVMIRSAffinityWithClient(nodeName string, virtClient kubecli.Kubevi
 			continue
 		}
 		// Gate 2: that disagreement is permanent, not a live node merely
-		// being unreachable right now.
-		if nodeExists(nodeClient, staleNode) {
+		// being unreachable right now -- unless the controller just
+		// reassigned this app's DNID to this node live, which is
+		// authoritative on its own.
+		if !forceReassignment && nodeExists(nodeClient, staleNode) {
 			continue
 		}
 
@@ -146,9 +179,112 @@ func reconcileVMIRSAffinityWithClient(nodeName string, virtClient kubecli.Kubevi
 			log.Errorf("reconcileVMIRSAffinity: update vmirs %s affinity: %v", vmiRsName, err)
 			continue
 		}
-		log.Noticef("reconcileVMIRSAffinity: updated vmirs %s affinity to node %s (node %s no longer in cluster)",
-			vmiRsName, nodeName, staleNode)
+		if forceReassignment {
+			log.Noticef("reconcileVMIRSAffinity: updated vmirs %s affinity to node %s (DNID reassignment)",
+				vmiRsName, nodeName)
+		} else {
+			log.Noticef("reconcileVMIRSAffinity: updated vmirs %s affinity to node %s (node %s no longer in cluster)",
+				vmiRsName, nodeName, staleNode)
+		}
 	}
+}
+
+// rescaleDesignatedVMIs cycles the VMIRS of every VMI-backed app newly
+// designated to this node whose VMI is not already running here, forcing
+// KubeVirt to create a fresh one from the template reconcileVMIRSAffinity
+// already rewrote.
+//
+// Nothing else moves it: the running VMI's own affinity is immutable and
+// still names wherever it was created, so it is not violating anything
+// the generic descheduler Job would ever notice, and the scheduler does
+// not revisit a pod that is already running. A direct scale-cycle is the
+// only way left to make it move.
+func (z *zedkube) rescaleDesignatedVMIs(wdFunc func()) {
+	sub := z.subAppInstanceConfig
+	items := sub.GetAll()
+	if len(items) == 0 {
+		return
+	}
+
+	config, err := kubeapi.GetKubeConfig()
+	if err != nil {
+		log.Errorf("rescaleDesignatedVMIs: get kubeconfig: %v", err)
+		return
+	}
+	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(config)
+	if err != nil {
+		log.Errorf("rescaleDesignatedVMIs: kubevirt client: %v", err)
+		return
+	}
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), kubeAPITimeout)
+	vmiList, err := virtClient.VirtualMachineInstance(kubeapi.EVEKubeNameSpace).List(listCtx, metav1.ListOptions{})
+	listCancel()
+	if err != nil {
+		log.Errorf("rescaleDesignatedVMIs: list VMIs: %v", err)
+		return
+	}
+
+	for _, item := range items {
+		wdFunc()
+
+		aiconfig := item.(types.AppInstanceConfig)
+		if !aiconfig.IsDesignatedNodeID {
+			continue
+		}
+		if aiconfig.FixedResources.VirtualizationMode == types.NOHYPER {
+			continue
+		}
+
+		vmiRsName := base.GetAppKubeNameWithPurge(aiconfig.DisplayName,
+			aiconfig.UUIDandVersion.UUID, aiconfig.PurgeCmd.Counter+aiconfig.LocalPurgeCmd.Counter)
+		if vmi := findAppVMI(vmiList.Items, vmiRsName); vmi != nil && vmi.Status.NodeName == z.nodeName {
+			// Already here - the running VMI's own affinity was already
+			// satisfied by wherever it was created, or a previous cycle
+			// already landed it.
+			continue
+		}
+
+		log.Noticef("rescaleDesignatedVMIs: cycling vmirs %s onto newly designated node %s",
+			vmiRsName, z.nodeName)
+		if err := kubeapi.DetachUtilVmirsReplicaReset(log, vmiRsName); err != nil {
+			log.Errorf("rescaleDesignatedVMIs: cycle vmirs %s: %v", vmiRsName, err)
+		}
+	}
+}
+
+// vmirsAffinityNode extracts the kubernetes.io/hostname value from the EVE-set
+// node affinity in a VMIRS template spec. EVE encodes the owner node via
+// hypervisor.SetKubeAffinity using either
+// preferredDuringSchedulingIgnoredDuringExecution or
+// requiredDuringSchedulingIgnoredDuringExecution. Returns "" if neither is
+// present or the hostname matchExpression is absent.
+func vmirsAffinityNode(vmirs *virtv1.VirtualMachineInstanceReplicaSet) string {
+	if vmirs.Spec.Template == nil {
+		return ""
+	}
+	aff := vmirs.Spec.Template.Spec.Affinity
+	if aff == nil || aff.NodeAffinity == nil {
+		return ""
+	}
+	na := aff.NodeAffinity
+	for _, pref := range na.PreferredDuringSchedulingIgnoredDuringExecution {
+		for _, expr := range pref.Preference.MatchExpressions {
+			if expr.Key == "kubernetes.io/hostname" && len(expr.Values) > 0 {
+				return expr.Values[0]
+			}
+		}
+	}
+	if req := na.RequiredDuringSchedulingIgnoredDuringExecution; req != nil {
+		for _, term := range req.NodeSelectorTerms {
+			for _, expr := range term.MatchExpressions {
+				if expr.Key == "kubernetes.io/hostname" && len(expr.Values) > 0 {
+					return expr.Values[0]
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // nodeExists reports whether a Node object named nodeName is currently

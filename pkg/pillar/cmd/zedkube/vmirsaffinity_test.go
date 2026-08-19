@@ -67,7 +67,7 @@ func TestReconcileVMIRSAffinityWithClient_AlreadyCorrectSkipsUpdate(t *testing.T
 
 	wdCalls := 0
 	reconcileVMIRSAffinityWithClient(testNodeName, mockClient, fake.NewSimpleClientset(),
-		map[string]interface{}{aiconfig.Key(): aiconfig}, func() { wdCalls++ })
+		map[string]interface{}{aiconfig.Key(): aiconfig}, false, func() { wdCalls++ })
 
 	assert.Equal(t, 1, wdCalls)
 }
@@ -102,7 +102,7 @@ func TestReconcileVMIRSAffinityWithClient_StaleUpdatesToThisNode(t *testing.T) {
 	// "other-node" is not a registered Node: the mismatch is a permanent
 	// reassignment, not a peer merely reconnecting, so the patch is expected.
 	reconcileVMIRSAffinityWithClient(testNodeName, mockClient, fake.NewSimpleClientset(),
-		map[string]interface{}{aiconfig.Key(): aiconfig}, func() {})
+		map[string]interface{}{aiconfig.Key(): aiconfig}, false, func() {})
 }
 
 func TestReconcileVMIRSAffinityWithClient_SkipsWhenStaleNodeStillExists(t *testing.T) {
@@ -132,7 +132,42 @@ func TestReconcileVMIRSAffinityWithClient_SkipsWhenStaleNodeStillExists(t *testi
 
 	nodeClient := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "other-node"}})
 	reconcileVMIRSAffinityWithClient(testNodeName, mockClient, nodeClient,
-		map[string]interface{}{aiconfig.Key(): aiconfig}, func() {})
+		map[string]interface{}{aiconfig.Key(): aiconfig}, false, func() {})
+}
+
+func TestReconcileVMIRSAffinityWithClient_ForceReassignmentBypassesStaleNodeCheck(t *testing.T) {
+	log = base.NewSourceLogObject(logrus.StandardLogger(), "test-zedkube", 0)
+
+	aiconfig := mkAppInstanceConfig("app2c", true, types.PV)
+	name := vmirsNameFor(aiconfig)
+	stale := hypervisor.SetKubeAffinity("other-node", aiconfig.AffinityType)
+
+	ctrl := gomock.NewController(t)
+	mockClient := kubecli.NewMockKubevirtClient(ctrl)
+	mockRS := kubecli.NewMockReplicaSetInterface(ctrl)
+
+	mockClient.EXPECT().ReplicaSet(gomock.Any()).Return(mockRS).Times(2)
+	mockRS.EXPECT().Get(gomock.Any(), name, metav1.GetOptions{}).Return(
+		&virtv1.VirtualMachineInstanceReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec: virtv1.VirtualMachineInstanceReplicaSetSpec{
+				Template: &virtv1.VirtualMachineInstanceTemplateSpec{
+					Spec: virtv1.VirtualMachineInstanceSpec{Affinity: stale},
+				},
+			},
+		}, nil)
+	mockRS.EXPECT().Update(gomock.Any(), gomock.Any(), metav1.UpdateOptions{}).DoAndReturn(
+		func(_ context.Context, obj *virtv1.VirtualMachineInstanceReplicaSet, _ metav1.UpdateOptions) (*virtv1.VirtualMachineInstanceReplicaSet, error) {
+			assert.Equal(t, hypervisor.SetKubeAffinity(testNodeName, aiconfig.AffinityType), obj.Spec.Template.Spec.Affinity)
+			return obj, nil
+		})
+
+	// "other-node" is still a registered Node, but forceReassignment is set
+	// (a live DNID reassignment), so the patch must not wait for it to be
+	// pruned from the cluster.
+	nodeClient := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "other-node"}})
+	reconcileVMIRSAffinityWithClient(testNodeName, mockClient, nodeClient,
+		map[string]interface{}{aiconfig.Key(): aiconfig}, true, func() {})
 }
 
 func TestReconcileVMIRSAffinityWithClient_NotFoundIsSwallowed(t *testing.T) {
@@ -152,7 +187,7 @@ func TestReconcileVMIRSAffinityWithClient_NotFoundIsSwallowed(t *testing.T) {
 
 	assert.NotPanics(t, func() {
 		reconcileVMIRSAffinityWithClient(testNodeName, mockClient, fake.NewSimpleClientset(),
-			map[string]interface{}{aiconfig.Key(): aiconfig}, func() {})
+			map[string]interface{}{aiconfig.Key(): aiconfig}, false, func() {})
 	})
 }
 
@@ -171,7 +206,7 @@ func TestReconcileVMIRSAffinityWithClient_SkipsNonDNIDAndNOHYPER(t *testing.T) {
 		map[string]interface{}{
 			notDesignated.Key(): notDesignated,
 			nohyper.Key():       nohyper,
-		}, func() { wdCalls++ })
+		}, false, func() { wdCalls++ })
 
 	assert.Equal(t, 2, wdCalls)
 }
