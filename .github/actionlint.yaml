@@ -7,3 +7,4 @@ self-hosted-runner:
     - zededa-ubuntu-2204
     - zededa-ubuntu-2204-arm64
     - evetest-builder
+    - evetest-runner
