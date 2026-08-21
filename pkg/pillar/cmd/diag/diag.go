@@ -887,6 +887,7 @@ func printOutput(ctx *diagContext, caller string) {
 		ctx.ph.Print("INFO: applications: %d starting, %d running\n",
 			summary.TotalStarting, summary.TotalRunning)
 	}
+	ctx.ph.Print("INFO: Running special EVE version for exercising evetest CI\n")
 
 	// Defer until we have an initial BlinkCounter and DeviceNetworkStatus
 	if !ctx.gotDNS || !ctx.gotBC || !ctx.gotDPCList {
