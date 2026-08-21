@@ -69,13 +69,35 @@ jobs:
           echo "Discovered suites: $SUITES_JSON"
           echo "suites=$SUITES_JSON" >> "$GITHUB_OUTPUT"
 
+      # Post every suite's check as pending right away, before any of them
+      # is even scheduled onto the (scarce) evetest-runner fleet below --
+      # otherwise, while a suite sits queued waiting for a free runner, its
+      # check simply does not exist yet, which could read as "nothing to
+      # wait for" rather than "still running" to anyone eyeing the PR.
+      - name: Report pending status for every discovered suite
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
+        with:
+          script: |
+            const suites = ${{ steps.list.outputs.suites }};
+            for (const suite of suites) {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: '${{ github.event.workflow_run.head_sha }}',
+                state: 'pending',
+                context: `Evetest / ${suite}`,
+                description: 'Queued (waiting for a free runner)...',
+                target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              });
+            }
+
   # ════════════════════════════════════════════════════════════════════════
   # One job per test suite discovered above, run on the self-hosted runner
   # fleet labeled "evetest-runner" (see
   # evetest/deploy/proxmox/gh-runner-installer.sh --gh-label evetest-runner).
   # ════════════════════════════════════════════════════════════════════════
   evetest:
-    name: Running suite ${{ matrix.test-suite }}
+    name: Run suite ${{ matrix.test-suite }}
     needs: discover-suites
     runs-on: [self-hosted, evetest-runner]
     timeout-minutes: 360
