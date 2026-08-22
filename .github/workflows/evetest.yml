@@ -16,7 +16,7 @@ on:  # yamllint disable-line rule:truthy
 permissions:
   contents: read
   actions: read
-  statuses: write
+  checks: write
 
 # arch/platform are fixed for evetest right now; hv varies per suite (most
 # default to kvm, but e.g. the cluster suite hard-requires kubevirt -- see
@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       suites: ${{ steps.list.outputs.suites }}
+      check_runs: ${{ steps.checks.outputs.check_runs }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -69,27 +70,34 @@ jobs:
           echo "Discovered suites: $SUITES_JSON"
           echo "suites=$SUITES_JSON" >> "$GITHUB_OUTPUT"
 
-      # Post every suite's check as pending right away, before any of them
-      # is even scheduled onto the (scarce) evetest-runner fleet below --
-      # otherwise, while a suite sits queued waiting for a free runner, its
-      # check simply does not exist yet, which could read as "nothing to
-      # wait for" rather than "still running" to anyone eyeing the PR.
-      - name: Report pending status for every discovered suite
+      # Create one Checks API check run per discovered suite, in "queued"
+      # status, before any of them is even scheduled onto the (scarce)
+      # evetest-runner fleet below -- otherwise, while a suite sits queued
+      # waiting for a free runner, its check simply does not exist yet. The
+      # evetest job below updates the SAME check run (by id, passed through
+      # via this job's "check_runs" output) as it progresses, rather than
+      # creating a new one each time -- unlike the commit-status API, Checks
+      # has a real queued/in_progress/completed lifecycle, so the icon
+      # genuinely changes as the suite moves through it, not just the text.
+      - id: checks
+        name: Create a check run for every discovered suite
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           script: |
             const suites = ${{ steps.list.outputs.suites }};
+            const checkRuns = {};
             for (const suite of suites) {
-              await github.rest.repos.createCommitStatus({
+              const { data } = await github.rest.checks.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                sha: '${{ github.event.workflow_run.head_sha }}',
-                state: 'pending',
-                context: `Evetest / ${suite}`,
-                description: 'Queued (waiting for a free runner)...',
-                target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+                name: `Evetest / ${suite}`,
+                head_sha: '${{ github.event.workflow_run.head_sha }}',
+                status: 'queued',
+                details_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
               });
+              checkRuns[suite] = data.id;
             }
+            core.setOutput('check_runs', JSON.stringify(checkRuns));
 
   # ════════════════════════════════════════════════════════════════════════
   # One job per test suite discovered above, run on the self-hosted runner
@@ -105,6 +113,8 @@ jobs:
       fail-fast: false
       matrix:
         test-suite: ${{ fromJson(needs.discover-suites.outputs.suites) }}
+    env:
+      CHECK_RUN_ID: ${{ fromJson(needs.discover-suites.outputs.check_runs)[matrix.test-suite] }}
     steps:
       # EVETEST_BROKER_ADDRESS, EVETEST_COLLECT_ARTIFACTS,
       # EVETEST_SUITE_MAX_FAILURES and EVETEST_LOG_LEVEL (see
@@ -119,20 +129,18 @@ jobs:
 
       # workflow_run-triggered workflows don't automatically show up as a
       # status check on the PR the way pull_request-triggered ones do, so
-      # report one explicitly -- one row per suite ("Evetest / <suite>"),
-      # posted straight to the commit "PR build" ran against.
-      - name: Report pending status to the PR
+      # discover-suites already created one check run per suite; move this
+      # specific one to "in_progress" now that a runner actually picked it up.
+      - name: Mark check run in progress
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           script: |
-            await github.rest.repos.createCommitStatus({
+            await github.rest.checks.update({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: '${{ github.event.workflow_run.head_sha }}',
-              state: 'pending',
-              context: 'Evetest / ${{ matrix.test-suite }}',
-              description: 'Running...',
-              target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              check_run_id: ${{ env.CHECK_RUN_ID }},
+              status: 'in_progress',
+              details_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
             });
 
       - name: Starting report
@@ -256,8 +264,16 @@ jobs:
             echo "No previous attempt artifact found at $TARBALL; running the full suite."
           fi
 
+      # continue-on-error so this step's own conclusion is never "failure" --
+      # opening a failed job's page auto-scrolls to and expands the FIRST
+      # step with conclusion=failure, and this step's raw, very long
+      # line-by-line test output is a much worse place to land than "Format
+      # test results" below, which is where the real failure is reported
+      # instead (via steps.run_evetest.outcome, which still reflects the
+      # true pass/fail regardless of this masking).
       - name: Run evetest
         id: run_evetest
+        continue-on-error: true
         run: |
           set -o pipefail
           EVETEST_OUTPUT_FORMAT=json make -C evetest evetest NAME=${{ matrix.test-suite }} \
@@ -287,9 +303,13 @@ jobs:
           fi
 
       # Format the saved JSON with gotestfmt for a human-readable summary.
+      # This step's own conclusion is deliberately made to mirror the
+      # suite's real outcome (see the final line) rather than being masked
+      # with continue-on-error like "Run evetest" above -- so that on a
+      # failed job, GitHub's auto-expanded step is this readable summary,
+      # not that step's raw JSON-lines output.
       - name: Format test results
         if: always()
-        continue-on-error: true
         run: |
           JSON="${ARTIFACT_DIR}/gotest.json"
           if [[ -n "$ARTIFACT_DIR" && -f "$JSON" ]]; then
@@ -302,6 +322,7 @@ jobs:
           else
             echo "No gotest.json found (test may have failed to start)." | tee -a $GITHUB_STEP_SUMMARY
           fi
+          [ "${{ steps.run_evetest.outcome }}" = "success" ]
 
       - name: Coverage summary
         if: always()
@@ -335,19 +356,17 @@ jobs:
           path: /tmp/merged-coverage/
           if-no-files-found: ignore
 
-      # Package the raw artifact tree (VM disks, logs, gotest.json, ...) into
-      # a single tarball, named after the suite so a re-run's "Download
-      # previous attempt's artifacts" step above can find it, and so the
-      # original "<suite>-<timestamp>" directory name survives the round
-      # trip (uploading a bare directory would strip it).
+      # Package the whole EVETEST_COLLECT_ARTIFACTS tree into a single tarball,
+      # named after the suite so a re-run's "Download previous attempt's artifacts"
+      # step above can find it.
+      # This includes this run's own fresh directory as well as any
+      # older one restored above, so a subtest skipped this time via
+      # EVETEST_RESTART_ONLY_FAILED still has its artifacts available.
       - name: Package artifacts
         if: failure()
         run: |
-          if [[ -n "$ARTIFACT_DIR" && -d "$ARTIFACT_DIR" ]]; then
-            mkdir -p /tmp/upload
-            tar czf "/tmp/upload/${{ matrix.test-suite }}.tar.gz" \
-              -C "$EVETEST_COLLECT_ARTIFACTS" "$(basename "$ARTIFACT_DIR")"
-          fi
+          mkdir -p /tmp/upload
+          tar czf "/tmp/upload/${{ matrix.test-suite }}.tar.gz" -C "$EVETEST_COLLECT_ARTIFACTS" .
 
       - name: Upload artifacts
         if: failure()
@@ -361,19 +380,18 @@ jobs:
         if: always()
         run: rm -rf "${EVETEST_COLLECT_ARTIFACTS:?}"/*
 
-      - name: Report final status to the PR
+      - name: Mark check run completed
         if: always()
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           script: |
             const outcome = '${{ steps.run_evetest.outcome }}';
-            const state = outcome === 'success' ? 'success' : 'failure';
-            await github.rest.repos.createCommitStatus({
+            const conclusion = outcome === 'success' ? 'success' : 'failure';
+            await github.rest.checks.update({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              sha: '${{ github.event.workflow_run.head_sha }}',
-              state,
-              context: 'Evetest / ${{ matrix.test-suite }}',
-              description: state === 'success' ? 'Passed' : 'Failed',
-              target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              check_run_id: ${{ env.CHECK_RUN_ID }},
+              status: 'completed',
+              conclusion,
+              details_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
             });
