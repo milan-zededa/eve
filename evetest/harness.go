@@ -74,18 +74,15 @@ const (
 	brokerSetupDevicesTimeout = 15 * time.Minute
 
 	// Timeout for powering on an EVE VM (not for waiting for it to boot).
-	brokerPowerOnEVEDeviceTimeout = 20 * time.Second
+	brokerPowerOnEVEDeviceTimeout = time.Minute
 
 	// Timeout for powering off an EVE VM. The broker RPC blocks until the
 	// provider confirms the VM is stopped, so this must accommodate a
 	// graceful ACPI-less hard power-off, not just issuing the request.
-	brokerPowerOffEVEDeviceTimeout = 20 * time.Second
+	brokerPowerOffEVEDeviceTimeout = time.Minute
 
 	// Timeout for triggering an EVE VM reboot (not for waiting for it to boot).
-	brokerRebootEVEDeviceTimeout = 20 * time.Second
-
-	// Timeout for the broker to tear-down all devices.
-	brokerTeardownDevicesTimeout = time.Minute
+	brokerRebootEVEDeviceTimeout = time.Minute
 
 	// Timeout for retrieving the full console output for a single EVE device.
 	brokerGetConsoleOutputTimeout = 30 * time.Second
@@ -114,7 +111,7 @@ const (
 	deviceRemoveTimeout = 20 * time.Second
 
 	// Timeout for EVE device to perform reboot.
-	deviceRebootTimeout = 3 * time.Minute
+	deviceRebootTimeout = 5 * time.Minute
 
 	// Timeout for establishing a connection to the SDN gRPC service.
 	sdnConnectTimeout = 5 * time.Minute
