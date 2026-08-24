@@ -167,7 +167,9 @@ func TestPropagatedRoutes(test *testing.T) {
 	}
 
 	// ni-eth0: PropagateConnectedRoutes=true so the eth0 port subnet (172.22.12.0/24)
-	// is delivered to the app. Static route to http-server-0's subnet.
+	// is delivered to the app. Static route to http-server-0's subnet; EVE normalizes
+	// the gateway (172.22.12.1) to the NI bridge IP (10.50.0.1) when advertising via
+	// DHCP option 121.
 	ni0UUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
 		DisplayName: "ni-eth0",
 		Port:        "ethernet0",
@@ -181,7 +183,7 @@ func TestPropagatedRoutes(test *testing.T) {
 		StaticRoutes: []pillartypes.IPRouteConfig{
 			{
 				DstNetwork: evetest.IPSubnet("10.20.20.0/24"),
-				Gateway:    evetest.IPAddress("10.50.0.1"),
+				Gateway:    evetest.IPAddress("172.22.12.1"),
 			},
 		},
 		MTU: 1500,
@@ -213,6 +215,8 @@ func TestPropagatedRoutes(test *testing.T) {
 	// ni-eth2: PropagateConnectedRoutes=false (negative case — the eth2 port subnet
 	// 10.140.2.0/24 must NOT reach the app). Static routes are propagated regardless
 	// of PropagateConnectedRoutes, so the app still receives the route to http-server-2.
+	// EVE normalizes the gateway (10.140.2.1) to the NI bridge IP (10.50.2.1) when
+	// advertising via DHCP option 121.
 	ni2UUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
 		DisplayName: "ni-eth2",
 		Port:        "ethernet2",
@@ -226,7 +230,7 @@ func TestPropagatedRoutes(test *testing.T) {
 		StaticRoutes: []pillartypes.IPRouteConfig{
 			{
 				DstNetwork: evetest.IPSubnet("10.22.22.0/24"),
-				Gateway:    evetest.IPAddress("10.50.2.1"),
+				Gateway:    evetest.IPAddress("10.140.2.1"),
 			},
 		},
 		MTU: 1500,

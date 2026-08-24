@@ -24,6 +24,10 @@ permissions:
 env:
   EVE_ARCH: amd64
   EVE_PLATFORM: generic
+  # Comma-separated suite names to exclude from discovery -- for temporarily
+  # skipping suites you've already confirmed are green while troubleshooting
+  # others. Leave empty normally; revert once done.
+  SKIP_SUITES: "TestLPSSuite,TestBootstrapSuite,TestDatastoreSuite,TestSecuritySuite,TestTelemetrySuite"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
@@ -61,6 +65,7 @@ jobs:
           # colon or backslash that this anchor rejects).
           SUITES_JSON=$(make -C evetest list-test-suites \
               | grep -E '^Test[A-Za-z0-9_]+$' \
+              | { [ -n "$SKIP_SUITES" ] && grep -vFxf <(tr ',' '\n' <<< "$SKIP_SUITES") || cat; } \
               | jq -R -s -c 'split("\n") | map(select(length > 0))')
           if [ "$SUITES_JSON" = "[]" ]; then
             echo "::error::no test suites discovered; check the raw 'make -C evetest list-test-suites' output above"
