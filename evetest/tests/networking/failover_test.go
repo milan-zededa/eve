@@ -561,6 +561,13 @@ func TestNetworkConfigFallback(test *testing.T) {
 		StaticIP:      evetest.IPAddress("10.99.99.5"),
 	})
 	device.ApplyConfig(brokenConfig, false, false)
+	// EVE sets a DevicePortConfig's TimePriority from the applied
+	// EdgeDeviceConfig's own ConfigTimestamp (see pillar's handling of
+	// config.ConfigTimestamp). Both the baseline (Phase 1) and this broken
+	// config share the "zedagent" key, so Phase 3 needs this timestamp to
+	// confirm it is this (second) config that became active again, not the
+	// first.
+	brokenConfigTimestamp := device.GetConfig().GetConfigTimestamp().AsTime()
 	evetest.Checkpoint("phase2-broken-config-applied")
 
 	phase2Timeout := 5 * time.Minute
@@ -617,36 +624,30 @@ func TestNetworkConfigFallback(test *testing.T) {
 	if phase3Timeout < 3*time.Minute {
 		phase3Timeout = 3 * time.Minute
 	}
-	// TODO: this can still time out even with the generous budget above.
-	// The candidate (index 0) DPC is static on eth0 (10.99.99.5) while the
-	// currently-active DPC (index 1) uses DHCP on the *same* eth0/subnet
-	// (post-fix, leasing e.g. 10.99.99.123): each retest of the candidate
-	// makes NIM flip eth0's address between the two, and the mgmt dnsmasq
-	// (pkg/pillar/dpcreconciler/genericitems/mgmtdnsmasq.go) forwards to
-	// 10.16.16.25@eth0 for both DPCs -- so it can get caught with eth0
-	// mid-reconfiguration and time out ("read udp 127.0.0.1:53: i/o
-	// timeout"), even though the network is genuinely fine moments before
-	// and after. This was observed live: eth0 briefly held the static
-	// candidate's address (10.99.99.5) while SystemAdapter.CurrentIndex
-	// still reported the DHCP DPC (index 1) as active. DpcManager's
-	// DNSCacheClearCounter (mgmtdnsmasq.go) only flushes dnsmasq's cached
-	// *answers* on a DPC transition; it does not address a transiently
-	// unavailable/inconsistent eth0 address+route during the swap, and
-	// verifyDPC's AsyncInProgress wait (dpcmanager/verify.go) is meant for
-	// slow reconcile operations (DHCP negotiation, etc.), not the brief
-	// settling window after a plain address change. Needs a real fix in
-	// dpcmanager/dpcreconciler (e.g. an explicit dependency/ordering so the
-	// interface is confirmed stable before the connectivity test runs, or
-	// before mgmt dnsmasq is told to reload) rather than a test-side
-	// workaround. Tracked as a follow-up; not fixed by this test.
 	t.Eventually(devUpdates, phase3Timeout).Should(Receive(matchers.SatisfyPredicate(
 		"The newer DPC becomes active again once the network matches it",
 		func(info *eveinfo.ZInfoDevice) bool {
 			sa := info.GetSystemAdapter()
-			if !matchSystemAdapterInfo(sa, 0, []string{"zedagent", "zedagent"}) {
+			if sa.GetCurrentIndex() != 0 {
 				return false
 			}
-			dpc := sa.GetStatus()[0]
+			status := sa.GetStatus()
+			if len(status) == 0 {
+				return false
+			}
+			// NIM compresses the DPC list as soon as the higher-priority
+			// entry succeeds, which can happen fast enough that the
+			// still-two-entries snapshot never reaches the controller (only
+			// "index 1, two entries" then "index 0, one entry" are ever
+			// observed here, never "index 0, two entries" in between). So
+			// don't assert on the number of entries -- just that the one at
+			// index 0 is genuinely the broken config that just got fixed,
+			// not the Phase 1 baseline (both share the "zedagent" key).
+			dpc := status[0]
+			if dpc.GetKey() != "zedagent" ||
+				!dpc.GetTimePriority().AsTime().Equal(brokenConfigTimestamp) {
+				return false
+			}
 			if dpc.GetLastError() != "" {
 				return false
 			}

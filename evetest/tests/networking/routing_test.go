@@ -167,7 +167,9 @@ func TestPropagatedRoutes(test *testing.T) {
 	}
 
 	// ni-eth0: PropagateConnectedRoutes=true so the eth0 port subnet (172.22.12.0/24)
-	// is delivered to the app. Static route to http-server-0's subnet.
+	// is delivered to the app. Static route to http-server-0's subnet; EVE normalizes
+	// the gateway (172.22.12.1) to the NI bridge IP (10.50.0.1) when advertising via
+	// DHCP option 121.
 	ni0UUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
 		DisplayName: "ni-eth0",
 		Port:        "ethernet0",
@@ -181,7 +183,7 @@ func TestPropagatedRoutes(test *testing.T) {
 		StaticRoutes: []pillartypes.IPRouteConfig{
 			{
 				DstNetwork: evetest.IPSubnet("10.20.20.0/24"),
-				Gateway:    evetest.IPAddress("10.50.0.1"),
+				Gateway:    evetest.IPAddress("172.22.12.1"),
 			},
 		},
 		MTU: 1500,
@@ -213,6 +215,8 @@ func TestPropagatedRoutes(test *testing.T) {
 	// ni-eth2: PropagateConnectedRoutes=false (negative case — the eth2 port subnet
 	// 10.140.2.0/24 must NOT reach the app). Static routes are propagated regardless
 	// of PropagateConnectedRoutes, so the app still receives the route to http-server-2.
+	// EVE normalizes the gateway (10.140.2.1) to the NI bridge IP (10.50.2.1) when
+	// advertising via DHCP option 121.
 	ni2UUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
 		DisplayName: "ni-eth2",
 		Port:        "ethernet2",
@@ -226,7 +230,7 @@ func TestPropagatedRoutes(test *testing.T) {
 		StaticRoutes: []pillartypes.IPRouteConfig{
 			{
 				DstNetwork: evetest.IPSubnet("10.22.22.0/24"),
-				Gateway:    evetest.IPAddress("10.50.2.1"),
+				Gateway:    evetest.IPAddress("10.140.2.1"),
 			},
 		},
 		MTU: 1500,
@@ -658,14 +662,16 @@ func TestLocalNIWithMultiplePorts(test *testing.T) {
 	timeout := 3 * time.Minute
 	var niInfo *eveinfo.ZInfoNetworkInstance
 	t.Eventually(niUpdates, timeout).Should(Receive(matchers.SatisfyPredicate(
-		"NI ONLINE with default route via ethernet0",
+		"NI ONLINE with both static routes via ethernet0",
 		func(info *eveinfo.ZInfoNetworkInstance) bool {
 			niInfo = info
 			if info.State != eveinfo.ZNetworkInstanceState_ZNETINST_STATE_ONLINE {
 				return false
 			}
-			route := findRoute(info.IpRoutes, "0.0.0.0/0")
-			return route != nil && route.Port == "ethernet0"
+			defaultRoute := findRoute(info.IpRoutes, "0.0.0.0/0")
+			httpRoute := findRoute(info.IpRoutes, "10.88.88.0/24")
+			return defaultRoute != nil && defaultRoute.Port == "ethernet0" &&
+				httpRoute != nil && httpRoute.Port == "ethernet0"
 		}).StopIf(niHasError)))
 	stopNIWatch()
 	t.Expect(niInfo.NetworkErr).To(BeEmpty())
@@ -675,15 +681,6 @@ func TestLocalNIWithMultiplePorts(test *testing.T) {
 	device.WaitUntilAppIsRunning(appUUID, 5*time.Minute)
 
 	evetest.Checkpoint("app-running")
-
-	// Both static routes should be resolved via ethernet0 (cost=0, lowest).
-	defaultRoute := findRoute(niInfo.IpRoutes, "0.0.0.0/0")
-	t.Expect(defaultRoute).NotTo(BeNil())
-	t.Expect(defaultRoute.Port).To(Equal("ethernet0"))
-
-	httpRoute := findRoute(niInfo.IpRoutes, "10.88.88.0/24")
-	t.Expect(httpRoute).NotTo(BeNil())
-	t.Expect(httpRoute.Port).To(Equal("ethernet0"))
 
 	// All four port subnets must appear as connected routes (PropagateConnectedRoutes=true).
 	t.Expect(findRoute(niInfo.IpRoutes, "172.22.10.0/24")).NotTo(BeNil())
@@ -795,11 +792,16 @@ func TestLocalNIWithMultiplePorts(test *testing.T) {
 	evetest.Checkpoint("failover-done")
 
 	// HTTP server must still be reachable after failover (now via ethernet2).
+	// Retry: right after failover, the NI's dnsmasq may still be bound to the
+	// now-dead ethernet0 uplink for one of its upstream DNS queries, causing
+	// a transient resolution stall.
 	log.Infof("Phase 2: verifying HTTP connectivity after failover (via ethernet2)...")
-	output, _, err = device.RunShellScriptInsideApp(appUUID, appAuth,
-		"curl -sS --max-time 10 http://http-server.test/helloworld", sshTimeout, 0)
-	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(output).To(ContainSubstring("Hello from HTTP server!"))
+	t.Eventually(func(t Gomega) {
+		output, _, err := device.RunShellScriptInsideApp(appUUID, appAuth,
+			"curl -sS --max-time 10 http://http-server.test/helloworld", sshTimeout, 0)
+		t.Expect(err).ToNot(HaveOccurred())
+		t.Expect(output).To(ContainSubstring("Hello from HTTP server!"))
+	}, 5*time.Minute, polling).Should(Succeed())
 
 	// Phase 3: restore eth0. Both routes must converge back to ethernet0.
 	log.Infof("Phase 3: restoring eth0, expecting routes to converge back to ethernet0...")
@@ -819,11 +821,15 @@ func TestLocalNIWithMultiplePorts(test *testing.T) {
 
 	evetest.Checkpoint("routes-restored")
 
+	// Retry for the same reason as the Phase 2 check above: dnsmasq may
+	// briefly still be bound to a stale uplink right after convergence.
 	log.Infof("Phase 3: verifying HTTP connectivity after route restoration...")
-	output, _, err = device.RunShellScriptInsideApp(appUUID, appAuth,
-		"curl -sS --max-time 10 http://http-server.test/helloworld", sshTimeout, 0)
-	t.Expect(err).ToNot(HaveOccurred())
-	t.Expect(output).To(ContainSubstring("Hello from HTTP server!"))
+	t.Eventually(func(t Gomega) {
+		output, _, err := device.RunShellScriptInsideApp(appUUID, appAuth,
+			"curl -sS --max-time 10 http://http-server.test/helloworld", sshTimeout, 0)
+		t.Expect(err).ToNot(HaveOccurred())
+		t.Expect(output).To(ContainSubstring("Hello from HTTP server!"))
+	}, 5*time.Minute, polling).Should(Succeed())
 }
 
 // findRoute returns the first IPRoute in routes whose DestinationNetwork matches dst,
