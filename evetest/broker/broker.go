@@ -1451,10 +1451,15 @@ func (b *broker) teardownDevices(ctx context.Context, clientSession *session) {
 	log.Infof("Starting teardown of devices from the client session %q",
 		clientSession.clientID)
 
-	// Teardown all EVE devices
+	// Teardown all EVE devices. Each one gets its own
+	// constants.BrokerTeardownDevicesTimeout, rather than sharing ctx's
+	// overall deadline directly, so a device stuck/hanging during teardown
+	// cannot consume the time budget meant for the others.
 	for deviceName, dev := range clientSession.eveDevices {
 		if dev.created {
-			err := b.provider.TeardownDevice(ctx, dev.providerDevName)
+			devCtx, cancel := context.WithTimeout(ctx, constants.BrokerTeardownDevicesTimeout)
+			err := b.provider.TeardownDevice(devCtx, dev.providerDevName)
+			cancel()
 			if err != nil {
 				log.Warnf("Failed to teardown EVE device %q: %v", deviceName, err)
 			} else {
@@ -1485,7 +1490,9 @@ func (b *broker) teardownDevices(ctx context.Context, clientSession *session) {
 	if clientSession.sdnDevice != nil {
 		providerDevName := clientSession.sdnDevice.providerDevName
 		if clientSession.sdnDevice.created {
-			err := b.provider.TeardownDevice(ctx, providerDevName)
+			devCtx, cancel := context.WithTimeout(ctx, constants.BrokerTeardownDevicesTimeout)
+			err := b.provider.TeardownDevice(devCtx, providerDevName)
+			cancel()
 			if err != nil {
 				log.Warnf("Failed to teardown SDN device: %v", err)
 			} else {
