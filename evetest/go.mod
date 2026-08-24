@@ -13,7 +13,7 @@ require (
 	github.com/google/go-containerregistry v0.21.9
 	github.com/google/uuid v1.6.0
 	github.com/lf-edge/eve-api/go v0.0.0-20260812180240-99d02ddcfcb0
-	github.com/lf-edge/eve/pkg/pillar v0.0.0-20260421125048-8d3825045e4e
+	github.com/lf-edge/eve/pkg/pillar v0.0.0-20260829184729-50b11a69d3d2
 	github.com/luthermonson/go-proxmox v0.8.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
@@ -92,8 +92,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	k8s.io/api v0.33.3 // indirect
-	k8s.io/apimachinery v0.33.3 // indirect
+	k8s.io/api v0.33.5 // indirect
+	k8s.io/apimachinery v0.33.5 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397 // indirect
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8 // indirect
@@ -101,3 +101,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+replace github.com/lf-edge/eve/pkg/pillar => github.com/milan-zededa/eve/pkg/pillar v0.0.0-20260830081149-e5fb4c1b513f
