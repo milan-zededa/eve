@@ -1332,6 +1332,18 @@ func (th *TestHarness) checkInternetConnectivity(req RequireInternetConnectivity
 // and the reuse policy for this test allows it.
 func (th *TestHarness) maybeReuseDevices(
 	edgeDevReqs map[string]RequireEdgeDevice, netModel *api.NetworkModel) bool {
+	// Never reuse devices left behind by a failed test: matching requirements
+	// alone cannot tell whether that failure left them in a broken state
+	// (e.g. a botched network reconfiguration or a wedged cluster join), and
+	// reusing them would otherwise silently carry the same failure into every
+	// following test that would have reused them, obscuring that it is
+	// really one incident rather than several.
+	if th.prevTestFailed {
+		th.prevTestFailed = false
+		th.log.Infof("Previous test failed; not reusing its devices")
+		return false
+	}
+
 	// For simplicity, we will avoid reusing devices between tests when the network
 	// model differs.
 	th.netModelM.Lock()
