@@ -1162,6 +1162,41 @@ func diskOptions(storage string, diskRefs []string) []proxmox.VirtualMachineOpti
 	return options
 }
 
+// uploadMaxAttempts bounds retries of a single storage.UploadWithName call
+// (see uploadWithRetry) against transient failures of the underlying HTTP
+// POST, e.g. a Proxmox host occasionally resetting the connection mid-upload.
+const uploadMaxAttempts = 3
+
+// uploadRetryDelay is the pause between uploadWithRetry attempts.
+const uploadRetryDelay = 5 * time.Second
+
+// uploadWithRetry calls storage.UploadWithName, retrying up to
+// uploadMaxAttempts times on failure. Each attempt re-opens and re-streams
+// the source file from scratch (see (*Storage).upload in go-proxmox), so a
+// retry after a failed POST is always safe: no task/UPID is obtained (and
+// thus nothing to clean up) unless an attempt fully succeeds.
+func (p *ProxmoxProvider) uploadWithRetry(ctx context.Context, log *logrus.Entry,
+	storage *proxmox.Storage, path, uploadName string) (*proxmox.Task, error) {
+	var task *proxmox.Task
+	var err error
+	for attempt := 1; attempt <= uploadMaxAttempts; attempt++ {
+		task, err = storage.UploadWithName("import", path, uploadName)
+		if err == nil {
+			return task, nil
+		}
+		if attempt < uploadMaxAttempts {
+			log.Warnf("Attempt %d/%d: failed to upload %q to storage %q (will retry): %v",
+				attempt, uploadMaxAttempts, path, p.conf.ImportStorage, err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(uploadRetryDelay):
+			}
+		}
+	}
+	return nil, err
+}
+
 // uploadDiskImages uploads each disk image to the import storage and returns the
 // resulting import-storage volume IDs, in disk order. Each volume ID serves both
 // as the import-from reference when creating the VM and as the cleanup target
@@ -1171,6 +1206,7 @@ func (p *ProxmoxProvider) uploadDiskImages(ctx context.Context, node *proxmox.No
 	if len(dev.spec.Disks) == 0 {
 		return nil, nil
 	}
+	log := logger.FromContext(ctx)
 	storage, err := node.Storage(ctx, p.conf.ImportStorage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get import storage %q: %w",
@@ -1187,7 +1223,7 @@ func (p *ProxmoxProvider) uploadDiskImages(ctx context.Context, node *proxmox.No
 			ext = "raw"
 		}
 		uploadName := fmt.Sprintf("%s-%d.%s", prefixedName(dev.name), i, ext)
-		task, err := storage.UploadWithName("import", path, uploadName)
+		task, err := p.uploadWithRetry(ctx, log, storage, path, uploadName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upload disk image %q to storage %q: %w",
 				path, p.conf.ImportStorage, err)
@@ -1258,6 +1294,7 @@ func (p *ProxmoxProvider) uploadFirmware(ctx context.Context, node *proxmox.Node
 	if err != nil {
 		return "", err
 	}
+	log := logger.FromContext(ctx)
 	storage, err := node.Storage(ctx, p.conf.ImportStorage)
 	if err != nil {
 		return "", fmt.Errorf("failed to get import storage %q: %w",
@@ -1270,7 +1307,7 @@ func (p *ProxmoxProvider) uploadFirmware(ctx context.Context, node *proxmox.Node
 		{codeSrc, codeName},
 		{varsSrc, varsName},
 	} {
-		task, err := storage.UploadWithName("import", up.src, up.name)
+		task, err := p.uploadWithRetry(ctx, log, storage, up.src, up.name)
 		if err != nil {
 			return "", fmt.Errorf("failed to upload firmware %q to storage %q: %w",
 				up.src, p.conf.ImportStorage, err)
