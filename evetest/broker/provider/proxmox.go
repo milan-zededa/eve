@@ -480,6 +480,43 @@ func (p *ProxmoxProvider) SetupDevice(
 	return nil
 }
 
+// teardownMaxAttempts bounds retries of destroyDevice against transient
+// Proxmox API failures (e.g. a TLS handshake timeout while waiting for a VM
+// to stop). Without a retry, a device left behind by such a failure keeps
+// its entry in p.devices, and the next SetupDevice for the same name (the
+// same client session reuses one SDN device name for its whole lifetime)
+// then fails outright with "device already exists", since the underlying
+// VM was never actually confirmed stopped/deleted on Proxmox.
+const teardownMaxAttempts = 3
+
+// teardownRetryDelay is the pause between teardownMaxAttempts attempts.
+const teardownRetryDelay = 5 * time.Second
+
+// destroyDeviceWithRetry calls destroyDevice, retrying up to
+// teardownMaxAttempts times on failure. destroyDevice itself checks the VM's
+// current state before acting (only stopping it if still running), so a
+// retry picks up wherever the previous attempt left off rather than
+// repeating already-completed steps. The caller must hold p.mutex.
+func (p *ProxmoxProvider) destroyDeviceWithRetry(
+	ctx context.Context, log *logrus.Entry, dev *proxmoxDevice) error {
+	var err error
+	for attempt := 1; attempt <= teardownMaxAttempts; attempt++ {
+		if err = p.destroyDevice(ctx, log, dev); err == nil {
+			return nil
+		}
+		if attempt < teardownMaxAttempts {
+			log.Warnf("Attempt %d/%d: failed to destroy device %q (will retry): %v",
+				attempt, teardownMaxAttempts, dev.name, err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(teardownRetryDelay):
+			}
+		}
+	}
+	return err
+}
+
 // TeardownDevice stops (if running) and removes the VM, then garbage-collects
 // any SDN networks that are no longer in use.
 func (p *ProxmoxProvider) TeardownDevice(ctx context.Context, name string) error {
@@ -493,7 +530,7 @@ func (p *ProxmoxProvider) TeardownDevice(ctx context.Context, name string) error
 		log.Error(err)
 		return err
 	}
-	if err := p.destroyDevice(ctx, log, dev); err != nil {
+	if err := p.destroyDeviceWithRetry(ctx, log, dev); err != nil {
 		return err
 	}
 	delete(p.devices, name)
@@ -802,7 +839,7 @@ func (p *ProxmoxProvider) TeardownAll(ctx context.Context) error {
 
 	var errs []error
 	for name, dev := range p.devices {
-		if err := p.destroyDevice(ctx, log, dev); err != nil {
+		if err := p.destroyDeviceWithRetry(ctx, log, dev); err != nil {
 			errs = append(errs, err)
 			continue
 		}
