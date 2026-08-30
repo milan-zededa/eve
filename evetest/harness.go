@@ -346,6 +346,14 @@ type TestHarness struct {
 	resume             chan struct{}
 	exitCh             chan struct{}
 	sigCh              chan os.Signal
+
+	// prevTestFailed records whether the most recently completed test in the
+	// same suite failed (or panicked). maybeReuseDevices consults and clears
+	// it: a failed test may have left devices in a broken state that matching
+	// requirements alone cannot detect (e.g. a botched network reconfiguration
+	// or a wedged cluster join), so the next test must not reuse them even
+	// though it would otherwise be eligible to.
+	prevTestFailed bool
 }
 
 // testState contains per-test execution state, including parameter
@@ -882,6 +890,14 @@ func Init(t *testing.T) *T {
 func Close() {
 	panicErr := recover()
 	th := getTestHarness()
+
+	// Record whether this test failed so the next test's maybeReuseDevices
+	// (called from within the next Setup()) knows not to reuse devices that
+	// may have been left in a broken state. Set unconditionally, and before
+	// th.t is reassigned by the next test's Init().
+	if !th.test.executedTestSuite {
+		th.prevTestFailed = th.t.Failed() || panicErr != nil
+	}
 
 	// Unsubscribe any Watch* subscriptions that the test forgot to stop.
 	th.devicesM.Lock()
