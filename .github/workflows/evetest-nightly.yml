@@ -1,0 +1,104 @@
+# Copyright (c) 2026, Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: evetest-nightly
+on:  # yamllint disable-line rule:truthy
+  schedule:
+    # ~2AM CET. cron is UTC-only and has no DST awareness, so this drifts to
+    # ~3AM CEST in summer -- accepted as a known caveat rather than juggling
+    # two DST-guarded cron lines for a "nightly, run everything" safety net
+    # where the exact hour doesn't matter.
+    - cron: '0 1 * * *'
+  workflow_dispatch: {}  # manual trigger, e.g. to test this workflow itself
+
+permissions:
+  contents: read
+  actions: read
+
+# TODO(milan): temporary override while testing this workflow against my own
+# account/repo instead of the real lfedge/eve publish -- remove once this is
+# validated and ready to run for real.
+env:
+  EVETEST_EVE_REPO: milan4zededa/eve
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════
+  # Same suite discovery as evetest-pr.yml's discover-suites, against master
+  # instead of a PR head -- no Claude-skip step here: this run is the
+  # full-coverage safety net for whatever evetest-pr.yml's PR-time skip
+  # decisions may have missed, so it always runs everything.
+  # ════════════════════════════════════════════════════════════════════════
+  discover-suites:
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.list.outputs.suites }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: list
+        name: List evetest test suites
+        run: |
+          # See evetest-pr.yml's identical step for why this filter exists.
+          SUITES_JSON=$(make -C evetest list-test-suites \
+              | grep -E '^Test[A-Za-z0-9_]+$' \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ "$SUITES_JSON" = "[]" ]; then
+            echo "::error::no test suites discovered; check the raw 'make -C evetest list-test-suites' output above"
+            exit 1
+          fi
+          echo "Discovered suites: $SUITES_JSON"
+          echo "suites=$SUITES_JSON" >> "$GITHUB_OUTPUT"
+
+  # ════════════════════════════════════════════════════════════════════════
+  # One job per test suite, run on the same self-hosted evetest-runner
+  # fleet as evetest-pr.yml. No image build/download here: a clean checkout of
+  # master reproduces the exact "lfedge/eve:<version>-<hv>-<arch>" tag that
+  # publish.yml already pushed for this commit (see evetest/Makefile's
+  # "version" target and docs/EVE-IMAGE-SOURCES.md), so evetest just pulls
+  # that image itself -- leaving EVETEST_EVE_REPO/EVETEST_EVE_VERSION unset
+  # is exactly what makes it derive that tag from the checkout.
+  # ════════════════════════════════════════════════════════════════════════
+  evetest:
+    name: Run suite ${{ matrix.test-suite }}
+    needs: discover-suites
+    runs-on: [self-hosted, evetest-runner]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite: ${{ fromJson(needs.discover-suites.outputs.suites) }}
+    steps:
+      # Wipe the workspace before checkout, not after: the local composite
+      # action below can only be resolved once its own file is present in
+      # the (freshly checked-out) workspace, so this can't live inside it.
+      - name: Clean stale state from previous runs
+        run: |
+          sudo rm -fr "$GITHUB_WORKSPACE" && mkdir "$GITHUB_WORKSPACE"
+          rm -fr ~/.linuxkit
+          docker rm -f $(docker ps -aq) && docker volume rm -f $(docker volume ls -q) || :
+          docker system prune --all --force --volumes
+          mkdir -p "$EVETEST_COLLECT_ARTIFACTS"
+          # The evetest container runs as root and chowns artifacts back to
+          # this user on exit (entrypoint.sh's set_artifact_ownership), but a
+          # cancelled/killed run can skip that step, leaving root-owned files
+          # a plain rm can't remove.
+          sudo rm -fr "${EVETEST_COLLECT_ARTIFACTS:?}"/*
+          # This is a persistent, self-hosted runner (unlike an ephemeral
+          # GitHub-hosted one) -- /tmp is not wiped between jobs, so clear
+          # every /tmp path this workflow uses itself, rather than relying on
+          # each later step to overwrite exactly what a previous run left.
+          rm -rf /tmp/eve-image /tmp/prev-attempt /tmp/upload /tmp/merged-coverage /tmp/coverage.txt
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/evetest-run-suite
+        with:
+          test-suite: ${{ matrix.test-suite }}
+          download-image-artifacts: 'false'
+          post-status: 'false'
