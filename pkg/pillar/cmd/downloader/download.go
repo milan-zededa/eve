@@ -322,7 +322,16 @@ func download(ctx *downloaderContext, trType zedUpload.SyncTransportType,
 			// sometime, the download goes to an infinite loop,
 			// showing it has downloaded, more than it is supposed to
 			// aborting download, marking it as an error
-			if currentSize > totalSize {
+			//
+			// totalSize can be reported as 0 on an individual progress tick
+			// even after a prior tick already saw a valid, larger total for
+			// the same response (observed via nettrace: a healthy transfer,
+			// most of the way through a response with a known Content-Length,
+			// followed by one tick reporting total 0). Treat 0 as "unknown
+			// this tick" rather than a definitive size no progress may
+			// exceed, or a legitimate, still-progressing download gets
+			// aborted on that transient blip.
+			if totalSize > 0 && currentSize > totalSize {
 				errStr := fmt.Sprintf("Size '%v' provided in image config of '%s' is incorrect.\nDownload status (%v / %v). Aborting the download",
 					totalSize, resp.GetLocalName(), currentSize, totalSize)
 				log.Errorln(errStr)
