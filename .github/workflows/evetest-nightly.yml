@@ -1,0 +1,105 @@
+# Copyright (c) 2026, Zededa, Inc.
+# SPDX-License-Identifier: Apache-2.0
+---
+name: evetest-nightly
+on:  # yamllint disable-line rule:truthy
+  schedule:
+    # ~2:37 AM CET (cron is UTC-only, drifts ~1h across DST -- fine for a nightly).
+    - cron: '37 1 * * *'
+  workflow_dispatch: {}  # manual trigger, for testing
+
+permissions:
+  contents: read
+  actions: read
+
+# TODO(milan): temporary override while testing this workflow against my own
+# account/repo instead of the real lfedge/eve publish -- remove once this is
+# validated and ready to run for real.
+env:
+  EVETEST_EVE_REPO: milan4zededa/eve
+
+jobs:
+  # Suite discovery against master. No Claude-skip step: this run is the
+  # full-coverage safety net for evetest-pr.yml's PR-time skip decisions.
+  discover-suites:
+    runs-on: ubuntu-latest
+    outputs:
+      suites: ${{ steps.list.outputs.suites }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+      - id: list
+        name: List evetest test suites
+        run: |
+          # See evetest-pr.yml's identical step for why this filter exists.
+          SUITES_JSON=$(make -C evetest list-test-suites \
+              | grep -E '^Test[A-Za-z0-9_]+$' \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          if [ "$SUITES_JSON" = "[]" ]; then
+            echo "::error::no test suites discovered; check the raw 'make -C evetest list-test-suites' output above"
+            exit 1
+          fi
+          echo "Discovered suites: $SUITES_JSON"
+          echo "suites=$SUITES_JSON" >> "$GITHUB_OUTPUT"
+
+  # One job per suite, on the same evetest-runner fleet as evetest-pr.yml.
+  # No image build/download: pulls whatever publish.yml already published
+  # for this commit (EVETEST_EVE_VERSION computed explicitly below).
+  evetest:
+    name: Run suite ${{ matrix.test-suite }}
+    needs: discover-suites
+    runs-on: [self-hosted, evetest-runner]
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite: ${{ fromJson(needs.discover-suites.outputs.suites) }}
+    steps:
+      # A local composite action needs its file already checked out, so wipe
+      # the workspace before checkout here, not from inside the action.
+      - name: Clean stale state from previous runs
+        run: |
+          sudo rm -fr "$GITHUB_WORKSPACE" && mkdir "$GITHUB_WORKSPACE"
+          rm -fr ~/.linuxkit
+          docker rm -f $(docker ps -aq) && docker volume rm -f $(docker volume ls -q) || :
+          docker system prune --all --force --volumes
+          mkdir -p "$EVETEST_COLLECT_ARTIFACTS"
+          # May be root-owned if a previous run was killed mid-way.
+          sudo rm -fr "${EVETEST_COLLECT_ARTIFACTS:?}"/*
+          # Self-hosted runner: /tmp isn't wiped between jobs.
+          rm -rf /tmp/eve-image /tmp/prev-attempt /tmp/upload /tmp/merged-coverage /tmp/coverage.txt
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Left unset, evetest would call `make version` itself -- on a fresh
+      # checkout that regenerates pkg-deps.mk, leaking a huge build trace
+      # into the value and corrupting evetest's own docker run command.
+      # Reproduces the Makefile's ROOTFS_VERSION formula via git instead.
+      # Needs a real branch checkout above, not a detached SHA (else
+      # REPO_BRANCH resolves to "HEAD", not "master").
+      - name: Compute the EVE version to test
+        run: |
+          REPO_BRANCH=$(git rev-parse --abbrev-ref HEAD | tr / _)
+          REPO_SHA=$(git describe --match '$^' --abbrev=8 --always --dirty)
+          REPO_TAG=$(git describe --always --tags | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?$' || echo snapshot)
+          if [ "$REPO_TAG" = "snapshot" ]; then
+            DIRTY=""
+            case "$REPO_SHA" in *-dirty) DIRTY="-$(date -u +"%Y-%m-%d.%H.%M")" ;; esac
+            VERSION="0.0.0-${REPO_BRANCH}-${REPO_SHA}${DIRTY}"
+          else
+            VERSION="$REPO_TAG"
+          fi
+          echo "Computed EVE version: $VERSION"
+          echo "EVETEST_EVE_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/evetest-run-suite
+        with:
+          test-suite: ${{ matrix.test-suite }}
+          download-image-artifacts: 'false'
+          post-status: 'false'
