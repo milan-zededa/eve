@@ -74,6 +74,16 @@ const (
 	// This is read by the evetest container.
 	PauseOnFailureEnv = "PAUSE_ON_FAILURE"
 
+	// SkipEnv lists, comma-separated, the names of tests and/or test suites
+	// that evetest.Init should skip (e.g. "TestBootstrapWithProxy,TestControllerFaultsSuite").
+	// A suite is skipped by listing the suite's own TestXxx function name; an
+	// individual variant of a suite subtest can be skipped either by its own
+	// variant name or by the name of the underlying test function shared by
+	// all of its variants (see TestCase.Test in RunTestSuite), which skips
+	// every variant of that subtest at once.
+	// This is read by the evetest container.
+	SkipEnv = "SKIP"
+
 	// RestartOnlyFailedEnv, when set to true, makes a rerun of a test suite skip
 	// every subtest that already passed in a previous run of the same suite,
 	// only actually executing the ones that previously failed (or never ran).
@@ -422,6 +432,7 @@ func InitViperConfig() {
 
 	// Test control
 	viper.SetDefault(TestNameEnv, "") // No default, must be provided
+	viper.SetDefault(SkipEnv, "")
 	viper.SetDefault(SuiteMaxFailuresEnv, DefaultSuiteMaxFailures)
 	viper.SetDefault(PauseOnCheckpointEnv, "")
 	viper.SetDefault(PauseOnFailureEnv, false)

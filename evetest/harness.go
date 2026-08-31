@@ -354,6 +354,13 @@ type testState struct {
 	// name is the name of the currently executing test or variant.
 	name string
 
+	// parentName is the name of the underlying test function this test was
+	// derived from when running as a suite subtest (TestCase.Test in
+	// RunTestSuite). It equals name for a subtest with no variants; for a
+	// variant it is that shared function's name rather than the variant's
+	// own name.
+	parentName string
+
 	// paramDefs are the parameter definitions available to the test.
 	paramDefs []TestParameterDefinition
 
@@ -518,6 +525,15 @@ func Init(t *testing.T) *T {
 			th.t.Fatalf("Multiple Init calls detected")
 		}
 
+		// EVETEST_SKIP: skip this subtest if either its own name or, when it
+		// is a suite variant, the name of the underlying test function it
+		// was derived from (see TestCase.Test in RunTestSuite) is listed
+		// there.
+		if matched, skip := matchedSkipName(th.test.name, th.test.parentName); skip {
+			t.Skipf("Skipping %q: listed in %s%s", matched,
+				constants.EnvPrefix, constants.SkipEnv)
+		}
+
 		// EVETEST_RESTART_ONLY_FAILED: when running as part of a test suite
 		// (never for a standalone test, since that never reaches this branch),
 		// skip this subtest if it already passed in a previous run of the same
@@ -542,6 +558,18 @@ func Init(t *testing.T) *T {
 	}
 
 	constants.InitViperConfig()
+
+	// EVETEST_SKIP: Init is expected to be called directly from a TestXxx
+	// function, so the calling function's name is exactly what a
+	// standalone test, or a suite by its own name, would be listed as.
+	// A suite subtest's own variant matching happens in the th.suite != nil
+	// branch above once RunTestSuite has set th.test.name/parentName.
+	testName := utils.FuncNameFromStackTrace(2)
+	if matched, skip := matchedSkipName(testName); skip {
+		t.Skipf("Skipping %q: listed in %s%s", matched,
+			constants.EnvPrefix, constants.SkipEnv)
+	}
+
 	th := &TestHarness{}
 	_globalTH = th
 	th.t = &T{T: t, th: th}
@@ -557,8 +585,7 @@ func Init(t *testing.T) *T {
 	signal.Notify(th.sigCh, syscall.SIGTERM, syscall.SIGINT)
 
 	// Set the test name to the calling test function name.
-	// Init is expected to be called directly from a TestXxx function.
-	th.test.name = utils.FuncNameFromStackTrace(2)
+	th.test.name = testName
 	th.test.artifactDir = th.artifactDir
 	if err := os.MkdirAll(th.test.artifactDir, 0o755); err != nil {
 		th.t.Fatalf("failed to create directory for test artifacts: %v", err)
