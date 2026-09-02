@@ -40,6 +40,13 @@ inputs:
     description: Value for EVETEST_SKIP.
     required: false
     default: ''
+  upload-junit-results:
+    description: >-
+      'true' to convert this run's results to JUnit XML and upload them as a
+      "junit-<test-suite>" artifact, for evetest-nightly.yml's Allure report
+      job to pick up. Intended for the nightly, full-suite run only.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -271,6 +278,36 @@ runs:
           echo "No gotest.json found (test may have failed to start)." | tee -a $GITHUB_STEP_SUMMARY
         fi
         [ "${{ steps.run_evetest.outcome }}" = "success" ]
+
+    # Allure ingests JUnit XML, not go test's own JSON; gotestsum's
+    # --raw-command replay mode converts the recorded gotest.json into one
+    # without re-running any tests.
+    - name: Convert results to JUnit XML
+      if: ${{ !cancelled() && inputs.upload-junit-results == 'true' }}
+      shell: bash
+      run: |
+        JSON="${ARTIFACT_DIR}/gotest.json"
+        if [[ -z "$ARTIFACT_DIR" || ! -f "$JSON" ]]; then
+          echo "No gotest.json found, skipping JUnit conversion."
+          exit 0
+        fi
+        go install gotest.tools/gotestsum@latest
+        "$(go env GOPATH)/bin/gotestsum" --raw-command \
+          --junitfile "${ARTIFACT_DIR}/${{ inputs.test-suite }}.xml" \
+          -- cat "$JSON"
+
+    # Named after the suite (not a generic "junit.xml") so the nightly
+    # workflow's aggregator can merge-multiple every suite's artifact into
+    # one flat directory without filename collisions -- allure generate
+    # does not scan nested subdirectories, so they can't stay one-per-suite.
+    - name: Upload JUnit results artifact
+      if: ${{ !cancelled() && inputs.upload-junit-results == 'true' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      with:
+        name: junit-${{ inputs.test-suite }}
+        path: ${{ env.ARTIFACT_DIR }}/${{ inputs.test-suite }}.xml
+        if-no-files-found: ignore
 
     - name: Coverage summary
       if: always()
