@@ -51,6 +51,14 @@ type ProxmoxProvider struct {
 	// it never blocks unrelated per-device operations (or vice versa).
 	sdnMutex sync.Mutex
 
+	// vmCreateMutex serializes VMID allocation with VM creation in
+	// SetupDevice: Proxmox's "next free ID" endpoint doesn't reserve
+	// anything, so two concurrent callers can get the same ID and the
+	// second create then fails with "VM <id> already exists". Covers only
+	// allocation, buildVMOptions (bakes the ID into tap names) and the
+	// create call -- not the disk/firmware uploads or waitTask.
+	vmCreateMutex sync.Mutex
+
 	client *proxmox.Client
 
 	// supportedArchs is the node architecture, learned at construction time.
@@ -383,11 +391,6 @@ func (p *ProxmoxProvider) SetupDevice(
 		p.unreserve(name)
 		return fmt.Errorf("failed to get Proxmox cluster: %w", err)
 	}
-	vmID, err := cluster.NextID(ctx)
-	if err != nil {
-		p.unreserve(name)
-		return fmt.Errorf("failed to allocate VMID for device %q: %w", name, err)
-	}
 
 	consoleLog := p.getDeviceConsoleLogFile(name)
 	if err := os.MkdirAll(filepath.Dir(consoleLog), 0o755); err != nil {
@@ -396,10 +399,10 @@ func (p *ProxmoxProvider) SetupDevice(
 			name, err)
 	}
 
+	// vmID is allocated later, right before VM creation (see vmCreateMutex).
 	dev := &proxmoxDevice{
 		name:             name,
 		spec:             spec,
-		vmID:             vmID,
 		consoleLog:       consoleLog,
 		consoleMux:       newConsoleMux(),
 		netbootMTUCapped: spec.NetworkBootFallback,
@@ -426,15 +429,15 @@ func (p *ProxmoxProvider) SetupDevice(
 			p.deleteImportVolumes(ctx, log, node, dev.firmwareVolIDs)
 		}
 		if vmCreated {
-			if vm, vmErr := node.VirtualMachine(ctx, vmID); vmErr != nil {
-				log.Warnf("failed to lookup VM %d for cleanup: %v", vmID, vmErr)
+			if vm, vmErr := node.VirtualMachine(ctx, dev.vmID); vmErr != nil {
+				log.Warnf("failed to lookup VM %d for cleanup: %v", dev.vmID, vmErr)
 			} else if task, delErr := vm.Delete(ctx, &proxmox.VirtualMachineDeleteOptions{
 				Purge:                    true,
 				DestroyUnreferencedDisks: true,
 			}); delErr != nil {
-				log.Warnf("failed to delete VM %d during cleanup: %v", vmID, delErr)
+				log.Warnf("failed to delete VM %d during cleanup: %v", dev.vmID, delErr)
 			} else if waitErr := waitTask(ctx, task); waitErr != nil {
-				log.Warnf("failed waiting for cleanup deletion of VM %d: %v", vmID, waitErr)
+				log.Warnf("failed waiting for cleanup deletion of VM %d: %v", dev.vmID, waitErr)
 			}
 		}
 	}()
@@ -458,12 +461,22 @@ func (p *ProxmoxProvider) SetupDevice(
 		return err
 	}
 
-	// Build the VM configuration options and create the VM (stopped).
+	// Allocate the VMID and create the VM atomically under vmCreateMutex;
+	// buildVMOptions needs dev.vmID for the tap device names (nicOptions).
+	p.vmCreateMutex.Lock()
+	vmID, err := cluster.NextID(ctx)
+	if err != nil {
+		p.vmCreateMutex.Unlock()
+		return fmt.Errorf("failed to allocate VMID for device %q: %w", name, err)
+	}
+	dev.vmID = vmID
 	options, err := p.buildVMOptions(dev, diskVolIDs, firmwareArgs)
 	if err != nil {
+		p.vmCreateMutex.Unlock()
 		return err
 	}
 	task, err := node.NewVirtualMachine(ctx, vmID, options...)
+	p.vmCreateMutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to create VM %d for device %q: %w", vmID, name, err)
 	}
