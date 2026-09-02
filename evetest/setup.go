@@ -1316,13 +1316,13 @@ func (th *TestHarness) checkInternetConnectivity(req RequireInternetConnectivity
 	})
 	cancel()
 	if err != nil {
-		th.t.Fatal(err)
+		th.log.Error(err)
 	}
-	if !resp.ReachableOverIpv4 {
+	if err != nil || !resp.ReachableOverIpv4 {
 		th.t.Skipf("Test %q requires IPv4 Internet connectivity "+
 			"which is (currently) not available", th.t.Name())
 	}
-	if !resp.ReachableOverIpv6 && req.RequireIPv6 {
+	if (err != nil || !resp.ReachableOverIpv6) && req.RequireIPv6 {
 		th.t.Skipf("Test %q requires IPv6 Internet connectivity "+
 			"which is (currently) not available", th.t.Name())
 	}
