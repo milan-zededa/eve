@@ -25,6 +25,11 @@ var (
 	// intentPath records a convergence that has begun. Written before
 	// anything destructive happens.
 	intentPath = "/var/lib/quorum-recovery-intent"
+
+	// errorPath records why the most recent convergence attempt failed,
+	// so it survives the retry delay (and a kube-init restart across
+	// it) for StampNodeStatus to report to the controller.
+	errorPath = "/var/lib/quorum-recovery-error"
 )
 
 // Intent is a convergence in progress.
@@ -128,6 +133,38 @@ func WriteIntent(in Intent) error {
 func ClearIntent() error {
 	if err := os.Remove(intentPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", intentPath, err)
+	}
+	return nil
+}
+
+// WriteFailure records why the convergence for g failed, for reporting
+// back to the controller until either that generation succeeds or a
+// fresher attempt begins.
+func WriteFailure(g Generation, cause error) error {
+	msg := fmt.Sprintf("Failed to promote cluster to generation %d: %v", g.Counter, cause)
+	if err := state.AtomicWriteFile(errorPath, []byte(msg+"\n"), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", errorPath, err)
+	}
+	return nil
+}
+
+// ReadFailure returns the reason recorded by WriteFailure, if any.
+func ReadFailure() (msg string, found bool, err error) {
+	raw, err := os.ReadFile(errorPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read %s: %w", errorPath, err)
+	}
+	return strings.TrimSpace(string(raw)), true, nil
+}
+
+// ClearFailure removes the failure record. Call once a subsequent
+// attempt succeeds.
+func ClearFailure() error {
+	if err := os.Remove(errorPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", errorPath, err)
 	}
 	return nil
 }

@@ -43,6 +43,15 @@ func (m *Monitor) StampNodeStatus(ctx context.Context) {
 	if cfg, ok := encconfig.Get(); ok {
 		recoveryErr = cfg.QuorumRecoveryError
 	}
+	// A rejected generation bump means this device never attempted
+	// anything for it, so the two never compete for the same report.
+	if recoveryErr == "" {
+		if msg, found, err := quorum.ReadFailure(); err != nil {
+			log.Printf("warning: read recovery failure: %v", err)
+		} else if found {
+			recoveryErr = msg
+		}
+	}
 
 	if applied, recorded, err := quorum.ReadApplied(); err != nil {
 		log.Printf("warning: read applied generation: %v", err)

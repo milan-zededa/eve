@@ -1971,6 +1971,9 @@ func (d *daemon) handleQuorumRecovery(ctx context.Context, ev Event) {
 	switch ev.Type {
 	case EvRecoveryDone:
 		d.lastError = nil
+		if err := quorum.ClearFailure(); err != nil {
+			log.Printf("WARNING: clear recovery failure record: %v", err)
+		}
 		// Still fenced, so nothing is joining and any witness member
 		// found is left over from before the recovery: its device died
 		// without the chance to leave, and its entry holds the witness
@@ -1999,6 +2002,9 @@ func (d *daemon) handleQuorumRecovery(ctx context.Context, ev Event) {
 
 	case EvError:
 		d.lastError = ev.Err
+		if err := quorum.WriteFailure(d.recovery.Generation, ev.Err); err != nil {
+			log.Printf("WARNING: record recovery failure: %v", err)
+		}
 		log.Printf("QUORUM_RECOVERY error: %v — retrying in %v", ev.Err, errorRetryDelay)
 		d.retryCurrentState(ctx)
 
