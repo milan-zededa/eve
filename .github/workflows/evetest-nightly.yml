@@ -37,6 +37,9 @@ jobs:
           SUITES_JSON=$(make -C evetest list-test-suites \
               | grep -E '^Test[A-Za-z0-9_]+$' \
               | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          # DO NOT MERGE: restrict to two fast suites while testing the
+          # Allure-report pipeline, instead of all ~14.
+          SUITES_JSON=$(echo "$SUITES_JSON" | jq -c '[.[] | select(. == "TestDiagSuite" or . == "TestTelemetrySuite")]')
           if [ "$SUITES_JSON" = "[]" ]; then
             echo "::error::no test suites discovered; check the raw 'make -C evetest list-test-suites' output above"
             exit 1
