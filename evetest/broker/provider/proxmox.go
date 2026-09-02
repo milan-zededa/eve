@@ -30,16 +30,20 @@ import (
 type ProxmoxProvider struct {
 	conf ProxmoxProviderConf
 
-	// mutex guards only the bookkeeping maps below (devices, pending, watchers)
+	// devMutex guards only the bookkeeping maps below (devices, pending, watchers)
 	// -- never a Proxmox API call, waitTask, or retry/sleep. This broker
-	// process is shared by every client session, so a mutex held across a slow
+	// process is shared by every client session, so a devMutex held across a slow
 	// or hung Proxmox call would stall every other session's device operations
-	// for as long as that call takes. Methods instead take mutex only to
+	// for as long as that call takes. Methods instead take devMutex only to
 	// look up/reserve/commit a *proxmoxDevice map entry, do the actual Proxmox
-	// work unlocked, and take mutex again only to persist the small bits of
+	// work unlocked, and take devMutex again only to persist the small bits of
 	// resulting state (map membership, dev.status, console logger handles)
-	// that other methods also read under mutex.
-	mutex sync.Mutex
+	// that other methods also read under devMutex.
+	//
+	// Lock ordering invariant: sdnMutex is always acquired before devMutex, never
+	// the reverse (see teardownUnusedNetworks) -- keep this one-directional to
+	// avoid an AB-BA deadlock.
+	devMutex sync.Mutex
 
 	// sdnMutex serializes the cluster-wide SDN zone/VNet check-then-create
 	// (ensureXConnectNetwork/ensureZone/createVNet) and delete+apply
@@ -47,8 +51,9 @@ type ProxmoxProvider struct {
 	// Unlike per-device VM state, SDN zones/VNets are genuine cluster-wide
 	// Proxmox resources shared by every session, so concurrent check-then-act
 	// sequences against them need serialization for correctness, not just to
-	// avoid contention -- this is deliberately a separate lock from mutex so
-	// it never blocks unrelated per-device operations (or vice versa).
+	// avoid contention -- this is deliberately a separate lock from devMutex so
+	// it never blocks unrelated per-device operations (or vice versa). See
+	// devMutex's doc comment for the lock ordering invariant between the two.
 	sdnMutex sync.Mutex
 
 	// vmCreateMutex serializes VMID allocation with VM creation in
@@ -65,22 +70,27 @@ type ProxmoxProvider struct {
 	supportedArchs []api.ArchType
 
 	// watchers holds all registered watchers for device lifecycle events.
-	// The key is device name (without prefix). Guarded by mutex.
+	// The key is device name (without prefix). Guarded by devMutex.
 	watchers map[string][]chan DeviceStatus
 
 	// devices created by SetupDevice (and not yet removed by TeardownDevice).
-	// The key is device name (without prefix). Guarded by mutex.
+	// The key is device name (without prefix). Guarded by devMutex.
 	devices map[string]*proxmoxDevice
 
-	// pending holds device names currently inside SetupDevice, reserved there
-	// (before the device exists in devices) so a concurrent SetupDevice call
-	// for the same name fails fast instead of racing to create two VMs under
-	// one name. Guarded by mutex.
-	pending map[string]struct{}
+	// pending holds devices currently inside SetupDevice, not yet committed to
+	// devices. A name is reserved with a nil value before the *proxmoxDevice
+	// exists (so a concurrent SetupDevice call for the same name fails fast
+	// instead of racing to create two VMs under one name), then updated to
+	// the real pointer once constructed. teardownUnusedNetworks reads these
+	// pending devices' ifaces too, not just devices': resolveDeviceNetworks
+	// can create and start using a network well before the device is
+	// committed to devices, and that network must not look unused in the
+	// meantime. Guarded by devMutex.
+	pending map[string]*proxmoxDevice
 
 	// networks (SDN VNets) created by SetupDevice and used by at least one
 	// device. The key is the unprefixed evetest network name. Guarded by
-	// sdnMutex, not mutex.
+	// sdnMutex, not devMutex.
 	networks map[string]*proxmoxNetwork
 }
 
@@ -270,7 +280,7 @@ func NewProxmoxProvider(conf ProxmoxProviderConf) (*ProxmoxProvider, error) {
 		supportedArchs: archs,
 		watchers:       make(map[string][]chan DeviceStatus),
 		devices:        make(map[string]*proxmoxDevice),
-		pending:        make(map[string]struct{}),
+		pending:        make(map[string]*proxmoxDevice),
 		networks:       make(map[string]*proxmoxNetwork),
 	}, nil
 }
@@ -361,24 +371,24 @@ func (p *ProxmoxProvider) DiskImageStrategy() DiskImageStrategy {
 // SetupDevice creates a VM in a powered-off state with the given configuration.
 //
 // Only the reservation of name (against p.devices/p.pending) and the final
-// commit into p.devices are done under p.mutex; the VM build itself (disk/
+// commit into p.devices are done under p.devMutex; the VM build itself (disk/
 // firmware upload, VM creation, waitTask) runs unlocked so a slow build for
 // one device never blocks other sessions' device operations on this provider.
 func (p *ProxmoxProvider) SetupDevice(
 	ctx context.Context, name string, spec DeviceSpec) error {
 	log := logger.FromContext(ctx)
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	_, exists := p.devices[name]
 	_, isPending := p.pending[name]
 	if exists || isPending {
-		p.mutex.Unlock()
+		p.devMutex.Unlock()
 		err := fmt.Errorf("device %q already exists", name)
 		log.Error(err)
 		return err
 	}
-	p.pending[name] = struct{}{}
-	p.mutex.Unlock()
+	p.pending[name] = nil
+	p.devMutex.Unlock()
 
 	node, err := p.client.Node(ctx, p.conf.Node)
 	if err != nil {
@@ -407,6 +417,12 @@ func (p *ProxmoxProvider) SetupDevice(
 		consoleMux:       newConsoleMux(),
 		netbootMTUCapped: spec.NetworkBootFallback,
 	}
+	// Replace the nil placeholder so teardownUnusedNetworks can see this
+	// device's networks (via dev.ifaces) once resolveDeviceNetworks below
+	// populates them, even though dev isn't committed to p.devices yet.
+	p.devMutex.Lock()
+	p.pending[name] = dev
+	p.devMutex.Unlock()
 
 	// Clean up anything already uploaded/created if the function returns before
 	// reaching the success path below: otherwise a failure partway through
@@ -492,10 +508,10 @@ func (p *ProxmoxProvider) SetupDevice(
 	p.deleteImportVolumes(ctx, log, node, diskVolIDs)
 	diskVolIDs = nil
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	p.devices[name] = dev
 	p.updateDeviceStatus(dev, DeviceStatusStopped)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	success = true
 	log.Infof("Device %q prepared as Proxmox VM %d in powered-off state", name, vmID)
 	return nil
@@ -504,18 +520,16 @@ func (p *ProxmoxProvider) SetupDevice(
 // unreserve removes name from p.pending. Safe to call even if name was never
 // reserved or was already removed.
 func (p *ProxmoxProvider) unreserve(name string) {
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	delete(p.pending, name)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 }
 
 // resolveDeviceNetworks ensures every SDN network referenced by spec exists
-// and appends the resulting proxmoxIface entries to dev.ifaces. Serialized via
-// p.sdnMutex, not p.mutex: it mutates cluster-wide Proxmox SDN state (zones,
-// VNets, the pending SDN changeset) shared by every session on this broker, so
-// concurrent check-then-create races here would corrupt that shared state --
-// unlike the per-device work in SetupDevice, which only touches this one
-// device and needs no cross-session serialization.
+// and appends the resulting proxmoxIface entries to dev.ifaces. Held under
+// sdnMutex for its entire body, so it can't run concurrently with
+// teardownUnusedNetworks (see that method's doc comment) or with another
+// resolveDeviceNetworks call racing to create the same shared SDN state.
 func (p *ProxmoxProvider) resolveDeviceNetworks(
 	ctx context.Context, log *logrus.Entry, dev *proxmoxDevice, spec DeviceSpec) error {
 	p.sdnMutex.Lock()
@@ -580,7 +594,7 @@ const teardownRetryDelay = 5 * time.Second
 // teardownMaxAttempts times on failure. destroyDevice itself checks the VM's
 // current state before acting (only stopping it if still running), so a
 // retry picks up wherever the previous attempt left off rather than
-// repeating already-completed steps. Safe to call without holding p.mutex --
+// repeating already-completed steps. Safe to call without holding p.devMutex --
 // intentionally so: the whole point is that a slow/hung Proxmox call during
 // one device's teardown must not block every other session's device
 // operations on this provider while it retries and sleeps.
@@ -608,7 +622,7 @@ func (p *ProxmoxProvider) destroyDeviceWithRetry(
 // any SDN networks that are no longer in use.
 //
 // Only the initial lookup and the final delete from p.devices are done under
-// p.mutex; destroyDeviceWithRetry's Proxmox calls, retries and inter-attempt
+// p.devMutex; destroyDeviceWithRetry's Proxmox calls, retries and inter-attempt
 // sleeps run unlocked so a slow or hung destroy for one device never blocks
 // other sessions' device operations on this provider. On failure dev is left
 // in p.devices (matching the pre-existing behavior), so a later TeardownDevice
@@ -616,9 +630,9 @@ func (p *ProxmoxProvider) destroyDeviceWithRetry(
 func (p *ProxmoxProvider) TeardownDevice(ctx context.Context, name string) error {
 	log := logger.FromContext(ctx)
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	dev, ok := p.devices[name]
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	if !ok {
 		err := fmt.Errorf("failed to lookup device %q: %w", name, ErrNotFound)
 		log.Error(err)
@@ -629,9 +643,9 @@ func (p *ProxmoxProvider) TeardownDevice(ctx context.Context, name string) error
 		return err
 	}
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	delete(p.devices, name)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 
 	p.teardownUnusedNetworks(ctx, log)
 	return nil
@@ -643,7 +657,7 @@ func (p *ProxmoxProvider) TeardownDevice(ctx context.Context, name string) error
 // first, since by then the device already did its one network boot and only
 // ever boots from disk from here on (see netbootMTUCapped/netbootCompleted).
 //
-// The VM Config/Start calls and their waitTask runs are unlocked; p.mutex is
+// The VM Config/Start calls and their waitTask runs are unlocked; p.devMutex is
 // only taken briefly to write back the resulting dev/status changes, matching
 // updateDeviceStatus/startConsoleLogger/stopConsoleLogger's own locking
 // requirement.
@@ -670,9 +684,9 @@ func (p *ProxmoxProvider) PowerOnDevice(ctx context.Context, name string) error 
 				"failed waiting for netboot MTU cap removal on device %q: %w",
 				name, err)
 		}
-		p.mutex.Lock()
+		p.devMutex.Lock()
 		dev.netbootMTUCapped = false
-		p.mutex.Unlock()
+		p.devMutex.Unlock()
 		log.Infof("Cleared netboot MTU cap for device %q", name)
 	}
 
@@ -684,7 +698,7 @@ func (p *ProxmoxProvider) PowerOnDevice(ctx context.Context, name string) error 
 		return fmt.Errorf("failed waiting for VM %d start: %w", dev.vmID, err)
 	}
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	dev.netbootCompleted = true
 	p.updateDeviceStatus(dev, DeviceStatusRunning)
 	// The VM may have powered itself off from inside the guest (e.g. the EVE
@@ -693,7 +707,7 @@ func (p *ProxmoxProvider) PowerOnDevice(ctx context.Context, name string) error 
 	// boot still "running". Always stop it before starting a fresh one.
 	p.stopConsoleLogger(dev)
 	p.startConsoleLogger(ctx, dev)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	return nil
 }
 
@@ -711,10 +725,10 @@ func (p *ProxmoxProvider) PowerOffDevice(ctx context.Context, name string) error
 	if err := waitTask(ctx, task); err != nil {
 		return fmt.Errorf("failed waiting for VM %d stop: %w", dev.vmID, err)
 	}
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	p.stopConsoleLogger(dev)
 	p.updateDeviceStatus(dev, DeviceStatusStopped)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	return nil
 }
 
@@ -734,10 +748,10 @@ func (p *ProxmoxProvider) ShutdownDevice(ctx context.Context, name string) error
 	if err := waitTask(ctx, task); err != nil {
 		return fmt.Errorf("failed waiting for VM %d shutdown: %w", dev.vmID, err)
 	}
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	p.stopConsoleLogger(dev)
 	p.updateDeviceStatus(dev, DeviceStatusStopped)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	return nil
 }
 
@@ -763,9 +777,9 @@ func (p *ProxmoxProvider) RebootDevice(ctx context.Context, name string) error {
 func (p *ProxmoxProvider) GetDeviceConsoleOutput(
 	ctx context.Context, name string) (string, error) {
 	log := logger.FromContext(ctx)
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	dev, ok := p.devices[name]
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	if !ok {
 		err := fmt.Errorf("failed to lookup device %q: %w", name, ErrNotFound)
 		log.Error(err)
@@ -790,8 +804,8 @@ func (p *ProxmoxProvider) GetDeviceConsoleOutput(
 // the same VM cleanly, and a competing session starves both of usable data.
 func (p *ProxmoxProvider) AttachToDeviceConsole(_ context.Context,
 	name string) (stream io.ReadWriteCloser, echoed, telnet bool, err error) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	p.devMutex.Lock()
+	defer p.devMutex.Unlock()
 	dev, ok := p.devices[name]
 	if !ok {
 		err = fmt.Errorf("failed to lookup device %q: %w", name, ErrNotFound)
@@ -819,7 +833,7 @@ func (p *ProxmoxProvider) GetDeviceStatus(
 // GetDeviceUplinkIPs returns the IP addresses assigned to the uplink interfaces,
 // looked up from the Proxmox SDN IPAM by MAC address. dev.ifaces is only read
 // here, never mutated after SetupDevice populates it, so it's safe to read
-// without p.mutex once the device lookup itself is done.
+// without p.devMutex once the device lookup itself is done.
 func (p *ProxmoxProvider) GetDeviceUplinkIPs(
 	ctx context.Context, name string) ([]net.IP, error) {
 	log := logger.FromContext(ctx)
@@ -862,14 +876,14 @@ func (p *ProxmoxProvider) WatchDeviceStatus(
 	ctx context.Context, name string) <-chan DeviceStatus {
 	ch := make(chan DeviceStatus, 10)
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	p.watchers[name] = append(p.watchers[name], ch)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 
 	go func() {
 		defer func() {
-			p.mutex.Lock()
-			defer p.mutex.Unlock()
+			p.devMutex.Lock()
+			defer p.devMutex.Unlock()
 			wlist := p.watchers[name]
 			for i, c := range wlist {
 				if c == ch {
@@ -924,8 +938,8 @@ func (p *ProxmoxProvider) WatchDeviceStatus(
 
 // ListDevices returns the names of all devices created by this provider.
 func (p *ProxmoxProvider) ListDevices(ctx context.Context) ([]string, error) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
+	p.devMutex.Lock()
+	defer p.devMutex.Unlock()
 	var devices []string
 	for devName := range p.devices {
 		devices = append(devices, devName)
@@ -935,19 +949,19 @@ func (p *ProxmoxProvider) ListDevices(ctx context.Context) ([]string, error) {
 
 // TeardownAll removes all VMs and SDN networks created by this provider.
 //
-// The device map is only snapshotted (and later updated) under p.mutex; each
+// The device map is only snapshotted (and later updated) under p.devMutex; each
 // device's destroyDeviceWithRetry call runs unlocked, same as TeardownDevice,
 // so tearing down N devices here never blocks other sessions on this
 // provider for longer than a single device's own destroy would.
 func (p *ProxmoxProvider) TeardownAll(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	devs := make(map[string]*proxmoxDevice, len(p.devices))
 	for name, dev := range p.devices {
 		devs[name] = dev
 	}
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 
 	var errs []error
 	for name, dev := range devs {
@@ -955,9 +969,9 @@ func (p *ProxmoxProvider) TeardownAll(ctx context.Context) error {
 			errs = append(errs, err)
 			continue
 		}
-		p.mutex.Lock()
+		p.devMutex.Lock()
 		delete(p.devices, name)
-		p.mutex.Unlock()
+		p.devMutex.Unlock()
 	}
 	p.teardownUnusedNetworks(ctx, log)
 	return errors.Join(errs...)
@@ -974,7 +988,7 @@ func (p *ProxmoxProvider) TeardownAll(ctx context.Context) error {
 // reconfigured to [target] -- which detaches/removes the installer disk and
 // boots the target.
 //
-// The UnlinkDisk/Config calls and their waitTask runs are unlocked; p.mutex is
+// The UnlinkDisk/Config calls and their waitTask runs are unlocked; p.devMutex is
 // only taken briefly to write back dev.spec.Disks at the end.
 func (p *ProxmoxProvider) ReconfigureDeviceDisks(
 	ctx context.Context, name string, newDisks []DiskImage) error {
@@ -1024,9 +1038,9 @@ func (p *ProxmoxProvider) ReconfigureDeviceDisks(
 		return err
 	}
 
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	dev.spec.Disks = newDisks
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	log.Infof("Reconfigured disks for device %q: kept %d disk(s), boot=virtio%d",
 		name, len(newDisks), firstKept)
 	return nil
@@ -1039,12 +1053,12 @@ func (p *ProxmoxProvider) Close() error {
 
 // --------- helpers ---------
 
-// lookupDevice returns the tracked device or ErrNotFound. It takes p.mutex
+// lookupDevice returns the tracked device or ErrNotFound. It takes p.devMutex
 // itself only for the map read, so it's safe to call without holding it.
 func (p *ProxmoxProvider) lookupDevice(name string) (*proxmoxDevice, error) {
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	dev, ok := p.devices[name]
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("failed to lookup device %q: %w", name, ErrNotFound)
 	}
@@ -1052,7 +1066,7 @@ func (p *ProxmoxProvider) lookupDevice(name string) (*proxmoxDevice, error) {
 }
 
 // lookupVM returns the device and a fresh VirtualMachine handle. Safe to call
-// without holding p.mutex; see lookupDevice.
+// without holding p.devMutex; see lookupDevice.
 func (p *ProxmoxProvider) lookupVM(
 	ctx context.Context, name string) (*proxmoxDevice, *proxmox.VirtualMachine, error) {
 	dev, err := p.lookupDevice(name)
@@ -1072,13 +1086,13 @@ func (p *ProxmoxProvider) lookupVM(
 }
 
 // destroyDevice stops the VM (if running) and deletes it. Safe to call
-// without holding p.mutex; it takes the lock itself only around
+// without holding p.devMutex; it takes the lock itself only around
 // stopConsoleLogger, per that method's own locking requirement.
 func (p *ProxmoxProvider) destroyDevice(
 	ctx context.Context, log *logrus.Entry, dev *proxmoxDevice) error {
-	p.mutex.Lock()
+	p.devMutex.Lock()
 	p.stopConsoleLogger(dev)
-	p.mutex.Unlock()
+	p.devMutex.Unlock()
 
 	node, err := p.client.Node(ctx, p.conf.Node)
 	if err != nil {
@@ -1540,9 +1554,9 @@ func (p *ProxmoxProvider) ensureUplinkNetwork(
 }
 
 // ensureXConnectNetwork ensures an isolated SDN VNet (no subnet) for a
-// point-to-point link exists. The caller must hold p.sdnMutex, not p.mutex:
+// point-to-point link exists. The caller must hold p.sdnMutex, not p.devMutex:
 // this reads and writes p.networks and the cluster-wide SDN zone/VNet
-// configuration, none of which is protected by p.mutex.
+// configuration, none of which is protected by p.devMutex.
 func (p *ProxmoxProvider) ensureXConnectNetwork(
 	ctx context.Context, log *logrus.Entry, netName string,
 	changed *bool) (*proxmoxNetwork, error) {
@@ -1624,22 +1638,30 @@ func (p *ProxmoxProvider) applySDN(ctx context.Context, log *logrus.Entry) error
 
 // teardownUnusedNetworks deletes SDN VNets no longer referenced by any device.
 // The evetest zone is left in place. Self-locking: safe to call without
-// holding any lock. It takes p.mutex only to snapshot which networks are
-// still in use (from p.devices), then p.sdnMutex for the actual delete+apply
-// against p.networks and the cluster-wide SDN config -- the same lock
-// resolveDeviceNetworks uses, so network creation and this GC never race.
+// holding any lock. Held under sdnMutex for its entire body, including the
+// in-use snapshot, so it can't run concurrently with resolveDeviceNetworks
+// and can't observe -- and race-delete as unused -- a network that a
+// pending resolveDeviceNetworks call is still creating.
 func (p *ProxmoxProvider) teardownUnusedNetworks(ctx context.Context, log *logrus.Entry) {
-	p.mutex.Lock()
+	p.sdnMutex.Lock()
+	defer p.sdnMutex.Unlock()
+
+	p.devMutex.Lock()
 	inUse := make(map[string]bool)
 	for _, dev := range p.devices {
 		for _, iface := range dev.ifaces {
 			inUse[iface.netName] = true
 		}
 	}
-	p.mutex.Unlock()
-
-	p.sdnMutex.Lock()
-	defer p.sdnMutex.Unlock()
+	for _, dev := range p.pending {
+		if dev == nil {
+			continue // reserved, but SetupDevice hasn't constructed it yet
+		}
+		for _, iface := range dev.ifaces {
+			inUse[iface.netName] = true
+		}
+	}
+	p.devMutex.Unlock()
 
 	cluster, err := p.client.Cluster(ctx)
 	if err != nil {
@@ -1668,7 +1690,7 @@ func (p *ProxmoxProvider) teardownUnusedNetworks(ctx context.Context, log *logru
 }
 
 // updateDeviceStatus records the device status and notifies watchers. The caller
-// must hold p.mutex.
+// must hold p.devMutex.
 func (p *ProxmoxProvider) updateDeviceStatus(dev *proxmoxDevice, status DeviceStatus) {
 	dev.status = status
 	for _, ch := range p.watchers[dev.name] {
@@ -1692,7 +1714,7 @@ func (p *ProxmoxProvider) getDeviceConsoleLogFile(name string) string {
 // logger's own context being cancelled -- the console connection can drop for
 // reasons unrelated to the VM's health (e.g. a termproxy session timeout), and
 // should not silently stop logging for the rest of the device's lifetime.
-// The caller must hold p.mutex.
+// The caller must hold p.devMutex.
 func (p *ProxmoxProvider) startConsoleLogger(ctx context.Context, dev *proxmoxDevice) {
 	if dev.consoleCancel != nil {
 		return // already running
@@ -1794,7 +1816,7 @@ func runConsoleLogger(
 // stopConsoleLogger stops the background console logger and blocks until its
 // goroutine has fully exited, so callers can safely start a new one right
 // after without briefly running two against the same VM.
-// The caller must hold p.mutex.
+// The caller must hold p.devMutex.
 func (p *ProxmoxProvider) stopConsoleLogger(dev *proxmoxDevice) {
 	if dev.consoleCancel != nil {
 		dev.consoleCancel()
