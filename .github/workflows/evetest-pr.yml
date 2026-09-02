@@ -125,12 +125,18 @@ jobs:
       # not /tmp (file access outside the checkout isn't guaranteed).
       # The decision file is created directly (not via a Bash heredoc: raw
       # JSON braces/quotes tripped Claude Code's shell-content safety check
-      # even though the command matched the Bash allowlist). --permission-mode
-      # acceptEdits auto-approves file edits anywhere in the working directory
-      # without needing a path-scoped Edit(path)/Write(path) allow rule --
-      # those kept getting silently denied here despite matching the
-      # documented syntax exactly (Bash allow-listing is unaffected: all other
-      # commands still need their own explicit --allowedTools entry).
+      # even though the command matched the Bash allowlist).
+      #
+      # File writes are enabled via the `settings` input, not `claude_args`:
+      # the action logs its actual SDK options every run, and with
+      # `--permission-mode acceptEdits` in claude_args they still showed
+      # "permissionMode": "default" -- that flag, like the Edit(path)/
+      # Write(path) allow-rule forms tried before it, is silently dropped
+      # somewhere in claude_args' parsing. `settings` sets both
+      # permissions.defaultMode and a bare (path-unscoped) Edit/Write allow
+      # entry, since a bare tool-name rule is documented to match at the
+      # tool level everywhere -- two independent, separately-documented
+      # mechanisms in case one of them doesn't survive this action either.
       - name: Ask Claude which tests can be skipped
         if: steps.override.outputs.requested_all_tests != 'true'
         uses: anthropics/claude-code-action@v1
@@ -146,9 +152,9 @@ jobs:
           show_full_output: true
           track_progress: false
           use_sticky_comment: false
+          settings: '{"permissions": {"defaultMode": "acceptEdits", "allow": ["Edit", "Write"]}}'
           claude_args: |
             --allowedTools "Bash(gh pr comment:*)"
-            --permission-mode acceptEdits
             --model claude-sonnet-5
           prompt: |
             REPO: ${{ github.repository }}
