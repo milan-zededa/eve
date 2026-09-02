@@ -793,20 +793,19 @@ func (b *broker) PushEVEContainerImage(
 		return err
 	}
 
-	// Check if image already exists or is being uploaded by another client.
-	// SendAndClose without draining is safe — the client handles the early
-	// close by breaking out of its send loop and calling CloseAndRecv.
-	b.mutex.Lock()
+	// Check if image already exists locally. This is a Docker-daemon query, so
+	// it must not run under b.mutex -- that's the broker-wide lock every RPC
+	// handler also takes just to look up a session, and a stalled daemon would
+	// otherwise block session lookups for every client on the broker, not just
+	// image pushes.
 	haveImage, err := utils.HaveDockerImage(ctx, log, dockerImageName)
 	if err != nil {
-		b.mutex.Unlock()
 		err = fmt.Errorf("failed to check for image %q presence: %w",
 			dockerImageName, err)
 		log.Error(err)
 		return err
 	}
 	if haveImage {
-		b.mutex.Unlock()
 		b.imageUsage.touch(dockerImageName)
 		log.Infof("Image %q already present in Docker image store",
 			dockerImageName)
@@ -815,6 +814,11 @@ func (b *broker) PushEVEContainerImage(
 		})
 	}
 
+	// Check if it's already being uploaded by another client, and reserve this
+	// upload otherwise. Only the map access needs b.mutex.
+	// SendAndClose without draining is safe — the client handles the early
+	// close by breaking out of its send loop and calling CloseAndRecv.
+	b.mutex.Lock()
 	if uploadDone, uploading := b.imageUploads[dockerImageName]; uploading {
 		b.mutex.Unlock()
 		log.Infof("Image %q is already being uploaded by another client, waiting...",
@@ -1581,6 +1585,11 @@ func (b *broker) PowerOnDevice(
 }
 
 // PowerOffDevice powers off a specific EVE device.
+//
+// The provider call runs without holding clientSession.mutex: that mutex
+// serializes this session's own device operations, not every other device's
+// power control for as long as one provider call takes -- see PowerOnDevice's
+// doc comment.
 func (b *broker) PowerOffDevice(
 	ctx context.Context, req *api.DeviceControlRequest) (*api.DeviceControlResponse, error) {
 	b.mutex.Lock()
@@ -1591,18 +1600,17 @@ func (b *broker) PowerOffDevice(
 		b.globalLog.Error(err)
 		return nil, err
 	}
+
 	clientSession.mutex.Lock()
-	defer clientSession.mutex.Unlock()
-
 	log := clientSession.log
-	ctx = logger.WithLogger(ctx, log)
-
 	eveDevice, exists := clientSession.eveDevices[req.DeviceName]
+	clientSession.mutex.Unlock()
 	if !exists {
 		err := eveDevNotFoundErr(req.DeviceName)
 		log.Error(err)
 		return nil, err
 	}
+	ctx = logger.WithLogger(ctx, log)
 
 	err := b.provider.PowerOffDevice(ctx, eveDevice.providerDevName)
 	if err != nil {
@@ -1616,7 +1624,8 @@ func (b *broker) PowerOffDevice(
 	return &api.DeviceControlResponse{}, nil
 }
 
-// RebootDevice reboots a specific EVE device.
+// RebootDevice reboots a specific EVE device. The provider call runs without
+// holding clientSession.mutex; see PowerOffDevice's doc comment.
 func (b *broker) RebootDevice(
 	ctx context.Context, req *api.DeviceControlRequest) (*api.DeviceControlResponse, error) {
 	b.mutex.Lock()
@@ -1627,18 +1636,17 @@ func (b *broker) RebootDevice(
 		b.globalLog.Error(err)
 		return nil, err
 	}
+
 	clientSession.mutex.Lock()
-	defer clientSession.mutex.Unlock()
-
 	log := clientSession.log
-	ctx = logger.WithLogger(ctx, log)
-
 	eveDevice, exists := clientSession.eveDevices[req.DeviceName]
+	clientSession.mutex.Unlock()
 	if !exists {
 		err := eveDevNotFoundErr(req.DeviceName)
 		log.Error(err)
 		return nil, err
 	}
+	ctx = logger.WithLogger(ctx, log)
 
 	err := b.provider.RebootDevice(ctx, eveDevice.providerDevName)
 	if err != nil {
@@ -1652,7 +1660,9 @@ func (b *broker) RebootDevice(
 	return &api.DeviceControlResponse{}, nil
 }
 
-// GetDeviceConsoleOutput returns the console output from the device.
+// GetDeviceConsoleOutput returns the console output from the device. The
+// provider call runs without holding clientSession.mutex; see
+// PowerOffDevice's doc comment.
 func (b *broker) GetDeviceConsoleOutput(
 	ctx context.Context, req *api.DeviceControlRequest) (*api.ConsoleOutputResponse, error) {
 	b.mutex.Lock()
@@ -1663,18 +1673,17 @@ func (b *broker) GetDeviceConsoleOutput(
 		b.globalLog.Error(err)
 		return nil, err
 	}
+
 	clientSession.mutex.Lock()
-	defer clientSession.mutex.Unlock()
-
 	log := clientSession.log
-	ctx = logger.WithLogger(ctx, log)
-
 	eveDevice, exists := clientSession.eveDevices[req.DeviceName]
+	clientSession.mutex.Unlock()
 	if !exists {
 		err := eveDevNotFoundErr(req.DeviceName)
 		log.Error(err)
 		return nil, err
 	}
+	ctx = logger.WithLogger(ctx, log)
 
 	output, err := b.provider.GetDeviceConsoleOutput(ctx, eveDevice.providerDevName)
 	if err != nil {
