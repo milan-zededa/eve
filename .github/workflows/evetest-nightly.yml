@@ -117,7 +117,7 @@ jobs:
           post-status: 'false'
           upload-junit-results: 'true'
           analyze-failures: 'true'
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-api-key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           branch: ${{ github.ref_name }}
           ledger-branch: ${{ github.ref_name }}
 
