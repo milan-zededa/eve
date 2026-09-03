@@ -492,10 +492,20 @@ func (p *ProxmoxProvider) SetupDevice(
 		return err
 	}
 	task, err := node.NewVirtualMachine(ctx, vmID, options...)
-	p.vmCreateMutex.Unlock()
 	if err != nil {
+		// The create call can fail client-side (e.g. a truncated Proxmox API
+		// response) even though the VM was actually created server-side --
+		// observed in practice as an orphaned VM after a bare "unexpected
+		// end of JSON input" error here. Verify before concluding nothing
+		// was created, so the failure cleanup below still deletes it instead
+		// of leaving a real VM that nothing will ever track or remove.
+		if _, lookupErr := node.VirtualMachine(ctx, vmID); lookupErr == nil {
+			vmCreated = true
+		}
+		p.vmCreateMutex.Unlock()
 		return fmt.Errorf("failed to create VM %d for device %q: %w", vmID, name, err)
 	}
+	p.vmCreateMutex.Unlock()
 	// The VM may already exist on the node even if the wait below fails (e.g. PVE
 	// queued the task but it times out client-side), so it must be cleaned up too.
 	vmCreated = true
