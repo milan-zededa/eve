@@ -17,6 +17,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
   cancel-in-progress: true
 
+# DO NOT MERGE: use my own evetest tool image instead of lfedge/evetest.
+env:
+  EVETEST_ORG: milan4zededa
+
 jobs:
   # Discovers suites so a new one under evetest/tests/ gets its own job
   # below automatically, without editing this workflow.
