@@ -1197,6 +1197,7 @@ func (b *broker) SetupDevices(
 
 	// Provision all EVE devices in parallel (live or installer).
 	if err = b.provisionEVEDevices(ctx, log, clientSession); err != nil {
+		log.Error(err)
 		b.teardownDevices(ctx, clientSession)
 		return nil, err
 	}
