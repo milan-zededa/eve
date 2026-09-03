@@ -17,6 +17,8 @@ permissions:
 # validated and ready to run for real.
 env:
   EVETEST_EVE_REPO: milan4zededa/eve
+  # DO NOT MERGE: use my own evetest tool image instead of lfedge/evetest.
+  EVETEST_ORG: milan4zededa
 
 jobs:
   # Suite discovery against master. No Claude-skip step: this run is the
