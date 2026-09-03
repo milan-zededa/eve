@@ -588,43 +588,24 @@ func (p *ProxmoxProvider) resolveDeviceNetworks(
 	return nil
 }
 
-// teardownMaxAttempts bounds retries of destroyDevice against transient
-// Proxmox API failures (e.g. a TLS handshake timeout while waiting for a VM
-// to stop). Without a retry, a device left behind by such a failure keeps
-// its entry in p.devices, and the next SetupDevice for the same name (the
-// same client session reuses one SDN device name for its whole lifetime)
-// then fails outright with "device already exists", since the underlying
-// VM was never actually confirmed stopped/deleted on Proxmox.
-const teardownMaxAttempts = 3
-
-// teardownRetryDelay is the pause between teardownMaxAttempts attempts.
-const teardownRetryDelay = 5 * time.Second
-
-// destroyDeviceWithRetry calls destroyDevice, retrying up to
-// teardownMaxAttempts times on failure. destroyDevice itself checks the VM's
-// current state before acting (only stopping it if still running), so a
-// retry picks up wherever the previous attempt left off rather than
-// repeating already-completed steps. Safe to call without holding p.devMutex --
-// intentionally so: the whole point is that a slow/hung Proxmox call during
-// one device's teardown must not block every other session's device
-// operations on this provider while it retries and sleeps.
+// destroyDeviceWithRetry calls destroyDevice, retrying on failure.
+// destroyDevice itself checks the VM's current state before acting (only
+// stopping it if still running), so a retry picks up wherever the previous
+// attempt left off rather than repeating already-completed steps. Safe to
+// call without holding p.devMutex -- intentionally so: the whole point is
+// that a slow/hung Proxmox call during one device's teardown must not block
+// every other session's device operations on this provider while it retries
+// and sleeps.
+//
+// Without this retry, a device left behind by a transient failure keeps its
+// entry in p.devices, and the next SetupDevice for the same name (the same
+// client session reuses one SDN device name for its whole lifetime) then
+// fails outright with "device already exists", since the underlying VM was
+// never actually confirmed stopped/deleted on Proxmox.
 func (p *ProxmoxProvider) destroyDeviceWithRetry(
 	ctx context.Context, log *logrus.Entry, dev *proxmoxDevice) error {
-	var err error
-	for attempt := 1; attempt <= teardownMaxAttempts; attempt++ {
-		if err = p.destroyDevice(ctx, log, dev); err == nil {
-			return nil
-		}
-		if attempt < teardownMaxAttempts {
-			log.Warnf("Attempt %d/%d: failed to destroy device %q (will retry): %v",
-				attempt, teardownMaxAttempts, dev.name, err)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(teardownRetryDelay):
-			}
-		}
-	}
+	_, err := retryProxmoxCall(ctx, log, fmt.Sprintf("failed to destroy device %q", dev.name),
+		func() (struct{}, error) { return struct{}{}, p.destroyDevice(ctx, log, dev) })
 	return err
 }
 
@@ -1354,74 +1335,25 @@ func diskOptions(storage string, diskRefs []string) []proxmox.VirtualMachineOpti
 	return options
 }
 
-// uploadMaxAttempts bounds retries of a single storage.UploadWithName call
-// (see uploadWithRetry) against transient failures of the underlying HTTP
-// POST, e.g. a Proxmox host occasionally resetting the connection mid-upload.
-const uploadMaxAttempts = 3
-
-// uploadRetryDelay is the pause between uploadWithRetry attempts.
-const uploadRetryDelay = 5 * time.Second
-
-// uploadWithRetry calls storage.UploadWithName, retrying up to
-// uploadMaxAttempts times on failure. Each attempt re-opens and re-streams
-// the source file from scratch (see (*Storage).upload in go-proxmox), so a
-// retry after a failed POST is always safe: no task/UPID is obtained (and
-// thus nothing to clean up) unless an attempt fully succeeds.
+// uploadWithRetry calls storage.UploadWithName, retrying on failure. Each
+// attempt re-opens and re-streams the source file from scratch (see
+// (*Storage).upload in go-proxmox), so a retry after a failed POST is always
+// safe: no task/UPID is obtained (and thus nothing to clean up) unless an
+// attempt fully succeeds.
 func (p *ProxmoxProvider) uploadWithRetry(ctx context.Context, log *logrus.Entry,
 	storage *proxmox.Storage, path, uploadName string) (*proxmox.Task, error) {
-	var task *proxmox.Task
-	var err error
-	for attempt := 1; attempt <= uploadMaxAttempts; attempt++ {
-		task, err = storage.UploadWithName("import", path, uploadName)
-		if err == nil {
-			return task, nil
-		}
-		if attempt < uploadMaxAttempts {
-			log.Warnf("Attempt %d/%d: failed to upload %q to storage %q (will retry): %v",
-				attempt, uploadMaxAttempts, path, p.conf.ImportStorage, err)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(uploadRetryDelay):
-			}
-		}
-	}
-	return nil, err
+	desc := fmt.Sprintf("failed to upload %q to storage %q", path, p.conf.ImportStorage)
+	return retryProxmoxCall(ctx, log, desc, func() (*proxmox.Task, error) {
+		return storage.UploadWithName("import", path, uploadName)
+	})
 }
 
-// storageMaxAttempts bounds retries of a single Node.Storage lookup (see
-// getStorageWithRetry) against transient Proxmox API failures, e.g. a
-// truncated/malformed response ("unexpected end of JSON input") -- observed
-// in practice failing EVE/SDN device setup outright over what is otherwise a
-// single, side-effect-free metadata fetch.
-const storageMaxAttempts = 3
-
-// storageRetryDelay is the pause between getStorageWithRetry attempts.
-const storageRetryDelay = 5 * time.Second
-
-// getStorageWithRetry calls node.Storage, retrying up to storageMaxAttempts
-// times on failure. Safe to retry unconditionally: this is a read-only
-// metadata fetch with no side effects.
-func getStorageWithRetry(ctx context.Context, log *logrus.Entry, node *proxmox.Node,
-	name string) (*proxmox.Storage, error) {
-	var storage *proxmox.Storage
-	var err error
-	for attempt := 1; attempt <= storageMaxAttempts; attempt++ {
-		storage, err = node.Storage(ctx, name)
-		if err == nil {
-			return storage, nil
-		}
-		if attempt < storageMaxAttempts {
-			log.Warnf("Attempt %d/%d: failed to get storage %q (will retry): %v",
-				attempt, storageMaxAttempts, name, err)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(storageRetryDelay):
-			}
-		}
-	}
-	return nil, err
+// getStorageWithRetry calls node.Storage, retrying on failure. Safe to retry
+// unconditionally: this is a read-only metadata fetch with no side effects.
+func (p *ProxmoxProvider) getStorageWithRetry(ctx context.Context, log *logrus.Entry,
+	node *proxmox.Node, name string) (*proxmox.Storage, error) {
+	return retryProxmoxCall(ctx, log, fmt.Sprintf("failed to get storage %q", name),
+		func() (*proxmox.Storage, error) { return node.Storage(ctx, name) })
 }
 
 // uploadDiskImages uploads each disk image to the import storage and returns the
@@ -1435,7 +1367,7 @@ func (p *ProxmoxProvider) uploadDiskImages(ctx context.Context, node *proxmox.No
 		return nil, nil
 	}
 	log := logger.FromContext(ctx)
-	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
+	storage, err := p.getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get import storage %q: %w",
 			p.conf.ImportStorage, err)
@@ -1472,7 +1404,7 @@ func (p *ProxmoxProvider) deleteImportVolumes(ctx context.Context, log *logrus.E
 	if len(volIDs) == 0 {
 		return
 	}
-	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
+	storage, err := p.getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		log.Warnf("failed to get import storage %q for cleanup: %v",
 			p.conf.ImportStorage, err)
@@ -1524,7 +1456,7 @@ func (p *ProxmoxProvider) uploadFirmware(ctx context.Context, node *proxmox.Node
 		return "", err
 	}
 	log := logger.FromContext(ctx)
-	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
+	storage, err := p.getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		return "", fmt.Errorf("failed to get import storage %q: %w",
 			p.conf.ImportStorage, err)
@@ -2085,4 +2017,37 @@ func (w *wsConsole) Close() error {
 		return w.closer()
 	}
 	return nil
+}
+
+// proxmoxRetryMaxAttempts bounds retries of a single Proxmox API call against
+// transient failures.
+const proxmoxRetryMaxAttempts = 3
+
+// proxmoxRetryDelay is the pause between retryProxmoxCall attempts.
+const proxmoxRetryDelay = 5 * time.Second
+
+// retryProxmoxCall calls fn up to proxmoxRetryMaxAttempts times, retrying on
+// failure with a proxmoxRetryDelay pause in between. desc names the
+// operation, for the warning logged between attempts.
+func retryProxmoxCall[T any](
+	ctx context.Context, log *logrus.Entry, desc string, fn func() (T, error)) (T, error) {
+	var result T
+	var err error
+	for attempt := 1; attempt <= proxmoxRetryMaxAttempts; attempt++ {
+		result, err = fn()
+		if err == nil {
+			return result, nil
+		}
+		if attempt < proxmoxRetryMaxAttempts {
+			log.Warnf("Attempt %d/%d: %s (will retry): %v",
+				attempt, proxmoxRetryMaxAttempts, desc, err)
+			select {
+			case <-ctx.Done():
+				var zero T
+				return zero, ctx.Err()
+			case <-time.After(proxmoxRetryDelay):
+			}
+		}
+	}
+	return result, err
 }
