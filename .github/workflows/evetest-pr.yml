@@ -144,7 +144,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_non_write_users: "*"
           # TODO(milan): temporary -- flip back to false once this is
@@ -312,5 +312,5 @@ jobs:
           skip: ${{ needs.discover-suites.outputs.skip }}
           post-status: 'true'
           analyze-failures: 'true'
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-api-key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           pr-number: ${{ needs.discover-suites.outputs.pr-number }}

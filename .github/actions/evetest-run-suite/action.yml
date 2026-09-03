@@ -389,7 +389,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
       with:
-        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        claude_code_oauth_token: ${{ inputs.anthropic-api-key }}
         github_token: ${{ github.token }}
         # TODO(milan): temporary -- flip back to false once this is
         # confirmed working; this dumps the full tool-call transcript
