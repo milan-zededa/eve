@@ -115,6 +115,8 @@ jobs:
           download-image-artifacts: 'false'
           post-status: 'false'
           upload-junit-results: 'true'
+          analyze-failures: 'true'
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
   # Combines every suite's JUnit results into one Allure report and
   # publishes it to GitHub Pages (gh-pages branch), carrying forward the
