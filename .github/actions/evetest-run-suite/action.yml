@@ -47,6 +47,18 @@ inputs:
       job to pick up. Intended for the nightly, full-suite run only.
     required: false
     default: 'false'
+  analyze-failures:
+    description: >-
+      'true' to have Claude read this suite's own failure artifacts and
+      write a root-cause analysis to the job's step summary when it fails.
+      Intended for the nightly, full-suite run only. Requires
+      anthropic-api-key.
+    required: false
+    default: 'false'
+  anthropic-api-key:
+    description: Anthropic API key. Required when analyze-failures is 'true'.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -340,6 +352,99 @@ runs:
       with:
         name: coverage-${{ inputs.test-suite }}
         path: /tmp/merged-coverage/
+        if-no-files-found: ignore
+
+    # display_report is deliberately off: it renders every tool call, its
+    # full parameters and result (per turn), not just the final answer --
+    # far too verbose for a step summary meant to stay scannable across many
+    # suites. The next step extracts just the final answer instead.
+    # additionalDirectories (not claude_args) grants ARTIFACT_DIR, which
+    # lives outside the checkout; continue-on-error keeps "Format test
+    # results" as the step GitHub auto-expands on a failed job.
+    - name: Ask Claude to analyze this failure
+      id: claude_analysis
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      uses: anthropics/claude-code-action@v1
+      env:
+        GH_TOKEN: ${{ github.token }}
+      with:
+        anthropic_api_key: ${{ inputs.anthropic-api-key }}
+        github_token: ${{ github.token }}
+        # TODO(milan): temporary -- flip back to false once this is
+        # confirmed working; this dumps the full tool-call transcript
+        # (including PR diff content) into the log.
+        show_full_output: true
+        track_progress: false
+        use_sticky_comment: false
+        display_report: false
+        settings: '{"permissions": {"additionalDirectories": ["${{ env.ARTIFACT_DIR }}"]}}'
+        claude_args: |
+          --allowedTools "Read,Grep,Glob"
+          --model claude-sonnet-5
+        prompt: |
+          Suite ${{ inputs.test-suite }} failed. Investigate why using the
+          artifacts in ${{ env.ARTIFACT_DIR }} (gotest.json has the raw test
+          output; also look for EVE device logs, collect-info archives, SDN
+          logs, etc. alongside it) and, if useful, the test's own source
+          under evetest/tests/ and the EVE source tree it's checked out
+          alongside, if you need to consult it. Write a concise (3-6
+          sentence) likely root cause, citing the specific evidence you
+          found. If you can't determine a likely cause from what's
+          available, say so briefly instead of speculating.
+
+    # execution_file is a JSON array of every message claude-code-action
+    # would otherwise render in full via display_report; take just the last
+    # "result" message's text (plus its cost/duration) instead, for a step
+    # summary that stays scannable across many suites.
+    - name: Add Claude's analysis to the step summary
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        # A non-C locale can make awk/printf misparse or misformat "%f",
+        # e.g. rendering "1.88" as "1,0000".
+        LC_NUMERIC: C
+      run: |
+        FILE="${{ steps.claude_analysis.outputs.execution_file }}"
+        {
+          echo "### Claude failure analysis: ${{ inputs.test-suite }}"
+          echo
+          if [[ -n "$FILE" && -f "$FILE" ]]; then
+            LAST=$(jq '[.[] | select(.type == "result")] | last' "$FILE")
+            RESULT=$(echo "$LAST" | jq -r '.result // "_No result recorded._"')
+            # If Claude's answer contains a markdown heading, demote it
+            # (and any others) so it nests under this step's own "###"
+            # heading instead of colliding with it -- e.g. a "## Root
+            # cause" heading is shallower than "###", which renders as a
+            # broken hierarchy. The `|| true` matters: under `set -o
+            # pipefail`, grep finding no heading (the common case) exits 1,
+            # which -- with no later pipe stage failing to mask it --  would
+            # otherwise abort this whole step via `set -e`.
+            MIN_DEPTH=$(grep -oE '^#{1,6} ' <<< "$RESULT" | awk '{ print length($0) - 1 }' | sort -n | head -1 || true)
+            if [[ -n "$MIN_DEPTH" && "$MIN_DEPTH" -lt 4 ]]; then
+              PREFIX=$(printf '#%.0s' $(seq 1 $((4 - MIN_DEPTH))))
+              RESULT=$(sed -E "s/^(#{1,6})([[:space:]])/${PREFIX}\1\2/" <<< "$RESULT")
+            fi
+            echo "$RESULT"
+            echo
+            COST=$(echo "$LAST" | jq -r '.total_cost_usd // 0')
+            DURATION_S=$(awk "BEGIN { printf \"%.1f\", $(echo "$LAST" | jq -r '.duration_ms // 0') / 1000 }")
+            printf '_Cost: $%.4f | Duration: %ss_\n' "$COST" "$DURATION_S"
+          else
+            echo "_Analysis did not complete (see job log)._"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # The raw NDJSON transcript, for anything the step summary trims away
+    # (tool calls, intermediate reasoning, etc.).
+    - name: Upload Claude's execution transcript
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      with:
+        name: claude-analysis-${{ inputs.test-suite }}
+        path: ${{ steps.claude_analysis.outputs.execution_file }}
         if-no-files-found: ignore
 
     # Package the whole EVETEST_COLLECT_ARTIFACTS tree into a single tarball,
