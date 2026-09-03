@@ -1389,6 +1389,41 @@ func (p *ProxmoxProvider) uploadWithRetry(ctx context.Context, log *logrus.Entry
 	return nil, err
 }
 
+// storageMaxAttempts bounds retries of a single Node.Storage lookup (see
+// getStorageWithRetry) against transient Proxmox API failures, e.g. a
+// truncated/malformed response ("unexpected end of JSON input") -- observed
+// in practice failing EVE/SDN device setup outright over what is otherwise a
+// single, side-effect-free metadata fetch.
+const storageMaxAttempts = 3
+
+// storageRetryDelay is the pause between getStorageWithRetry attempts.
+const storageRetryDelay = 5 * time.Second
+
+// getStorageWithRetry calls node.Storage, retrying up to storageMaxAttempts
+// times on failure. Safe to retry unconditionally: this is a read-only
+// metadata fetch with no side effects.
+func getStorageWithRetry(ctx context.Context, log *logrus.Entry, node *proxmox.Node,
+	name string) (*proxmox.Storage, error) {
+	var storage *proxmox.Storage
+	var err error
+	for attempt := 1; attempt <= storageMaxAttempts; attempt++ {
+		storage, err = node.Storage(ctx, name)
+		if err == nil {
+			return storage, nil
+		}
+		if attempt < storageMaxAttempts {
+			log.Warnf("Attempt %d/%d: failed to get storage %q (will retry): %v",
+				attempt, storageMaxAttempts, name, err)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(storageRetryDelay):
+			}
+		}
+	}
+	return nil, err
+}
+
 // uploadDiskImages uploads each disk image to the import storage and returns the
 // resulting import-storage volume IDs, in disk order. Each volume ID serves both
 // as the import-from reference when creating the VM and as the cleanup target
@@ -1400,7 +1435,7 @@ func (p *ProxmoxProvider) uploadDiskImages(ctx context.Context, node *proxmox.No
 		return nil, nil
 	}
 	log := logger.FromContext(ctx)
-	storage, err := node.Storage(ctx, p.conf.ImportStorage)
+	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get import storage %q: %w",
 			p.conf.ImportStorage, err)
@@ -1437,7 +1472,7 @@ func (p *ProxmoxProvider) deleteImportVolumes(ctx context.Context, log *logrus.E
 	if len(volIDs) == 0 {
 		return
 	}
-	storage, err := node.Storage(ctx, p.conf.ImportStorage)
+	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		log.Warnf("failed to get import storage %q for cleanup: %v",
 			p.conf.ImportStorage, err)
@@ -1489,7 +1524,7 @@ func (p *ProxmoxProvider) uploadFirmware(ctx context.Context, node *proxmox.Node
 		return "", err
 	}
 	log := logger.FromContext(ctx)
-	storage, err := node.Storage(ctx, p.conf.ImportStorage)
+	storage, err := getStorageWithRetry(ctx, log, node, p.conf.ImportStorage)
 	if err != nil {
 		return "", fmt.Errorf("failed to get import storage %q: %w",
 			p.conf.ImportStorage, err)
