@@ -299,6 +299,9 @@ packages:
   - git
   - make
   - jq
+  # anthropics/claude-code-action installs its own Bun runtime via a .zip
+  # release archive, which needs this.
+  - unzip
 
 runcmd:
   - systemctl enable --now qemu-guest-agent.service
