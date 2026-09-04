@@ -33,6 +33,7 @@ jobs:
     outputs:
       suites: ${{ steps.list.outputs.suites }}
       skip: ${{ steps.decide.outputs.skip }}
+      pr-number: ${{ steps.pr.outputs.number }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -258,6 +259,14 @@ jobs:
     name: Run suite ${{ matrix.test-suite }}
     needs: discover-suites
     runs-on: [self-hosted, evetest-runner]
+    # Narrower job-level override (replaces, not adds to, the workflow
+    # default): the analyze-failures step below needs pull-requests:read to
+    # fetch the PR diff via `gh pr diff`.
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+      pull-requests: read
     timeout-minutes: 360
     strategy:
       fail-fast: false
@@ -293,3 +302,6 @@ jobs:
           source-run-id: ${{ github.event.workflow_run.id }}
           skip: ${{ needs.discover-suites.outputs.skip }}
           post-status: 'true'
+          analyze-failures: 'true'
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          pr-number: ${{ needs.discover-suites.outputs.pr-number }}
