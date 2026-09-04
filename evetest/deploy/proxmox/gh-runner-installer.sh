@@ -302,6 +302,10 @@ packages:
   # anthropics/claude-code-action installs its own Bun runtime via a .zip
   # release archive, which needs this.
   - unzip
+  # The composite action's failure-analysis steps shell out to `gh` (e.g.
+  # to fetch a PR's diff) -- available directly from Ubuntu's own universe
+  # repo, no custom apt source needed.
+  - gh
 
 runcmd:
   - systemctl enable --now qemu-guest-agent.service
