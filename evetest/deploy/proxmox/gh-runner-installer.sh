@@ -303,7 +303,23 @@ packages:
   # release archive, which needs this.
   - unzip
 
+package_update: false
+package_upgrade: false
+
 runcmd:
+  # Ubuntu's unattended-upgrades timers were observed killing an in-progress
+  # CI job (systemd stops the GitHub runner service while an apt upgrade it
+  # triggers is applying, which the runner then reports as the job being
+  # "canceled") -- disable them completely rather than just reschedule
+  # around them, since a runner VM's package set shouldn't change underneath
+  # a running job at all.
+  - systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
+  - systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer
+  - |
+    cat > /etc/apt/apt.conf.d/20auto-upgrades <<'APTCONF'
+    APT::Periodic::Update-Package-Lists "0";
+    APT::Periodic::Unattended-Upgrade "0";
+    APTCONF
   - systemctl enable --now qemu-guest-agent.service
   - mkdir -p ${ARTIFACTS_DIR}
   - chown ${GH_USERNAME}:${GH_USERNAME} ${ARTIFACTS_DIR}
