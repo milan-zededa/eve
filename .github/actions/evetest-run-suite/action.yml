@@ -398,7 +398,9 @@ runs:
         track_progress: false
         use_sticky_comment: false
         display_report: false
-        settings: '{"permissions": {"additionalDirectories": ["${{ env.ARTIFACT_DIR }}"]}}'
+        # deny: ["Agent"] hard-blocks subagent spawning (see the "Investigate
+        # everything yourself" note in the prompt below for why).
+        settings: '{"permissions": {"additionalDirectories": ["${{ env.ARTIFACT_DIR }}"], "deny": ["Agent"]}}'
         claude_args: |
           --allowedTools "Read,Grep,Glob"
           --model claude-sonnet-5
@@ -409,6 +411,13 @@ runs:
           logs, etc. alongside it) and, if useful, the test's own source
           under evetest/tests/ and the EVE source tree it's checked out
           alongside, if you need to consult it.
+
+          Investigate everything yourself, directly, in this same turn. Do
+          not delegate any part of this to a background/async subagent
+          (e.g. the Agent tool) and then wait for it -- this action runs
+          once and exits after your turn ends, so nothing will ever come
+          back to collect a subagent's result or resume you. If you're
+          tempted to spawn one, do that investigation inline instead.
 
           PR NUMBER: ${{ inputs.pr-number }}
           If a PR number is given above (non-empty), this suite ran against
