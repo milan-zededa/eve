@@ -215,11 +215,15 @@ func TestEVEUpgrade(test *testing.T) {
 		Gateway: evetest.IPAddress("10.11.12.1"),
 		MTU:     1500,
 	})
+	appName := "lfedge/evetest-ubuntu-ctr"
+	if initialHypervisor == evetest.HypervisorKubevirt {
+		appName = "lfedge/evetest-ubuntu-ctr-for-k3s"
+	}
 	appUUID := devConfig.AddApplication(evetest.ApplicationInstanceConfig{
 		DisplayName: "upgrade-test-app",
 		Activate:    true,
 		Image: evetest.DockerContainer{
-			ImageName: "lfedge/evetest-ubuntu-ctr",
+			ImageName: appName,
 			Tag:       "1.0",
 		},
 		VirtualizationMode: eveconfig.VmMode_HVM,
