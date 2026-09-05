@@ -3,9 +3,9 @@
 ---
 name: evetest-nightly
 on:  # yamllint disable-line rule:truthy
-  schedule:
-    # ~2:37 AM CET (cron is UTC-only, drifts ~1h across DST -- fine for a nightly).
-    - cron: '37 1 * * *'
+  #schedule:
+  #  # ~2:37 AM CET (cron is UTC-only, drifts ~1h across DST -- fine for a nightly).
+  #  - cron: '37 1 * * *'
   workflow_dispatch: {}  # manual trigger, for testing
 
 permissions:
