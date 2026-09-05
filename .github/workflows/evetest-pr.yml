@@ -31,7 +31,7 @@ jobs:
       pull-requests: write
       issues: write
     outputs:
-      suites: ${{ steps.list.outputs.suites }}
+      suites: ${{ steps.decide.outputs.suites }}
       skip: ${{ steps.decide.outputs.skip }}
       pr-number: ${{ steps.pr.outputs.number }}
     steps:
@@ -227,29 +227,50 @@ jobs:
             skipped test/suite/variant and why, and mentioning that an engineer can
             comment "/evetest run-all" to force the full suite to run instead.
 
+      # A suite whose exact name (not just one of its subtests/variants) is
+      # in Claude's skip list is being skipped entirely -- there's nothing
+      # left for a runner to do for it, so it's dropped from the matrix
+      # below rather than spinning one up just to report every subtest as
+      # skipped. Its check still gets posted (see the next step), just
+      # resolved immediately instead of via a runner job -- otherwise
+      # "Evetest / <suite>" would never appear for this PR at all, which
+      # would permanently block merging if it's ever a required check.
       - id: decide
         name: Determine EVETEST_SKIP
         run: |
+          ALL_SUITES='${{ steps.list.outputs.suites }}'
           if [ "${{ steps.override.outputs.requested_all_tests }}" = "true" ]; then
             echo "/evetest run-all requested; running the full suite."
             echo "skip=" >> "$GITHUB_OUTPUT"
+            echo "suites=$ALL_SUITES" >> "$GITHUB_OUTPUT"
+            echo "skipped-suites=[]" >> "$GITHUB_OUTPUT"
           elif [ -f .evetest-skip/skip-decision.json ] && jq -e . .evetest-skip/skip-decision.json >/dev/null 2>&1; then
             SKIP=$(jq -r '.skip | join(",")' .evetest-skip/skip-decision.json)
             echo "Claude recommended skipping: ${SKIP:-<nothing>}"
             echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+            RUN=$(jq -c --argjson all "$ALL_SUITES" '$all - .skip' .evetest-skip/skip-decision.json)
+            SKIPPED=$(jq -c --argjson all "$ALL_SUITES" '.skip - (.skip - $all)' .evetest-skip/skip-decision.json)
+            echo "Suites to run: $RUN"
+            echo "Suites skipped entirely: $SKIPPED"
+            echo "suites=$RUN" >> "$GITHUB_OUTPUT"
+            echo "skipped-suites=$SKIPPED" >> "$GITHUB_OUTPUT"
           else
             echo "No valid skip decision found; running the full suite."
             echo "skip=" >> "$GITHUB_OUTPUT"
+            echo "suites=$ALL_SUITES" >> "$GITHUB_OUTPUT"
+            echo "skipped-suites=[]" >> "$GITHUB_OUTPUT"
           fi
 
-      # Post pending status for every suite up front, before any of them is
-      # scheduled onto the scarce evetest-runner fleet -- otherwise a queued
-      # suite has no check yet, which reads as "nothing to wait for".
-      - name: Report pending status for every discovered suite
+      # Pending for every suite that will actually run, before any of them
+      # is scheduled onto the scarce evetest-runner fleet -- otherwise a
+      # queued suite has no check yet, which reads as "nothing to wait
+      # for". Suites skipped entirely (see above) get their check resolved
+      # immediately instead, since no runner job will ever report it.
+      - name: Report suite statuses
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           script: |
-            const suites = ${{ steps.list.outputs.suites }};
+            const suites = ${{ steps.decide.outputs.suites }};
             for (const suite of suites) {
               await github.rest.repos.createCommitStatus({
                 owner: context.repo.owner,
@@ -259,6 +280,18 @@ jobs:
                 context: `Evetest / ${suite}`,
                 description: 'Queued (waiting for a free runner)...',
                 target_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+              });
+            }
+            const skippedSuites = ${{ steps.decide.outputs.skipped-suites }};
+            for (const suite of skippedSuites) {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: '${{ github.event.workflow_run.head_sha }}',
+                state: 'success',
+                context: `Evetest / ${suite}`,
+                description: 'Skipped entirely by Claude for this PR (see PR comment).',
+                target_url: '${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.pr.outputs.number }}',
               });
             }
 
