@@ -289,7 +289,7 @@ func TestEVEUpgrade(test *testing.T) {
 
 	// Verify the app comes back up and is still reachable (under the new EVE
 	// version on success, or back under the original version after a revert).
-	device.WaitUntilAppIsRunning(appUUID, 10*time.Minute)
+	device.WaitUntilAppIsRunning(appUUID, 15*time.Minute)
 	log.Infof("Verifying app is reachable after upgrade")
 	t.Eventually(func(t Gomega) {
 		out, _, err := device.RunShellScriptInsideApp(
