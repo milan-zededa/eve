@@ -73,6 +73,15 @@ inputs:
       the analyze-failures step as context regardless of pr-number.
     required: false
     default: ''
+  ledger-branch:
+    description: >-
+      Branch whose gh-pages NIGHTLY-LEDGER.md to fetch for the
+      analyze-failures step, so Claude can check whether this failure is
+      already a known/recurring one. Nightly: the branch itself. PR: the
+      PR's base branch, since that's whose nightly history is relevant.
+      Left empty to skip the ledger lookup entirely.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -380,6 +389,19 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: gh pr diff "${{ inputs.pr-number }}" > "${ARTIFACT_DIR}/pr.diff"
 
+    # Best-effort: the ledger may not exist yet for this branch (e.g. its
+    # first-ever nightly run) -- that 404 isn't a real failure, so the
+    # prompt below treats a missing ledger.md the same as "nothing known
+    # yet" rather than an error.
+    - name: Fetch the recent failure ledger for Claude
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' && inputs.ledger-branch != '' }}
+      continue-on-error: true
+      shell: bash
+      run: |
+        curl -fsSL -o "${ARTIFACT_DIR}/ledger.md" \
+          "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/test/${{ inputs.ledger-branch }}/NIGHTLY-LEDGER.md" \
+          || rm -f "${ARTIFACT_DIR}/ledger.md"
+
     # display_report is deliberately off: it renders every tool call, its
     # full parameters and result (per turn), not just the final answer --
     # far too verbose for a step summary meant to stay scannable across many
@@ -442,11 +464,22 @@ runs:
           investigate the failure on its own merits, without mentioning or
           judging PR-relatedness at all.
 
+          If ${{ env.ARTIFACT_DIR }}/ledger.md exists, it's a log of past
+          nightly runs against the relevant branch, newest first, each
+          dated and listing that run's failing suites/tests with their own
+          root cause. Check it for this same suite/test failing for a
+          similar reason in previous entries. If you find a match, say so
+          explicitly and name the earliest dated entry you can find it in
+          (i.e. since when this has been a known/recurring issue), rather
+          than treating it as a fresh, one-off finding. If the file doesn't
+          exist or shows no match, don't mention the ledger at all.
+
           Write a concise (3-6 sentence) likely root cause, citing the
-          specific evidence you found, and -- only when a PR was involved --
-          your judgment on whether it's related. If you can't determine a
-          likely cause from what's available, say so briefly instead of
-          speculating.
+          specific evidence you found, whether this is a known/recurring
+          issue per the ledger (and since when, if so), and -- only when a
+          PR was involved -- your judgment on whether it's related. If you
+          can't determine a likely cause from what's available, say so
+          briefly instead of speculating.
 
     # execution_file is a JSON array of every message claude-code-action
     # would otherwise render in full via display_report; take just the last
@@ -501,6 +534,15 @@ runs:
         name: claude-analysis-${{ inputs.test-suite }}
         path: ${{ steps.claude_analysis.outputs.execution_file }}
         if-no-files-found: ignore
+
+    # Unlike pr.diff, this is cross-run reference material, not evidence
+    # specific to this suite's own failure -- and it would otherwise be
+    # duplicated into every failing suite's own artifact bundle below.
+    - name: Remove the fetched ledger before packaging artifacts
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      shell: bash
+      run: rm -f "${ARTIFACT_DIR}/ledger.md"
 
     # Package the whole EVETEST_COLLECT_ARTIFACTS tree into a single tarball,
     # named after the suite so a re-run's "Download previous attempt's artifacts"
