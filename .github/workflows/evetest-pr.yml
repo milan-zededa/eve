@@ -34,6 +34,7 @@ jobs:
       suites: ${{ steps.decide.outputs.suites }}
       skip: ${{ steps.decide.outputs.skip }}
       pr-number: ${{ steps.pr.outputs.number }}
+      base-branch: ${{ steps.pr.outputs.base }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -91,6 +92,11 @@ jobs:
             exit 1
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          # The PR's base branch, not its head branch -- this is what
+          # identifies which branch's nightly ledger (known/recurring
+          # issues) is relevant to a failure on this PR.
+          BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q .baseRefName)
+          echo "base=$BASE_BRANCH" >> "$GITHUB_OUTPUT"
 
       # "/evetest run-all" (via rerun-ci.yml) bypasses the Claude-skip step
       # below. Checked live, not from the event payload, so a rerun picks up
@@ -348,3 +354,4 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           pr-number: ${{ needs.discover-suites.outputs.pr-number }}
           branch: ${{ github.event.workflow_run.head_branch }}
+          ledger-branch: ${{ needs.discover-suites.outputs.base-branch }}
