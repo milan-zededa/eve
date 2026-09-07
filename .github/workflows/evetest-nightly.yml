@@ -19,8 +19,9 @@ env:
   EVETEST_EVE_REPO: milan4zededa/eve
 
 jobs:
-  # Suite discovery against master. No Claude-skip step: this run is the
-  # full-coverage safety net for evetest-pr.yml's PR-time skip decisions.
+  # Suite discovery against the checked-out branch. No Claude-skip step:
+  # this run is the full-coverage safety net for evetest-pr.yml's PR-time
+  # skip decisions.
   discover-suites:
     runs-on: ubuntu-latest
     outputs:
@@ -122,11 +123,12 @@ jobs:
 
   # Combines every suite's JUnit results into one Allure report, appends a
   # ledger entry summarizing any failures, and publishes both to GitHub
-  # Pages (gh-pages branch) in one commit. Carries forward the previous
-  # report's history/ folder so Allure can render pass/fail trend and
-  # flakiness across nightly runs. Runs even if some suites failed -- that's
-  # exactly what this is meant to track -- and on plain ubuntu-latest, since
-  # none of this needs the scarce evetest-runner fleet.
+  # Pages (gh-pages branch, under test/<branch>/) in one commit. Carries
+  # forward the previous report's history/ folder so Allure can render
+  # pass/fail trend and flakiness across nightly runs. Runs even if some
+  # suites failed -- that's exactly what this is meant to track -- and on
+  # plain ubuntu-latest, since none of this needs the scarce evetest-runner
+  # fleet.
   publish-report:
     needs: [discover-suites, evetest]
     if: always()
@@ -134,6 +136,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Every branch this workflow runs against gets its own subtree under
+      # one test/ namespace, leaving the rest of gh-pages free for anything
+      # unrelated to test reports.
+      - name: Compute the test-report subdirectory for this branch
+        run: echo "TEST_DIR=test/${{ github.ref_name }}" >> "$GITHUB_ENV"
+
       # merge-multiple flattens every suite's artifact into one directory --
       # required, since allure generate doesn't scan nested subdirectories.
       # Safe because each suite's XML is named after the suite itself (see
@@ -174,7 +182,7 @@ jobs:
             || git -C gh-pages remote set-url origin "$URL"
 
       - name: Carry forward Allure history
-        run: cp -r gh-pages/history allure-results/history 2>/dev/null || true
+        run: cp -r "gh-pages/$TEST_DIR/history" allure-results/history 2>/dev/null || true
 
       # Lets the report's Executors widget (and, via buildOrder, the Trend
       # graphs' x-axis) identify each run -- Allure only accepts a plain
@@ -193,7 +201,7 @@ jobs:
             "buildName": "${{ needs.discover-suites.outputs.version }}",
             "buildUrl": "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}",
             "buildOrder": ${{ github.run_number }},
-            "reportUrl": "https://${{ github.repository_owner }}.github.io/${REPO_NAME}/runs/${{ github.run_number }}"
+            "reportUrl": "https://${{ github.repository_owner }}.github.io/${REPO_NAME}/${TEST_DIR}/runs/${{ github.run_number }}"
           }
           EOF
 
@@ -223,13 +231,14 @@ jobs:
       # across every run of the same Allure CLI version -- GitHub Pages
       # doesn't support symlinks, so instead each snapshot's index.html is
       # rewritten to reference the one shared assets/ copy already sitting
-      # at the gh-pages root (kept fresh by the "Publish to GitHub Pages"
-      # step below) rather than getting its own -- runs/<N>/ is 2 levels
-      # deep, hence "../../assets/". Revisit this rewrite if a future
-      # Allure release changes how it emits these references.
+      # at this branch's test/<branch>/ root (kept fresh by the "Publish to
+      # GitHub Pages" step below) rather than getting its own -- runs/<N>/
+      # is 2 levels below that root either way, hence "../../assets/".
+      # Revisit this rewrite if a future Allure release changes how it
+      # emits these references.
       - name: Archive this run's report snapshot
         run: |
-          DEST="gh-pages/runs/${{ github.run_number }}"
+          DEST="gh-pages/$TEST_DIR/runs/${{ github.run_number }}"
           mkdir -p "$DEST"
           cp -r allure-report/. "$DEST/"
           rm -rf "$DEST/assets"
@@ -266,9 +275,10 @@ jobs:
           version = "${{ needs.discover-suites.outputs.version }}"
           run_number = "${{ github.run_number }}"
           run_id = "${{ github.run_id }}"
+          branch = "${{ github.ref_name }}"
           owner, repo_name = "${{ github.repository }}".split("/")
           run_url = f"https://github.com/{owner}/{repo_name}/actions/runs/{run_id}"
-          report_url = f"https://{owner}.github.io/{repo_name}/runs/{run_number}/"
+          report_url = f"https://{owner}.github.io/{repo_name}/test/{branch}/runs/{run_number}/"
           date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
           # gotestsum always sets message="Failed" verbatim -- the actual
@@ -366,7 +376,8 @@ jobs:
               # Newest run first: insert the new section right after the
               # header, ahead of every previously recorded run.
               header = "# Evetest Nightly Ledger\n\nOne section per nightly run with at least one failing suite.\n\n"
-              ledger_path = "gh-pages/NIGHTLY-LEDGER.md"
+              ledger_path = f"gh-pages/test/{branch}/NIGHTLY-LEDGER.md"
+              os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
               if os.path.exists(ledger_path):
                   with open(ledger_path) as f:
                       existing = f.read()
@@ -380,7 +391,8 @@ jobs:
 
       - name: Publish to GitHub Pages
         run: |
-          rsync -a --delete --exclude=.git --exclude=runs --exclude=NIGHTLY-LEDGER.md allure-report/ gh-pages/
+          mkdir -p "gh-pages/$TEST_DIR"
+          rsync -a --delete --exclude=runs --exclude=NIGHTLY-LEDGER.md allure-report/ "gh-pages/$TEST_DIR/"
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -389,5 +401,5 @@ jobs:
             echo "No changes to publish."
             exit 0
           fi
-          git commit -m "Update test report for ${{ github.sha }}"
+          git commit -m "Update test report for ${{ github.ref_name }} @ ${{ github.sha }}"
           git push origin gh-pages

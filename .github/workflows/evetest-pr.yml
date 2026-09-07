@@ -218,9 +218,9 @@ jobs:
 
             Both checks are deliberately more aggressive than pure safety would allow
             in isolation, because they're backed by a nightly job that already re-runs
-            every suite against master regardless of what any PR skipped -- an
-            unnecessary skip here is a much smaller cost than it would be without that
-            net. A suite name skips every one of its subtests/variants at once;
+            every suite against the target branch regardless of what any PR skipped --
+            an unnecessary skip here is a much smaller cost than it would be without
+            that net. A suite name skips every one of its subtests/variants at once;
             skipping a variant name only skips that one variant.
 
             Write your decision as JSON to .evetest-skip/skip-decision.json (create it
