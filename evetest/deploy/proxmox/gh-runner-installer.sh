@@ -329,6 +329,13 @@ runcmd:
   - chown ${GH_USERNAME}:${GH_USERNAME} ${ARTIFACTS_DIR}
   - [sh, -c, "curl -fsSL https://get.docker.com | sh"]
   - usermod -aG docker ${GH_USERNAME}
+  # Installed as ${GH_USERNAME} (its shell-script installer writes to
+  # ~/.local/bin), then symlinked into /usr/local/bin -- the GitHub Actions
+  # runner service doesn't source that user's ~/.bashrc, so a per-user PATH
+  # entry alone wouldn't be visible to job steps the way it would in an
+  # interactive shell.
+  - [sudo, -u, "${GH_USERNAME}", bash, -c, "curl -fsSL https://claude.ai/install.sh | bash"]
+  - ln -sf /home/${GH_USERNAME}/.local/bin/claude /usr/local/bin/claude
   - mkdir -p /opt/actions-runner
   - |
     set -e

@@ -39,6 +39,7 @@ jobs:
       skip: ${{ steps.decide.outputs.skip }}
       pr-number: ${{ steps.pr.outputs.number }}
       base-branch: ${{ steps.pr.outputs.base }}
+      live-investigation: ${{ steps.live_investigation.outputs.requested }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -114,6 +115,23 @@ jobs:
           FOUND=$(gh pr view "${{ steps.pr.outputs.number }}" --json comments \
               -q '[.comments[] | select(.body | test("^/evetest run-all"))] | length > 0')
           echo "requested_all_tests=$FOUND" >> "$GITHUB_OUTPUT"
+
+      # "/evetest live-analysis": run every suite on this PR with
+      # EVETEST_PAUSE_ON_FAILURE and have Claude investigate each failing
+      # test live against the still-running device, same as the nightly
+      # run, instead of the post-mortem analyze-failures path. Checked
+      # live, not from the event payload, for the same reason as the
+      # run-all override above (rerun-ci.yml's job is what actually
+      # re-triggers this workflow; this step just picks the comment up).
+      - id: live_investigation
+        name: Check for a /evetest live-analysis comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          FOUND=$(gh pr view "${{ steps.pr.outputs.number }}" --json comments \
+              -q '[.comments[] | select(.body | test("^/evetest live-analysis"))] | length > 0')
+          echo "requested=$FOUND" >> "$GITHUB_OUTPUT"
 
       - name: Fetch the PR diff, description and commit messages for Claude
         if: steps.override.outputs.requested_all_tests != 'true'
@@ -360,3 +378,4 @@ jobs:
           pr-number: ${{ needs.discover-suites.outputs.pr-number }}
           branch: ${{ github.event.workflow_run.head_branch }}
           ledger-branch: ${{ needs.discover-suites.outputs.base-branch }}
+          live-investigation: ${{ needs.discover-suites.outputs.live-investigation }}

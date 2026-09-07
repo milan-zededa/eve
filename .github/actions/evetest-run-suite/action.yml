@@ -82,6 +82,16 @@ inputs:
       Left empty to skip the ledger lookup entirely.
     required: false
     default: ''
+  live-investigation:
+    description: >-
+      'true' to run this suite with EVETEST_PAUSE_ON_FAILURE and have Claude
+      investigate each distinct failing test live (via evetest status/eve
+      ssh/eve logs/eve collect-info/sdn ssh against the still-running
+      device) instead of the post-mortem analyze-failures path. Requires
+      anthropic-api-key and the `claude` CLI installed on the runner
+      (evetest/deploy/proxmox/gh-runner-installer.sh).
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -262,8 +272,33 @@ runs:
       shell: bash
       env:
         EVETEST_SKIP: ${{ inputs.skip }}
+        # The main invocation below stays foreground the whole time, exactly
+        # as without this feature -- live-investigation-watcher.sh polls it
+        # from the side over evetest's existing gRPC control plane (the same
+        # one `evetest status`/`continue` already use interactively), so
+        # nothing about this step's own exit-code/output handling changes.
+        EVETEST_PAUSE_ON_FAILURE: ${{ inputs.live-investigation == 'true' && 'true' || '' }}
+        LEDGER_BRANCH: ${{ inputs.ledger-branch }}
+        # Empty on the nightly run (no PR involved) -- the watcher skips its
+        # own PR diff fetch when this is unset, same as LEDGER_BRANCH above.
+        PR_NUMBER: ${{ inputs.pr-number }}
+        # The watcher script (a background child of this step, not a
+        # separate claude-code-action step) shells out to the raw `claude`
+        # CLI directly, so it needs this in its own environment -- the
+        # Action-based invocation elsewhere in this file handles its own
+        # credential wiring internally and doesn't expose it to sibling steps.
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.live-investigation == 'true' && inputs.anthropic-api-key || '' }}
+        # For the watcher's own `gh pr diff` call, same reasoning as above.
+        GH_TOKEN: ${{ inputs.live-investigation == 'true' && github.token || '' }}
       run: |
         set -o pipefail
+
+        WATCHER_PID=""
+        if [ "${{ inputs.live-investigation }}" = "true" ]; then
+          "${GITHUB_ACTION_PATH}/live-investigation-watcher.sh" "${{ inputs.test-suite }}" &
+          WATCHER_PID=$!
+        fi
+
         EVETEST_OUTPUT_FORMAT=json make -C evetest evetest NAME=${{ inputs.test-suite }} \
           | jq -Rrj --unbuffered '
               if startswith("{") then
@@ -272,6 +307,14 @@ runs:
                 . + "\n"
               end
             '
+        EVETEST_EXIT=$?
+
+        if [ -n "$WATCHER_PID" ]; then
+          kill "$WATCHER_PID" 2>/dev/null || true
+          wait "$WATCHER_PID" 2>/dev/null || true
+        fi
+
+        exit "$EVETEST_EXIT"
 
     # Every run's artifacts land in a fresh "<suite>-<timestamp>" directory
     # under EVETEST_COLLECT_ARTIFACTS (see entrypoint.sh); the newest one
@@ -316,9 +359,15 @@ runs:
 
     # Allure ingests JUnit XML, not go test's own JSON; gotestsum's
     # --raw-command replay mode converts the recorded gotest.json into one
-    # without re-running any tests.
+    # without re-running any tests. Runs whenever Allure wants it
+    # (upload-junit-results) or "Build claude-analysis.md" below needs the
+    # per-testcase failure list for a post-mortem failure -- not
+    # unconditionally, to skip the `go install gotestsum` cost on passing
+    # suites.
     - name: Convert results to JUnit XML
-      if: ${{ !cancelled() && inputs.upload-junit-results == 'true' }}
+      if: >-
+        ${{ !cancelled() && env.ARTIFACT_DIR != '' &&
+        (inputs.upload-junit-results == 'true' || (failure() && inputs.analyze-failures == 'true')) }}
       shell: bash
       run: |
         JSON="${ARTIFACT_DIR}/gotest.json"
@@ -382,7 +431,9 @@ runs:
     # keeps Claude's own Bash allowlist minimal (Read-only is enough), and
     # doesn't depend on it invoking `gh pr diff` correctly.
     - name: Fetch the PR diff for Claude
-      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' && inputs.pr-number != '' }}
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' && inputs.live-investigation != 'true' &&
+        env.ARTIFACT_DIR != '' && inputs.pr-number != '' }}
       continue-on-error: true
       shell: bash
       env:
@@ -394,7 +445,9 @@ runs:
     # prompt below treats a missing ledger.md the same as "nothing known
     # yet" rather than an error.
     - name: Fetch the recent failure ledger for Claude
-      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' && inputs.ledger-branch != '' }}
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' && inputs.live-investigation != 'true' &&
+        env.ARTIFACT_DIR != '' && inputs.ledger-branch != '' }}
       continue-on-error: true
       shell: bash
       run: |
@@ -411,7 +464,9 @@ runs:
     # results" as the step GitHub auto-expands on a failed job.
     - name: Ask Claude to analyze this failure
       id: claude_analysis
-      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' &&
+        inputs.live-investigation != 'true' && env.ARTIFACT_DIR != '' }}
       continue-on-error: true
       uses: anthropics/claude-code-action@v1
       env:
@@ -481,11 +536,15 @@ runs:
           can't determine a likely cause from what's available, say so
           briefly instead of speculating.
 
-    # execution_file is a JSON array of every message claude-code-action
-    # would otherwise render in full via display_report; take just the last
-    # "result" message's text (plus its cost/duration) instead, for a step
-    # summary that stays scannable across many suites.
-    - name: Add Claude's analysis to the step summary
+    # This suite's single, self-contained failure artifact: a standalone
+    # markdown document (starts with a "#" title) with both the raw
+    # failure(s) and Claude's conclusion, regardless of which analysis path
+    # ran -- posted as the PR comment and prepended into NIGHTLY-LEDGER.md.
+    #
+    # execution_file (post-mortem path) is a JSON array of every message
+    # claude-code-action would otherwise render in full via display_report;
+    # take just the last "result" message's text (plus its cost/duration).
+    - name: Build claude-analysis.md
       if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
       continue-on-error: true
       shell: bash
@@ -494,56 +553,116 @@ runs:
         # e.g. rendering "1.88" as "1,0000".
         LC_NUMERIC: C
       run: |
-        FILE="${{ steps.claude_analysis.outputs.execution_file }}"
+        OUT="${ARTIFACT_DIR}/claude-analysis.md"
         {
-          echo "### Claude failure analysis: ${{ inputs.test-suite }}"
+          echo "# ${{ inputs.test-suite }}: failure analysis"
           echo
-          if [[ -n "$FILE" && -f "$FILE" ]]; then
-            LAST=$(jq '[.[] | select(.type == "result")] | last' "$FILE")
-            RESULT=$(echo "$LAST" | jq -r '.result // "_No result recorded._"')
-            # If Claude's answer contains a markdown heading, demote it
-            # (and any others) so it nests under this step's own "###"
-            # heading instead of colliding with it -- e.g. a "## Root
-            # cause" heading is shallower than "###", which renders as a
-            # broken hierarchy. The `|| true` matters: under `set -o
-            # pipefail`, grep finding no heading (the common case) exits 1,
-            # which -- with no later pipe stage failing to mask it --  would
-            # otherwise abort this whole step via `set -e`.
-            MIN_DEPTH=$(grep -oE '^#{1,6} ' <<< "$RESULT" | awk '{ print length($0) - 1 }' | sort -n | head -1 || true)
-            if [[ -n "$MIN_DEPTH" && "$MIN_DEPTH" -lt 4 ]]; then
-              PREFIX=$(printf '#%.0s' $(seq 1 $((4 - MIN_DEPTH))))
-              RESULT=$(sed -E "s/^(#{1,6})([[:space:]])/${PREFIX}\1\2/" <<< "$RESULT")
+          if [[ "${{ inputs.live-investigation }}" == "true" ]]; then
+            LIVE_FILE="${ARTIFACT_DIR}/live-investigation.md"
+            if [[ -s "$LIVE_FILE" ]]; then
+              # Each of the watcher's own blocks starts at "#"; nest them
+              # under this section's title above by demoting to "##".
+              "${GITHUB_ACTION_PATH}/shift-headings.sh" 2 < "$LIVE_FILE"
+            else
+              echo "_Paused for live investigation but nothing was recorded (see the job log)._"
             fi
-            echo "$RESULT"
-            echo
-            COST=$(echo "$LAST" | jq -r '.total_cost_usd // 0')
-            DURATION_S=$(awk "BEGIN { printf \"%.1f\", $(echo "$LAST" | jq -r '.duration_ms // 0') / 1000 }")
-            printf '_Cost: $%.4f | Duration: %ss_\n' "$COST" "$DURATION_S"
           else
-            echo "_Analysis did not complete (see job log)._"
+            # Structured per-testcase failures straight from the JUnit XML
+            # ("Convert results to JUnit XML" above), when it exists --
+            # mirrors the extraction gotestsum/JUnit already needed for
+            # Allure, so post-mortem failures aren't just Claude's prose.
+            XML="${ARTIFACT_DIR}/${{ inputs.test-suite }}.xml"
+            if [[ -f "$XML" ]]; then
+              FAILURES=$(python3 "${GITHUB_ACTION_PATH}/extract-junit-failures.py" "$XML")
+              if [[ -n "$FAILURES" ]]; then
+                echo "## Failures"
+                echo
+                echo "$FAILURES"
+                echo
+              fi
+            fi
+
+            echo "## Claude's conclusion"
+            echo
+            FILE="${{ steps.claude_analysis.outputs.execution_file }}"
+            if [[ -n "$FILE" && -f "$FILE" ]]; then
+              LAST=$(jq '[.[] | select(.type == "result")] | last' "$FILE")
+              RESULT=$(echo "$LAST" | jq -r '.result // "_No result recorded._"')
+              # If Claude's answer contains a markdown heading, demote it
+              # (and any others) so it nests under this section's own "##"
+              # heading instead of colliding with it -- e.g. a "## Root
+              # cause" heading is as shallow as "##", which renders as a
+              # broken hierarchy.
+              RESULT=$(echo "$RESULT" | "${GITHUB_ACTION_PATH}/shift-headings.sh" 3)
+              echo "$RESULT"
+              echo
+              COST=$(echo "$LAST" | jq -r '.total_cost_usd // 0')
+              DURATION_S=$(awk "BEGIN { printf \"%.1f\", $(echo "$LAST" | jq -r '.duration_ms // 0') / 1000 }")
+              printf '_Cost: $%.4f | Duration: %ss_\n' "$COST" "$DURATION_S"
+            else
+              echo "_Analysis did not complete (see job log)._"
+            fi
           fi
-        } | tee -a "$GITHUB_STEP_SUMMARY" > "${ARTIFACT_DIR}/claude-analysis.md"
+        } > "$OUT"
+
+        # A copy nested one level under this same job's existing "###
+        # Test Results"/"### Coverage" sections, instead of the file's own
+        # "#" title outranking them.
+        "${GITHUB_ACTION_PATH}/shift-headings.sh" 3 < "$OUT" >> "$GITHUB_STEP_SUMMARY"
 
     # Only on evetest-pr.yml (pr-number set) -- gives a PR the same
     # analysis without needing to open this suite's own job/step summary.
+    # claude-analysis.md's own "#" title is deliberately left as-is on disk
+    # (it's also the ledger/artifact copy) -- shift-headings.sh demotes it
+    # to "###" just for this comment, so it doesn't render oversized inline
+    # in the PR's comment thread.
     - name: Post Claude's analysis as a PR comment
-      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' && inputs.pr-number != '' }}
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' &&
+        env.ARTIFACT_DIR != '' && inputs.pr-number != '' }}
       continue-on-error: true
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh pr comment "${{ inputs.pr-number }}" --body-file "${ARTIFACT_DIR}/claude-analysis.md"
+      run: |
+        "${GITHUB_ACTION_PATH}/shift-headings.sh" 3 < "${ARTIFACT_DIR}/claude-analysis.md" \
+          | gh pr comment "${{ inputs.pr-number }}" --body-file -
 
-    # The raw NDJSON transcript, for anything the step summary trims away
-    # (tool calls, intermediate reasoning, etc.).
-    - name: Upload Claude's execution transcript
+    # The single, unified per-suite analysis: what the ledger-building step
+    # in evetest-nightly.yml downloads (pattern "claude-analysis-*") and
+    # prepends into NIGHTLY-LEDGER.md, for both the live and post-mortem
+    # paths alike -- it doesn't need to know or care which one produced it.
+    - name: Upload Claude's failure analysis
       if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
       continue-on-error: true
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       with:
         name: claude-analysis-${{ inputs.test-suite }}
-        path: ${{ steps.claude_analysis.outputs.execution_file }}
+        path: ${{ env.ARTIFACT_DIR }}/claude-analysis.md
         if-no-files-found: ignore
+
+    # The raw transcript, kept only for manual debugging -- under its own
+    # artifact name (not claude-analysis-*) so the ledger step never has to
+    # look inside it. Renamed from execution_file's own name (not something
+    # we chose) since upload-artifact keeps the source's basename. Post-mortem
+    # only: the live path never produces an execution_file.
+    - name: Rename Claude's execution transcript for upload
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' &&
+        inputs.live-investigation != 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      shell: bash
+      run: cp "${{ steps.claude_analysis.outputs.execution_file }}" "${ARTIFACT_DIR}/claude-transcript.json"
+
+    - name: Upload Claude's execution transcript
+      if: >-
+        ${{ failure() && inputs.analyze-failures == 'true' &&
+        inputs.live-investigation != 'true' && env.ARTIFACT_DIR != '' }}
+      continue-on-error: true
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      with:
+        name: claude-transcript-${{ inputs.test-suite }}
+        path: ${{ env.ARTIFACT_DIR }}/claude-transcript.json
 
     # Unlike pr.diff, this is cross-run reference material, not evidence
     # specific to this suite's own failure -- and it would otherwise be
@@ -552,7 +671,7 @@ runs:
       if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
       continue-on-error: true
       shell: bash
-      run: rm -f "${ARTIFACT_DIR}/ledger.md"
+      run: rm -f "${ARTIFACT_DIR}/ledger.md" "${ARTIFACT_DIR}/live-ledger.md"
 
     # Package the whole EVETEST_COLLECT_ARTIFACTS tree into a single tarball,
     # named after the suite so a re-run's "Download previous attempt's artifacts"

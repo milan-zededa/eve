@@ -42,7 +42,7 @@ jobs:
             exit 1
           fi
 
-      - name: Set run mode (red, yellow or evetest-run-all)
+      - name: Set run mode (red, yellow, evetest-run-all or evetest-live-analysis)
         id: mode
         env:
           BODY: ${{ github.event.comment.body }}
@@ -53,6 +53,8 @@ jobs:
             echo "mode=red" >> $GITHUB_OUTPUT
           elif [[ "$BODY" =~ ^/evetest[[:space:]]+run-all ]]; then
             echo "mode=evetest-run-all" >> $GITHUB_OUTPUT
+          elif [[ "$BODY" =~ ^/evetest[[:space:]]+live-analysis ]]; then
+            echo "mode=evetest-live-analysis" >> $GITHUB_OUTPUT
           else
             echo "Unknown rerun mode" >&2
             exit 1
@@ -156,12 +158,17 @@ jobs:
           fi
 
       # "/evetest run-all": force evetest-pr.yml's PR-time Claude-skip step to
-      # bypass itself and run every suite. Just reruns the existing evetest
-      # workflow run for this PR's latest commit -- discover-suites checks
-      # live for this exact comment every time it executes (see evetest-pr.yml),
-      # so the rerun is what actually picks it up, not this step.
-      - name: Rerun evetest for this PR's latest commit (evetest run-all)
-        if: steps.mode.outputs.mode == 'evetest-run-all'
+      # bypass itself and run every suite. "/evetest live-analysis": have
+      # each PR suite run with EVETEST_PAUSE_ON_FAILURE and live Claude
+      # investigation instead of the post-mortem path. Both just rerun the
+      # existing evetest workflow run for this PR's latest commit --
+      # discover-suites checks live for either exact comment every time it
+      # executes (see evetest-pr.yml), so the rerun is what actually picks
+      # it up, not this step.
+      - name: Rerun evetest for this PR's latest commit (run-all / live-analysis)
+        if: >-
+          steps.mode.outputs.mode == 'evetest-run-all' ||
+          steps.mode.outputs.mode == 'evetest-live-analysis'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: ${{ steps.prinfo.outputs.branch }}

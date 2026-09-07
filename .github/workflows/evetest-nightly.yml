@@ -3,10 +3,19 @@
 ---
 name: evetest-nightly
 on:  # yamllint disable-line rule:truthy
-  schedule:
-    # ~2:37 AM CET (cron is UTC-only, drifts ~1h across DST -- fine for a nightly).
-    - cron: '37 1 * * *'
-  workflow_dispatch: {}  # manual trigger, for testing
+  workflow_dispatch:
+    inputs:
+      investigation-mode:
+        description: >-
+          How Claude investigates a failing suite: "live" pauses the test
+          (EVETEST_PAUSE_ON_FAILURE) and investigates against the still-
+          running device/SDN; "post-mortem" investigates from collected
+          artifacts after teardown instead.
+        type: choice
+        options:
+          - live
+          - post-mortem
+        default: live
 
 permissions:
   contents: read
@@ -122,6 +131,10 @@ jobs:
           anthropic-api-key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           branch: ${{ github.ref_name }}
           ledger-branch: ${{ github.ref_name }}
+          # inputs.investigation-mode is only populated for a
+          # workflow_dispatch trigger; falls back to "live" for e.g. the
+          # (currently disabled) schedule trigger, which has no inputs.
+          live-investigation: ${{ (inputs.investigation-mode || 'live') == 'live' }}
 
   # Combines every suite's JUnit results into one Allure report, appends a
   # ledger entry summarizing any failures, and publishes both to GitHub
@@ -138,6 +151,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Sparse: only shift-headings.sh (used by "Append this run's failures
+      # to the nightly ledger" below) is needed in this job.
+      - name: Check out evetest-run-suite's shared scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          sparse-checkout: .github/actions/evetest-run-suite
+          persist-credentials: false
+
       # Every branch this workflow runs against gets its own subtree under
       # one test/ namespace, leaving the rest of gh-pages free for anything
       # unrelated to test reports.
@@ -248,9 +269,11 @@ jobs:
 
       # Downloaded separately from junit-* (not merge-multiple'd into the
       # same directory): every artifact contains a same-named
-      # claude-execution-output.json, so each needs to land in its own
+      # claude-analysis.md, so each needs to land in its own
       # claude-analysis-<suite>/ subdirectory -- the default
-      # download-artifact behavior for a pattern match.
+      # download-artifact behavior for a pattern match. Note this
+      # deliberately does not match claude-transcript-* -- those are
+      # debugging-only artifacts the ledger has no use for.
       - name: Download every suite's Claude failure analysis
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -259,137 +282,59 @@ jobs:
 
       # One Markdown section per nightly run, listing only suites that
       # failed (identified by having a Claude analysis artifact at all,
-      # since that step only ever runs on failure) -- both the literal
-      # failure text (from the JUnit XML already downloaded above) and
-      # Claude's narrative conclusion, so a later Claude pass over this
-      # whole file can spot patterns across many nights without needing to
-      # re-fetch or re-derive anything.
+      # since that step only ever runs on failure). Each suite's
+      # claude-analysis.md is already self-contained (starts with its own
+      # "#" title -- see action.yml's "Build claude-analysis.md" step), so
+      # this just shifts its headings (shift-headings.sh, shared with
+      # action.yml) to nest under this run's own heading, and prepends it.
       - name: Append this run's failures to the nightly ledger
         run: |
-          python3 - <<'PYEOF'
-          import glob
-          import json
-          import os
-          import re
-          import xml.etree.ElementTree as ET
-          from datetime import datetime, timezone
+          HEADER=$'# Evetest Nightly Ledger\n\nOne section per nightly run with at least one failing suite.'
+          LEDGER_PATH="gh-pages/$TEST_DIR/NIGHTLY-LEDGER.md"
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
 
-          version = "${{ needs.discover-suites.outputs.version }}"
-          run_number = "${{ github.run_number }}"
-          run_id = "${{ github.run_id }}"
-          branch = "${{ github.ref_name }}"
-          owner, repo_name = "${{ github.repository }}".split("/")
-          run_url = f"https://github.com/{owner}/{repo_name}/actions/runs/{run_id}"
-          report_url = f"https://{owner}.github.io/{repo_name}/test/{branch}/runs/{run_number}/"
-          date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+          # download-artifact only nests each match under a
+          # claude-analysis-<suite>/ subdirectory when the "claude-analysis-*"
+          # pattern matches 2+ artifacts; with exactly one failing suite this
+          # run, it extracts that one claude-analysis.md flat instead.
+          SECTION=""
+          for path in claude-analysis.md claude-analysis-*/claude-analysis.md; do
+            [ -f "$path" ] || continue
+            # Cost/duration is useful in the step summary/PR comment, not
+            # as permanent ledger noise.
+            SHIFTED=$(.github/actions/evetest-run-suite/shift-headings.sh 3 < "$path" \
+              | { grep -vE '^_Cost: \$[0-9.]+ \| Duration: [0-9.]+s_$' || true; })
+            SECTION="${SECTION}${SHIFTED}"$'\n\n'
+          done
 
-          # gotestsum always sets message="Failed" verbatim -- the actual
-          # failure text is in the element's captured-stdout body instead,
-          # anchored on evetest's own "TEST FAILURE:" convention (or Go's
-          # "panic:") and cut off before the STACKTRACE dump that follows it.
-          def extract_failure_text(node):
-              if node is None or not node.text:
-                  return ""
-              lines = node.text.splitlines()
-              marker_idx = next((i for i, l in enumerate(lines) if "TEST FAILURE:" in l or "panic:" in l), None)
-              if marker_idx is None:
-                  return ""
-              collected = []
-              for line in lines[marker_idx:marker_idx + 6]:
-                  if "STACKTRACE:" in line:
-                      break
-                  stripped = line.strip()
-                  if stripped:
-                      collected.append(stripped)
-              return " ".join(collected)[:300] if collected else ""
+          if [ -z "$SECTION" ]; then
+            echo "No failing suites with a Claude analysis; nothing to append."
+            exit 0
+          fi
 
-          # Every failing testcase, not just the first one found -- a suite
-          # commonly has several independent subtest failures in one run.
-          def extract_test_failures(xml_path):
-              if not os.path.exists(xml_path):
-                  return []
-              try:
-                  tree = ET.parse(xml_path)
-              except ET.ParseError:
-                  return []
-              results = []
-              for testcase in tree.getroot().iter("testcase"):
-                  name = testcase.get("name", "?")
-                  # gotestsum also emits a synthetic roll-up testcase named
-                  # after the suite itself (the parent Go test function's
-                  # own aggregate result) -- not a real subtest, skip it.
-                  if "/" not in name:
-                      continue
-                  fail_node = testcase.find("failure")
-                  if fail_node is None:
-                      fail_node = testcase.find("error")
-                  if fail_node is None:
-                      continue
-                  subtest = name.split("/", 1)[1]
-                  results.append((subtest, extract_failure_text(fail_node)))
-              return results
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPORT_URL="https://${{ github.repository_owner }}.github.io/${REPO_NAME}/$TEST_DIR/runs/${{ github.run_number }}/"
+          DATE=$(date -u +%Y-%m-%d)
 
-          # Claude's own conclusion often starts with its own "## Heading";
-          # demote every heading in it so the shallowest lands one level
-          # below this ledger's own "#### Claude's conclusion" heading,
-          # instead of colliding with it.
-          def demote_headings(text, min_depth=5):
-              lines = text.splitlines()
-              depths = [len(m.group(1)) for m in (re.match(r"^(#{1,6})(\s|$)", l) for l in lines) if m]
-              if not depths:
-                  return text
-              shift = max(0, min_depth - min(depths))
-              if shift == 0:
-                  return text
-              prefix = "#" * shift
-              return "\n".join(
-                  prefix + l if re.match(r"^(#{1,6})(\s|$)", l) else l
-                  for l in lines
-              )
+          # Newest run first: insert right after the header, ahead of every
+          # previously recorded run.
+          if [ -f "$LEDGER_PATH" ] && [ "$(head -n 3 "$LEDGER_PATH")" = "$HEADER" ]; then
+            BODY=$(tail -n +5 "$LEDGER_PATH")
+          elif [ -f "$LEDGER_PATH" ]; then
+            BODY=$(cat "$LEDGER_PATH")
+          else
+            BODY=""
+          fi
 
-          entries = []
-          for path in sorted(glob.glob("claude-analysis-*/claude-execution-output.json")):
-              suite = os.path.basename(os.path.dirname(path))[len("claude-analysis-"):]
-              with open(path) as f:
-                  messages = json.load(f)
-              results = [m for m in messages if m.get("type") == "result"]
-              conclusion = results[-1].get("result", "_No result recorded._") if results else "_No result recorded._"
-              failures = extract_test_failures(f"allure-results/{suite}.xml")
-              entries.append((suite, failures, conclusion))
-
-          if not entries:
-              print("No failing suites with a Claude analysis; nothing to append.")
-          else:
-              lines = [f"## [{date} -- {version} (run #{run_number})]({run_url})", "", f"[Full report]({report_url})", ""]
-              for suite, failures, conclusion in entries:
-                  lines.append(f"### {suite}")
-                  lines.append("")
-                  if failures:
-                      lines.append("#### Failures")
-                      for subtest, text in failures:
-                          lines.append(f"- `{subtest}`: `{text}`" if text else f"- `{subtest}`")
-                      lines.append("")
-                  lines.append("#### Claude's conclusion")
-                  lines.append("")
-                  lines.append(demote_headings(conclusion))
-                  lines.append("")
-              section = "\n".join(lines) + "\n"
-
-              # Newest run first: insert the new section right after the
-              # header, ahead of every previously recorded run.
-              header = "# Evetest Nightly Ledger\n\nOne section per nightly run with at least one failing suite.\n\n"
-              ledger_path = f"gh-pages/test/{branch}/NIGHTLY-LEDGER.md"
-              os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
-              if os.path.exists(ledger_path):
-                  with open(ledger_path) as f:
-                      existing = f.read()
-                  body = existing[len(header):] if existing.startswith(header) else existing
-              else:
-                  body = ""
-              with open(ledger_path, "w") as f:
-                  f.write(header + section + body)
-              print(f"Inserted ledger entry for {len(entries)} failing suite(s).")
-          PYEOF
+          mkdir -p "$(dirname "$LEDGER_PATH")"
+          {
+            printf '%s\n\n' "$HEADER"
+            printf '## [%s -- %s (run #%s)](%s)\n\n' "$DATE" "${{ needs.discover-suites.outputs.version }}" "${{ github.run_number }}" "$RUN_URL"
+            printf '[Full report](%s)\n\n' "$REPORT_URL"
+            printf '%s' "$SECTION"
+            printf '%s\n' "$BODY"
+          } > "$LEDGER_PATH"
+          echo "Inserted a ledger entry."
 
       - name: Publish to GitHub Pages
         run: |
