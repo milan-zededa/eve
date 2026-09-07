@@ -308,13 +308,14 @@ jobs:
     needs: discover-suites
     runs-on: [self-hosted, evetest-runner]
     # Narrower job-level override (replaces, not adds to, the workflow
-    # default): the analyze-failures step below needs pull-requests:read to
-    # fetch the PR diff via `gh pr diff`.
+    # default): the analyze-failures step below needs pull-requests:write to
+    # fetch the PR diff via `gh pr diff` and post its conclusion via
+    # `gh pr comment`.
     permissions:
       contents: read
       actions: read
       statuses: write
-      pull-requests: read
+      pull-requests: write
     timeout-minutes: 360
     strategy:
       fail-fast: false

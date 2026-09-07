@@ -522,7 +522,17 @@ runs:
           else
             echo "_Analysis did not complete (see job log)._"
           fi
-        } >> "$GITHUB_STEP_SUMMARY"
+        } | tee -a "$GITHUB_STEP_SUMMARY" > "${ARTIFACT_DIR}/claude-analysis.md"
+
+    # Only on evetest-pr.yml (pr-number set) -- gives a PR the same
+    # analysis without needing to open this suite's own job/step summary.
+    - name: Post Claude's analysis as a PR comment
+      if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' && inputs.pr-number != '' }}
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh pr comment "${{ inputs.pr-number }}" --body-file "${ARTIFACT_DIR}/claude-analysis.md"
 
     # The raw NDJSON transcript, for anything the step summary trims away
     # (tool calls, intermediate reasoning, etc.).
