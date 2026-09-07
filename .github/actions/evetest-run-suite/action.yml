@@ -6,8 +6,8 @@ description: >-
   Runs one evetest suite on the self-hosted evetest-runner fleet. Shared by
   evetest-pr.yml (per-PR run, against a freshly built-but-unpublished PR
   image, with per-suite PR commit statuses) and evetest-nightly.yml (full run
-  against master, against the image publish.yml already published for that
-  commit, no PR statuses to report). The calling job must already have
+  against a branch's tip, against the image publish.yml already published
+  for that commit, no PR statuses to report). The calling job must already have
   checked out the right ref before this runs (a local action like this one
   can only be resolved once its own file is present in the workspace, so
   checkout can't happen inside it) and supplies runs-on, timeout-minutes and
@@ -178,8 +178,8 @@ runs:
     # EVETEST_EVE_VERSION must not already carry it. Both tars are from the
     # same PR build, so they always agree on repo/version.
     #
-    # Not run when download-image-artifacts is 'false' (e.g. the nightly run
-    # against master): EVETEST_EVE_REPO/EVETEST_EVE_VERSION are then left
+    # Not run when download-image-artifacts is 'false' (e.g. the nightly
+    # run): EVETEST_EVE_REPO/EVETEST_EVE_VERSION are then left
     # unset, so evetest derives them from the checkout itself (see
     # evetest/Makefile's "version" logic) and pulls whatever publish.yml
     # already published for that exact commit.
