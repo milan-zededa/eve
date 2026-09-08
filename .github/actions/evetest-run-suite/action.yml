@@ -316,6 +316,20 @@ runs:
 
         exit "$EVETEST_EXIT"
 
+    # Cancelling this job only kills the runner's own wrapper process for
+    # the step above, not the whole process tree -- "make" and "docker run"
+    # get orphaned (reparented to PID 1) and are eventually reaped some
+    # seconds later without ever asking the daemon to stop the container
+    # (killing the attached client doesn't stop it, same as closing a
+    # terminal without "docker stop"). That leaves the container, and the
+    # EVE/SDN VMs it's still connected to, running indefinitely. Force it
+    # down explicitly and unconditionally -- a harmless no-op when the
+    # container already exited normally, since --rm already removed it.
+    - name: Force-stop the evetest container
+      if: always()
+      shell: bash
+      run: docker rm -f "evetest-${EVETEST_API_PORT:-50021}" 2>/dev/null || true
+
     # Every run's artifacts land in a fresh "<suite>-<timestamp>" directory
     # under EVETEST_COLLECT_ARTIFACTS (see entrypoint.sh); the newest one
     # matching this suite is always the run that just finished, even when
