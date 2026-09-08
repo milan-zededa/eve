@@ -221,6 +221,7 @@ speculating."
                     echo "${RESULT_TEXT}"
                     echo
                     printf '_Cost: $%.4f | Duration: %ss_\n' "$COST" "$DURATION_S"
+                    echo
                 } >>"${ARTIFACT_DIR}live-investigation.md"
 
                 # Hand it back exactly as evetest (running as root) expects
