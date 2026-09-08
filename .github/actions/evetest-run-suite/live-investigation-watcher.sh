@@ -65,10 +65,13 @@ while true; do
             # empty first line) -- capture everything up to the next
             # recognized field, not just what's on the same line as "Test
             # failed with:".
+            # Not stripping leading whitespace from captured lines: Gomega's
+            # own multi-line messages use indentation meaningfully (nested
+            # struct fields), not as some fixed wrapper prefix to remove.
             FAILURE_MSG=$(awk '
                 /^Test failed with: / { sub(/^Test failed with: /, ""); capturing=1 }
                 /^(EVE Devices:|No EVE devices found\.)$/ { capturing=0 }
-                capturing { sub(/^[ \t]+/, ""); print }
+                capturing { print }
             ' <<<"$RESP")
             log "new failing test: $CURRENT_TEST"
 
