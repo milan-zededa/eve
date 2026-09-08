@@ -82,6 +82,22 @@ while true; do
                 # Read/Bash tool calls can freely read and write here.
                 sudo chown -R "$(id -u):$(id -g)" "$ARTIFACT_DIR"
 
+                # Set whenever an earlier failure in this same suite run has
+                # already been investigated -- lets Claude notice whether a
+                # new failure shares the same root cause (e.g. something
+                # fundamental broken in EVE or the harness itself, rather
+                # than several independent bugs) instead of investigating
+                # each one in a vacuum.
+                PRIOR_NOTE=""
+                if [ -s "${ARTIFACT_DIR}live-investigation.md" ]; then
+                    PRIOR_NOTE="One or more earlier failures in this same suite run have"
+                    PRIOR_NOTE="${PRIOR_NOTE} already been investigated, recorded at"
+                    PRIOR_NOTE="${PRIOR_NOTE} ${ARTIFACT_DIR}live-investigation.md -- read it and"
+                    PRIOR_NOTE="${PRIOR_NOTE} consider whether this new failure plausibly shares the"
+                    PRIOR_NOTE="${PRIOR_NOTE} same root cause; say so explicitly if it does, rather"
+                    PRIOR_NOTE="${PRIOR_NOTE} than treating it as an unrelated, independent bug."
+                fi
+
                 LEDGER_NOTE=""
                 if [ -n "${LEDGER_BRANCH:-}" ]; then
                     if curl -fsSL -o "${ARTIFACT_DIR}live-ledger.md" \
@@ -146,15 +162,19 @@ evidence you're trying to diagnose. Do not call \"evetest continue\" or
 \"evetest exit\" yourself -- that happens separately once you finish (and
 is blocked for you at the tool-permission level regardless).
 
+${PRIOR_NOTE}
+
 ${LEDGER_NOTE}
 
 ${PR_NOTE}
 
 Write a concise (3-6 sentence) likely root cause, citing the specific live
-evidence you found, whether this is a known/recurring issue per the ledger
-(and since when, if so), and -- only when a PR diff was given above -- your
-judgment on whether it's related. If you can't determine a likely cause
-from what's available, say so briefly instead of speculating."
+evidence you found, whether this shares a root cause with an earlier
+failure in this run, whether this is a known/recurring issue per the
+ledger (and since when, if so), and -- only when a PR diff was given
+above -- your judgment on whether it's related. If you can't determine a
+likely cause from what's available, say so briefly instead of
+speculating."
 
                 log "prompting Claude for a live investigation of $CURRENT_TEST (this may take a while)..."
                 RESULT_JSON=$(claude -p "$PROMPT" \
