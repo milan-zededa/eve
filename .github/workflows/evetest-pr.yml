@@ -242,8 +242,11 @@ jobs:
             in isolation, because they're backed by a nightly job that already re-runs
             every suite against the target branch regardless of what any PR skipped --
             an unnecessary skip here is a much smaller cost than it would be without
-            that net. A suite name skips every one of its subtests/variants at once;
-            skipping a variant name only skips that one variant.
+            that net. A suite or subtest name skips every variant indented beneath it
+            in all-tests.txt (e.g. "TestEVEUpgrade" skips "TestEVEUpgradeKVMtoKVM" and
+            every other variant too) -- including when that same name is also listed
+            again under "Individual tests". To skip some variants of a subtest while
+            keeping others, list those specific variant names instead.
 
             Write your decision as JSON to .evetest-skip/skip-decision.json (create it
             directly, not via a Bash heredoc/cat/printf) with exactly this shape:
