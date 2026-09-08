@@ -21,11 +21,7 @@ permissions:
   contents: read
   actions: read
 
-# TODO(milan): temporary override while testing this workflow against my own
-# account/repo instead of the real lfedge/eve publish -- remove once this is
-# validated and ready to run for real.
 env:
-  EVETEST_EVE_REPO: milan4zededa/eve
   # DO NOT MERGE: use my own evetest tool image instead of lfedge/evetest.
   EVETEST_ORG: milan4zededa
 
@@ -61,23 +57,54 @@ jobs:
       # Computed once here (rather than once per matrix job below) and
       # exposed as a job output, so every suite job and the Allure publish
       # job all agree on the same version without duplicating this formula.
+      #
+      # For a snapshot (untagged) branch, don't just trust that HEAD's own
+      # image is already on Docker Hub -- publish.yml can still be mid-build
+      # if something merged to this branch shortly before this workflow
+      # ran. Walk back from the tip until we find a commit whose lfedge/eve
+      # image (both hypervisors, amd64) actually exists, and use that.
       - id: version
         name: Compute the EVE version to test
         run: |
           REPO_BRANCH=$(git rev-parse --abbrev-ref HEAD | tr / _)
-          REPO_SHA=$(git describe --match '$^' --abbrev=8 --always --dirty)
           REPO_TAG=$(git describe --always --tags | grep -E '^[0-9]+\.[0-9]+\.[0-9]+(-lts|-rc[0-9]+)?$' || echo snapshot)
-          if [ "$REPO_TAG" = "snapshot" ]; then
-            DIRTY=""
-            case "$REPO_SHA" in *-dirty) DIRTY="-$(date -u +"%Y-%m-%d.%H.%M")" ;; esac
-            VERSION="0.0.0-${REPO_BRANCH}-${REPO_SHA}${DIRTY}"
-          else
+
+          if [ "$REPO_TAG" != "snapshot" ]; then
+            # A release tag's build is a one-shot, already fully published
+            # by the time the tag exists -- no need to search.
             VERSION="$REPO_TAG"
+            echo "Computed EVE version: $VERSION"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          # DO NOT MERGE: pin to a known-published version so this doesn't
-          # need a fresh publish.yml build every time master's tip moves
-          # while testing.
-          VERSION="0.0.0-master-0408b69f"
+
+          image_published() {
+            curl -fs -o /dev/null \
+              "https://hub.docker.com/v2/repositories/lfedge/eve/tags/${1}/"
+          }
+
+          MAX_COMMITS_BACK=50
+          VERSION=""
+          BEHIND=0
+          for SHA in $(git log --format=%H -n "$MAX_COMMITS_BACK" HEAD); do
+            SHA8=$(git rev-parse --short=8 "$SHA")
+            CANDIDATE="0.0.0-${REPO_BRANCH}-${SHA8}"
+            if image_published "${CANDIDATE}-kvm-amd64" && image_published "${CANDIDATE}-k-amd64"; then
+              VERSION="$CANDIDATE"
+              break
+            fi
+            BEHIND=$((BEHIND + 1))
+          done
+
+          if [ -z "$VERSION" ]; then
+            echo "::error::no lfedge/eve image (kvm+k, amd64) published for any of the last $MAX_COMMITS_BACK commits on $REPO_BRANCH"
+            exit 1
+          fi
+
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::warning::using lfedge/eve image for commit $SHA8, $BEHIND commit(s) behind the tip of $REPO_BRANCH -- publish.yml may not have finished building the tip's image yet"
+          fi
+
           echo "Computed EVE version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
