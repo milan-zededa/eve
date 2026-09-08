@@ -171,14 +171,12 @@ jobs:
           steps.mode.outputs.mode == 'evetest-live-analysis'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BRANCH: ${{ steps.prinfo.outputs.branch }}
           SHA: ${{ steps.prinfo.outputs.sha }}
           REPO: ${{ github.repository }}
         run: |
-          EVETEST_RUN=$(gh run list --repo "$REPO" --branch "$BRANCH" \
-              --json databaseId,headSha,workflowName \
-              | jq -r '.[] | select(.headSha == env.SHA and .workflowName == "evetest-pr") | .databaseId' \
-              | head -n1)
+          STATUS_URL=$(gh api "repos/$REPO/commits/$SHA/statuses" \
+              --jq '[.[] | select(.context | startswith("Evetest / ")) | select(.target_url | test("/actions/runs/"))][0].target_url // ""')
+          EVETEST_RUN="${STATUS_URL##*/}"
           if [ -n "$EVETEST_RUN" ]; then
             echo "Re-running evetest workflow run $EVETEST_RUN"
             gh run rerun "$EVETEST_RUN" --repo "$REPO"
