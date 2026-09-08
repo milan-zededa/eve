@@ -678,14 +678,19 @@ runs:
         name: claude-transcript-${{ inputs.test-suite }}
         path: ${{ env.ARTIFACT_DIR }}/claude-transcript.json
 
-    # Unlike pr.diff, this is cross-run reference material, not evidence
-    # specific to this suite's own failure -- and it would otherwise be
-    # duplicated into every failing suite's own artifact bundle below.
-    - name: Remove the fetched ledger before packaging artifacts
+    # ledger.md/live-ledger.md: cross-run reference material, not evidence
+    # specific to this suite's own failure -- unlike pr.diff, which is kept.
+    # live-investigation.md/.log: fully superseded once claude-analysis.md
+    # exists (the same content, headings shifted, plus the empty debug log)
+    # -- redundant, not merely irrelevant, so drop them too rather than
+    # duplicating claude-analysis.md's own content in the artifact bundle.
+    - name: Remove intermediate files before packaging artifacts
       if: ${{ failure() && inputs.analyze-failures == 'true' && env.ARTIFACT_DIR != '' }}
       continue-on-error: true
       shell: bash
-      run: rm -f "${ARTIFACT_DIR}/ledger.md" "${ARTIFACT_DIR}/live-ledger.md"
+      run: |
+        rm -f "${ARTIFACT_DIR}/ledger.md" "${ARTIFACT_DIR}/live-ledger.md"
+        rm -f "${ARTIFACT_DIR}/live-investigation.md" "${ARTIFACT_DIR}/live-investigation.log"
 
     # Package the whole EVETEST_COLLECT_ARTIFACTS tree into a single tarball,
     # named after the suite so a re-run's "Download previous attempt's artifacts"
