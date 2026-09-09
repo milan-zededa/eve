@@ -1008,12 +1008,8 @@ func printOutput(ctx *diagContext, caller string) {
 			ctx.DeviceNetworkStatus.State.String())
 	}
 
-	numPorts := len(types.GetAllPortsSortedCost(*ctx.DeviceNetworkStatus, true, 0))
 	mgmtPorts := 0
 	passPorts := 0
-
-	numMgmtPorts := len(types.GetMgmtPortsAny(*ctx.DeviceNetworkStatus, 0))
-	ctx.ph.Print("INFO: Have %d total ports. %d ports should be connected to EV controller\n", numPorts, numMgmtPorts)
 	for _, port := range ctx.DeviceNetworkStatus.Ports {
 		if !port.IsL3Port {
 			continue
