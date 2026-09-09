@@ -19,7 +19,7 @@
 #   LEDGER_BRANCH              (optional; skips the ledger lookup if unset)
 #   PR_NUMBER                  (optional; skips the PR diff fetch if unset)
 #   GH_TOKEN                   (needed for `gh pr diff` when PR_NUMBER is set)
-# Claude's own credentials (e.g. ANTHROPIC_API_KEY) are read directly
+# Claude's own credentials (e.g. CLAUDE_CODE_OAUTH_TOKEN) are read directly
 # by the `claude` CLI from the environment, same as any other invocation.
 
 set -u
