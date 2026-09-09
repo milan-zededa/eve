@@ -14,6 +14,10 @@ permissions:
   contents: read
   actions: read
 
+# DO NOT MERGE: use my own evetest tool image instead of lfedge/evetest.
+env:
+  EVETEST_ORG: milan4zededa
+
 jobs:
   discover-suites:
     runs-on: ubuntu-latest
@@ -102,7 +106,7 @@ jobs:
   # below to use instead of publish.yml's regular one.
   build-cover-pkgs:
     if: ${{ inputs.collect-coverage }}
-    runs-on: zededa-ubuntu-2204
+    runs-on: evetest-builder
     steps:
       - name: Clean stale state from previous runs
         run: |
@@ -126,7 +130,7 @@ jobs:
     name: Build COVER=y EVE (kvm)
     if: ${{ inputs.collect-coverage }}
     needs: build-cover-pkgs
-    runs-on: zededa-ubuntu-2204
+    runs-on: evetest-builder
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -146,7 +150,7 @@ jobs:
     name: Build COVER=y EVE (kubevirt)
     if: ${{ inputs.collect-coverage }}
     needs: build-cover-pkgs
-    runs-on: zededa-ubuntu-2204
+    runs-on: evetest-builder
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
@@ -209,7 +213,7 @@ jobs:
           post-status: 'false'
           upload-junit-results: 'true'
           analyze-failures: 'true'
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-api-key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ledger-branch: ${{ github.ref_name }}
 
   # Combines every suite's JUnit results into one Allure report, appends a
