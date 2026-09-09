@@ -2,6 +2,165 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-09 -- 0.0.0-master-68014620 (run #31)](https://github.com/milan-zededa/eve/actions/runs/34323938056)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/31/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestAirGapSwitchNI
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: switch-ni NI reports both static IP assignments
+networkID:"29d99418-9eba-4d02-9bfd-6773b0cc1468"  networkVersion:"1"  instType:1  displayname:"switch-ni"  activated:true  bridgeNum:2  bridgeName:"bn2"  ipAssignments:{macAddress:"02:16:3e:00:02:01"}  ipAssignments:{macAddress:"02:16:3e:00:02:02"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:02:02"  appID:"a2e96db2-80f5-4461-8346-20411d0f147a"}  vifs:{vifName:"nbu2x2"  macAddress:"02:16:3e:00:02:01"  appID:"1e66467d-89ce-43ab-84d3-7ae063f757b1"}  state:ZNETINST_STATE_ONLINE  mtu:1500
+```
+
+##### Claude's conclusion
+
+No prior occurrences of `TestAirGapSwitchNI` in the ledger — this is a new finding, not a recurring known issue, and it shares no root cause with any other suite's failure in this run.
+
+**Root cause:** Live device logs show that at 07:43:20.038 zedrouter's state collector tried to open a pcap capture on `bn2-m` (the mirror interface for the new `switch-ni` bridge) but failed immediately with `Cannot capture packets on bn2-m ...: unknown interface bn2-m: route ip+net: no such network interface` — because the NI reconciler didn't actually create the `bn2`/`bn2-m` bridge and its `TCMirror` rules until 07:43:36–39, ~16 seconds later. Code inspection of `pkg/pillar/nistate/linux.go` confirms the bug: `StartCollectingForNI` sets `ni.cancelPCAP` before launching the `sniffDNSandDHCP` goroutine, and when that goroutine's `pcap.OpenLive` fails it just logs and returns without clearing `ni.cancelPCAP`; `UpdateCollectingForNI`'s guard `ni.cancelPCAP == nil` therefore never re-triggers a retry even after VIFs are added and the mirror interface really exists. As a result no ARP/DHCP snooping ever ran for this NI's entire lifetime — confirmed live: `ip neigh`/`brctl` show `bn2-m` and the bridge are up and the two apps' pings succeeded (real L2 connectivity was fine), but `switch-ni`'s `ipAssignments` still only carry bare MAC addresses with no IP even now, and there is exactly one pcap-install log line for `bn2-m` in the whole run — the failed one. This looks like a start-order race introduced by the recent tc-mirror-based packet-sniffing rework (the same TCMirror/reconciler machinery flagged in an earlier ledger entry for a different test, `TestSwitchNIPortConfigRace`), but it manifests here as a distinct, previously-unseen bug: a permanent "give up after first failed pcap open" defect rather than that entry's `Create`/`Delete` error-tolerance asymmetry.
+
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.003s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+This is enough evidence for a solid root-cause writeup.
+
+###### Root cause
+
+The expected flow record does exist — `evetest eve flow-logs` shows it live: `src:"10.50.0.2" srcPort:58932 dest:"10.17.17.25" destPort:80 aclId:2 ... action:ActionAccept` with `StartTime` 08:00:52 and `StopTime` 08:02:51 — but it wasn't published in time for the test's 180s `Eventually` window (traffic generated ~08:00:52–08:01:02, timeout at 08:04:02). The device's `/etc/sysctl.d/02-eve.conf` sets `nf_conntrack_tcp_timeout_time_wait = 270`, deliberately larger than `nistate/linux_flow.go`'s `conntrackFlowExtraTimeout = 150` so a closed connection's conntrack entry only becomes eligible for flow-log collection once its remaining TTL drops below 150s — i.e. **120s after the TCP connection actually closes** — and is only then picked up by the next `flowCollectInterval` sweep (randomized 108–120s cadence). In the worst case (sweep tick just missed), that's up to ~240s after connection close before the record is collected/published, which exceeds the test's 3-minute (`flowLogTimeout`) margin; the test's own comment ("give it comfortable room for at least one full cycle plus margin") accounts only for the sweep cadence and not for this extra ~120s TIME_WAIT-eligibility delay baked into the sysctl tuning. This looks like a test-timeout-margin bug (`evetest/tests/networking/netinst_test.go`, added in `049e632cb`/`eb32c4367`) rather than a pillar/EVE defect. It does not share a root cause with this run's earlier `TestAirGapSwitchNI` failure (that was a pcap-open retry bug in ARP/DHCP snooping, unrelated to conntrack-based flow collection), and I found no prior `TestFlowLog` entries in `live-ledger.md`, so this doesn't appear to be a previously known/recurring issue.
+
+
+#### TestLocalNetInstanceACLsWithFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.000260637s (excluding download) waiting for app "4c115736-19c0-49c5-af62-c3e7e467d263" (acl-app-1) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+Still stuck in `RESOLVING_TAG`, confirming a genuine hang rather than a slow retry cycle. I have enough evidence for a root-cause writeup.
+
+###### Root cause
+
+`acl-app-1`'s volume never leaves `RESOLVING_TAG`: at 08:13:59 zedbox's `manifestsDescImg` began resolving `192.168.170.2:5000/lfedge/evetest-ubuntu-ctr:1.0` (via `go-containerregistry`'s `remote.Get`), and no further log line, error, or `ResolveStatus` for this object has appeared since — 10+ minutes later the device still reports `RESOLVING_TAG`. Live inspection of `/proc/net/tcp` on the device shows two TCP connections to `192.168.170.2:5000` stuck in `ESTABLISHED` with non-zero unflushed `tx_queue`, i.e. the resolve requests are hung mid-flight, not erroring and retrying. Because that registry (192.168.170.2:5000) is only registered as `insecure:false`/non-localhost, `go-containerregistry`'s ping logic (`transport/ping.go`) tries HTTPS only (no HTTP fallback, since the "localhost" heuristic doesn't match a bare IP) — and a manual `curl -v https://192.168.170.2:5000/v2/` from the device gets an immediate TLS-layer rejection (`wrong version number`, since the registry actually only speaks plain HTTP, confirmed via a working plaintext `curl http://.../v2/...`). The one-shot curl fails fast, but the actual pillar code path (`zedUpload`'s OCI datastore → `objectMetadata` in `pkg/pillar/cmd/downloader/download.go`) issues the request with `context.Background()` (no request/response deadline) and only TCP-connect/TLS-handshake timeouts on the transport, so once the connection reaches `ESTABLISHED` without a clean/prompt error this time, there is nothing to time it out — it can hang indefinitely (`retryTime` for a fresh resolve attempt is 600s and hasn't even been reached).
+
+This is a distinct issue from both other failures already investigated in this run: `TestAirGapSwitchNI` (pcap-retry bug in ARP/DHCP snooping) and `TestFlowLog` (conntrack/flow-log collection timing), and it also doesn't match anything in `live-ledger.md` (which has no prior `RESOLVING_TAG`/image-resolve-hang entries) — this looks like a newly observed failure mode, either an HTTPS/HTTP registry-scheme mismatch or a registry-under-concurrency stall, exposed by the lack of a request timeout in the OCI tag-resolution path.
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.020s.
+vlan-switch-ni: Network instance is in error state
+networkID:"c8b5dde3-26e4-4dac-b51b-19591640cba0"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"c6863c6e-e40b-4a71-85d5-46c420797d5f"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1788948048  nanos:754981883}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live device logs (`evetest eve logs`) at 10:00:48.599–48.906 show `zedrouter`'s NI reconciler tearing down and recreating the switch NI's bridge during this test's deliberate port-config churn: it deletes the old `bn2`-named bridge's `TCMirror`/`BridgePort`/`TCIngress`/`BridgeFwdMask` items, then recreates the bridge (now itself named `vlan100`, since the vlan adapter is the sole/externally-bridged port), attaches `kvlan100`, and creates its `TCMirror` rules successfully — but the very next item, `BridgeFwdMask/vlan100` (10:00:48.818), fails with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory`, immediately followed by the reconciler noticing a bridge-identity mismatch (`expectedBridgeID:0` vs the new `14`) at 48.906 and redoing the `BridgePort` modifies — i.e. the bridge was transiently absent from sysfs mid-recreation when `BridgeFwdMask.Create` ran against it.
+
+This is the same underlying defect class already recorded in the ledger for this exact test on 2026-09-08 (run #26): the reconciler's `Create` paths for bridge-dependent items lack tolerance for the bridge being transiently gone/recreated during the port-config race this test induces, whereas some `Delete` paths were already hardened against it (there it was `TCMirror.Create` hitting `Parent Qdisc doesn't exists`; here it's `BridgeFwdMask.Create` hitting a missing sysfs bridge attribute). So `TestSwitchNIPortConfigRace` is a known, recurring issue since at least 2026-09-08, and today's failure is the same root-cause family — a different symptom of the identical "no race-tolerance in Create for a mid-recreation bridge" gap — rather than a new, unrelated bug. It does not obviously relate to the other failures already investigated in this run (`TestAirGapSwitchNI`, `TestFlowLog`, `TestLocalNetInstanceACLsWithFlowLog`), which are distinct pcap-retry/flow-timing/registry-hang issues, though the earlier `TestAirGapSwitchNI` writeup itself already flagged this same TCMirror/reconciler mechanism as the source of that ledger entry.
+
+### TestLPSSuite: failure analysis
+
+#### TestNetworkLocalChanges
+
+##### Failure
+
+```
+
+Timed out after 153.691s.
+The function passed to Eventually failed at /evetest/tests/lps/helpers_test.go:134 with:
+Unexpected error:
+    <*fmt.wrapError | 0xc002c9a720>: 
+    failed to execute script over SSH for app 43b27146-d561-4ea3-8904-cb42b39d7c78: SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:55012->172.20.20.123:2222: read: connection timed out (stderr: )
+    {
+        msg: "failed to execute script over SSH for app 43b27146-d561-4ea3-8904-cb42b39d7c78: SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:55012->172.20.20.123:2222: read: connection timed out (stderr: )",
+        err: <*fmt.wrapError | 0xc002c9a700>{
+            msg: "SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:55012->172.20.20.123:2222: read: connection timed out",
+            err: <*fmt.wrapError | 0xc002c9a6e0>{
+                msg: "ssh: handshake failed: read tcp 250.250.250.1:55012->172.20.20.123:2222: read: connection timed out",
+                err: <*net.OpError | 0xc0005cb180>{
+                    Op: "read",
+                    Net: "tcp",
+                    Source: <*net.TCPAddr | 0xc001105950>{
+                        IP: [250, 250, 250, 1],
+                        Port: 55012,
+                        Zone: "",
+                    },
+                    Addr: <*net.TCPAddr | 0xc001105980>{
+                        IP: [172, 20, 20, 123],
+                        Port: 2222,
+                        Zone: "",
+                    },
+                    Err: <*os.SyscallError | 0xc002c9a660>{
+                        Syscall: "read",
+                        Err: <syscall.Errno>0x6e,
+                    },
+                },
+            },
+        },
+    }
+occurred
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+The failure lines up exactly with the test's own network-revert step: at 08:38:30 the test submitted the empty LPS config to revert eth0's local override, which at 08:38:31.99 triggered NIM to re-verify a new DevicePortConfig, causing zedrouter to briefly tear down and rebuild the local-ni port-forward — the DNAT rule for `2222→10.11.12.128:22` was deleted at 08:38:32.238 and only recreated at 08:38:32.970 (device logs, `ni-info`), with eth0 doing a DHCP release/re-lease in between. This ~0.7s gap is exactly when the harness's SSH dial to the app (source `250.250.250.1`) landed and apparently got stuck (a "read" timeout during the SSH banner handshake, not a refused/reset connection), and since that single stuck attempt has no short per-handshake deadline, it burned well past the 5s poll interval and the rest of the 2-minute `Eventually` budget, producing the reported 153.7s overrun. Live investigation confirms the device fully recovered within ~2s (`DPC verify: ... DPC_SUCCESS` at 08:38:33.958, DNAT rules present, `ni-info`/`ssh` all healthy now), the app (`lps-app`) never rebooted (single boot at 08:37:35, no restart), and there were no further NI/DPC events between 08:38:34 and 08:41:05 — i.e., this is a transient race triggered by the test's own local-config-revert step, not a lasting device defect. Checking `live-ledger.md` (this run's only ledger data, from 2026-09-08), there is no prior entry for `TestLPSSuite`/`TestNetworkLocalChanges` or this SSH-timeout signature, so this does not appear to be a previously known/recurring issue — it looks like a first-time occurrence of this particular race in the local-NI port-forward reconfiguration path.
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.010s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (6619136 / 0). Aborting the download
+
+uuid:"c0454e34-3b41-4c49-914f-7da670194310" displayName:"v-vhdx" usage:{createTime:{seconds:-62135596800} refCount:1 lastRefcountChangeTime:{seconds:1788943309 nanos:15660506}} state:DOWNLOAD_STARTED volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (6619136 / 0). Aborting the download\n" timestamp:{seconds:1788943310 nanos:350481412} severity:SEVERITY_NOTICE entities:{entity:ENTITY_CONTENT_TREE entity_id:"eb9f9534-9c80-4cab-a7f2-05510b200f5e"} retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+Confirmed: device runs `0.0.0-master-68014620-kvm-amd64`, an ancestor of the fix commit `ed743e546` (merged 2026-08-31, after `68014620`). This is sufficient evidence.
+
+###### Root cause
+
+Live logs show `downloader` aborting the `v-vhdx.vhdx` download on its very first progress tick: `Update progress for v-vhdx.vhdx: 6619136/0` at 08:41:50.039, immediately followed by `Size '0' provided in image config ... incorrect` — the datastore HTTP server ignored the Range request (`server ignored Range; skipping copiedBytes manually`), so `totalSize` was reported as 0 while `currentSize` had already advanced, and `pkg/pillar/cmd/downloader/download.go`'s unconditional `currentSize > totalSize` check treated that as fatal. This is exactly the bug fixed by commit `ed743e546` ("downloader: don't abort a download on a transient zero total size", 2026-08-31), which guards the check with `totalSize > 0`. The device under test is running image `0.0.0-master-68014620-kvm-amd64`, and `68014620` is a git ancestor of `ed743e546` — i.e. the deployed image predates the fix, so this is a stale test-image issue, not a code regression. It shares no root cause with other entries in the ledger, and there is no prior TestStorageSuite/TestVolumes/vhdx entry in `live-ledger.md`, so this is a first-time-observed occurrence in the ledger (though the underlying bug itself is already fixed in current master).
+
 ## [2026-09-08 -- 0.0.0-master-0408b69f (run #26)](https://github.com/milan-zededa/eve/actions/runs/34208177401)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/26/)
@@ -200,5 +359,3 @@ EVE upgrade to 0.0.0-master-0408b69f-kvm-amd64 failed: Upgrade to non EVE-k (0.0
 Live check confirms the device is still healthy and running its original image `0.0.0-master-66475696-k-amd64` (EVE-k/kubevirt) — the upgrade was correctly rejected before any partition switch, so the device itself is not the problem.
 
 **Root cause**: this is a bad test image, not a bug in EVE or the test harness's upgrade logic. The harness pulled `milan4zededa/eve:0.0.0-master-0408b69f-k-amd64` (a `-k-amd64`/kubevirt-tagged image, as expected for the `TestEVEUpgradeKubevirtToKubevirt` test), but `docker run ... version` on that image reported its actual embedded short version as `0.0.0-master-0408b69f-kvm-amd64` (gotest.json lines 576–586) — i.e. the image pushed under the `-k-amd64` tag is actually a plain-KVM build, not kubevirt. EVE's own upgrade guard on the device correctly detected this hypervisor mismatch and refused the downgrade path (`Upgrade to non EVE-k ... from EVE-k ... is not supported`), which is why the test failed safely with the device left healthy on its original image. The `milan4zededa/eve` repo is a personal/dev image namespace (not the standard CI-published one), strongly suggesting the `-k-amd64` tag for build `0408b69f` was mistakenly built/pushed as a kvm-flavored rootfs instead of kubevirt. I found no matching entry in memory for this specific failure, so I can't say whether it's recurring — worth checking whoever owns `milan4zededa/eve` about the `0408b69f` build tagging.
-
-
