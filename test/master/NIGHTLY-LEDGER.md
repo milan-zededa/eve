@@ -2,6 +2,77 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-09 -- 0.0.0-master-551d4490 (run #32)](https://github.com/milan-zededa/eve/actions/runs/34381743343)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/32/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live `evetest eve flow-logs flowlog-test-app` shows the exact expected record now exists: `src:"10.50.0.2" srcPort:34618 dest:"10.17.17.25" destPort:80 protocol:6 aclId:2 ... action:ActionAccept`, with `startTime` 20:26:37 and `endTime` (connection close) 20:28:37 UTC. The test's 180s `Eventually` window ran from the "phase1-traffic-generated" checkpoint (20:26:48) to the timeout (20:29:48) — but the connection didn't close until 20:28:37, only ~71s before the deadline. Confirmed live: the device's `nf_conntrack_tcp_timeout_time_wait` is 270s, deliberately larger than the flow-log code's `conntrackFlowExtraTimeout` (150s), so a closed connection's conntrack entry only becomes eligible for flow-log collection ~120s after close, plus up to another ~120s until the next randomized flow-collection sweep — comfortably exceeding the remaining ~71s budget, so the record simply hadn't been collected/published yet when the test gave up (and indeed appears now, post-timeout).
+
+This is the identical root cause already documented in `live-ledger.md` for `TestFlowLog` in run #31 earlier today (2026-09-09): a test-timeout-margin bug in `evetest/tests/networking/netinst_test.go` that doesn't account for the TIME_WAIT-eligibility delay baked into the sysctl tuning, not a pillar/EVE defect. So this is a known, recurring issue as of today, reproduced again on a later build (`0.0.0-master-551d4490` vs. run #31's `68014620`), with no code fix in between. It's unrelated to this run's other failure (`TestAirGapSwitchNI`, a pcap-retry bug in ARP/DHCP snooping).
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.032s.
+vlan-switch-ni: Network instance is in error state
+networkID:"91e1d1e2-7eb7-4b50-8454-ff8296defec7"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:1  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"2f2bc7da-f761-4a5a-9583-0be92ccf5631"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1788991264  nanos:441662193}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live device logs confirm this is the identical failure signature to earlier ledger entries. At 22:01:04.431 UTC the NI reconciler recreated the `vlan100` bridge as part of this test's deliberate port-config churn (`VLANBridge/vlan100` create, followed immediately by another delete/create cycle at .530–.531 that bumped `expectedBridgeID` from `0`→`14`), and the `BridgeFwdMask/vlan100` operation running in that same window hit `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory` (surfaced to zedagent at 22:01:04.479) — i.e. the bridge was transiently absent from sysfs mid-recreation, exactly as in prior occurrences. Live inspection now (post-failure) shows `vlan100`'s bridge and its `group_fwd_mask` sysfs file both present and healthy, confirming the absence was transient.
+
+This is the same root-cause family already recorded twice in `live-ledger.md` for this exact test: run #26 (2026-09-08, `TCMirror.Create` hitting `Parent Qdisc doesn't exists`) and run #31 (2026-09-09, `BridgeFwdMask.Create` hitting this identical `group_fwd_mask: no such file` error) — a general lack of race-tolerance in reconciler `Create` paths for bridge-dependent items when the bridge is transiently torn down/recreated during port reconfiguration. Today's failure reproduces run #31's exact symptom verbatim (same error string, same `BridgeFwdMask/vlan100` item, same device build family `551d4490` vs. `68014620`), so `TestSwitchNIPortConfigRace` is a known, recurring issue since at least 2026-09-08, still unfixed as of this build. It is unrelated to the other earlier-investigated failure in this run (`TestFlowLog`, a test-timeout-margin bug around conntrack/flow collection timing).
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.011s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (5242880 / 0). Aborting the download
+
+uuid:"117674c7-4099-4bda-9af2-f203468cfb0f"  displayName:"v-vhdx"  usage:{createTime:{seconds:-62135596800}  refCount:1  lastRefcountChangeTime:{seconds:1788981946  nanos:579945337}}  state:DOWNLOAD_STARTED  volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (5242880 / 0). Aborting the download\n"  timestamp:{seconds:1788981948  nanos:121902620}  severity:SEVERITY_NOTICE  entities:{entity:ENTITY_CONTENT_TREE  entity_id:"cb40243a-62b1-4bae-8db2-bed9a829375e"}  retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+I have enough evidence for a root-cause writeup.
+
+**Root cause:** Live device logs confirm the identical mechanism seen previously: the datastore HTTP server for `v-vhdx.vhdx` ignores the Range request (`server ignored Range; skipping copiedBytes manually`), so `downloader` sees `Update progress for v-vhdx.vhdx: 5242880/0` (nonzero `currentSize`, zero `totalSize`) and aborts with `Size '0' provided in image config ... incorrect` — exactly `pkg/pillar/cmd/downloader/download.go:325`'s unconditional `currentSize > totalSize` check, which I confirmed is still the code on master (no `totalSize > 0` guard present). This is the same root cause as the `TestVolumes` failure recorded in this same run's ledger entry for 2026-09-09 (run #31), which attributed it to a "stale test image" predating fix commit `ed743e546` — but that attribution was wrong (or the fix has since been reverted/never landed): none of the three "downloader: don't abort a download on a transient zero total size" commits I found in history (`b2c75e0df`, `4dce98f55`, `ed743e546`, dated 08-31/09-04/09-08) are ancestors of `master` or of today's device build `0.0.0-master-551d4490` — they all live only on unmerged branches (`dpc-fixes`, `evetest-ci`, `upgrade-test-change`). So this is a known, recurring issue as of at least 2026-09-09 (same-day ledger entry), and the actual state is that the fix has never been merged to master, not that the test image is merely stale — worth flagging to get that fix branch actually merged.
+
 ## [2026-09-09 -- 0.0.0-master-68014620 (run #31)](https://github.com/milan-zededa/eve/actions/runs/34323938056)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/31/)
