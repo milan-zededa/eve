@@ -224,7 +224,7 @@ runs:
         EVETEST_PAUSE_ON_FAILURE: ${{ inputs.analyze-failures == 'true' && 'true' || '' }}
         LEDGER_BRANCH: ${{ inputs.ledger-branch }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        ANTHROPIC_API_KEY: ${{ inputs.analyze-failures == 'true' && inputs.anthropic-api-key || '' }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.analyze-failures == 'true' && inputs.anthropic-api-key || '' }}
         GH_TOKEN: ${{ inputs.analyze-failures == 'true' && github.token || '' }}
       run: |
         set -o pipefail
