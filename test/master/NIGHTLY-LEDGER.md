@@ -2,6 +2,70 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-10 -- 0.0.0-master-551d4490 (run #34)](https://github.com/milan-zededa/eve/actions/runs/34447233841)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/34/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.025s.
+vlan-switch-ni: Network instance is in error state
+networkID:"65e91680-8cd8-4972-8532-55b5818ce801"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"837cbe21-9970-47bb-96b4-e5093568be87"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789036242  nanos:389414097}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live device logs (`evetest eve logs`) at 10:30:42.369–460 UTC show the identical sequence recorded in prior ledger entries: the NI reconciler recreates `vlan100`'s bridge for this test's deliberate port-config churn (`VLANBridge/vlan100` create with `expectedBridgeID:0`), and the `BridgeFwdMask/vlan100` item that runs against it at 10:30:42.440 fails with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory` — immediately followed (10:30:42.459–460) by the reconciler detecting a bridge-identity mismatch and redoing the create with `expectedBridgeID:14`, i.e. the bridge was transiently absent from sysfs mid-recreation. Live inspection now shows `vlan100`'s bridge and `group_fwd_mask` (value `0x0`) both present and healthy, confirming the absence was transient.
+
+This is the same root-cause family already recorded in `live-ledger.md` for this exact test on 2026-09-08 (run #26, `TCMirror.Create`/`Parent Qdisc doesn't exists`) and 2026-09-09 (run #32, this identical `BridgeFwdMask.Create`/`group_fwd_mask` error, same device build family `551d4490`) — a lack of race-tolerance in the reconciler's `Create` paths for bridge-dependent items when the bridge is transiently torn down/recreated during port reconfiguration. So `TestSwitchNIPortConfigRace` has been a known, recurring issue since at least 2026-09-08, still unfixed as of this run's build, and today's failure reproduces the exact same `BridgeFwdMask/vlan100` symptom verbatim rather than being a new bug. No other suite failure has been investigated yet in this run to compare against.
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"a6dde0e9-0940-471c-b953-f6493499e93c"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789030219  nanos:474287193}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  IPAddrs:"fe80::16:3eff:fe02:0"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"ce6a124d-4623-40cf-ab57-d8ca059f0526"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+Confirmed the code still matches the previously-diagnosed bug (unfixed on master). I have enough evidence now.
+
+###### Root cause
+
+Live device logs show a startup race in NI state collection for `ni-lan` (NI `a26af772-b86e-46bc-af5e-8cf15a2e9689`, bridge `eth1`): at 08:50:04.285 `zedrouter` tried to open a pcap capture on the mirror interface `eth1-m` for ARP/DHCP snooping, but the `DummyInterface/eth1-m` wasn't actually created by the reconciler until 08:50:04.439 — 154ms later — so the open failed with `unknown interface eth1-m: route ip+net: no such network interface`. By contrast, `eth0-m` (used by `ni-wan`, whose VIF *did* get its IP reported) had its dummy interface created before the pcap attempt, so it succeeded. `pkg/pillar/nistate/linux.go` still has the bug that makes this permanent: `StartCollectingForNI`/`UpdateCollectingForNI` set `ni.cancelPCAP` before the `sniffDNSandDHCP` goroutine runs, and when `pcap.OpenLive` fails inside that goroutine it just logs and returns without clearing `cancelPCAP`, so the `ni.cancelPCAP == nil` retry guard never re-fires even after the VIF (`nbu2x1`) attaches later — confirmed live via `AddVif(eth1, nbu2x1, ...)` at 08:50:16 with no subsequent pcap retry log for `eth1-m` anywhere in the run. The bridge/DHCP path itself is healthy (SDN's `lan-network` has a static DHCP reservation `02:16:3e:02:00:01 → 10.60.20.150`, and the Linux bridge shows `nbu2x1` correctly forwarding on `eth1`), so this is purely an EVE-side observability/reporting gap, not a connectivity failure.
+
+This is the identical root-cause defect already documented in `live-ledger.md` for `TestAirGapSwitchNI` in run #31 (2026-09-09) — same code path (`nistate/linux.go`'s permanent "give up after first failed pcap open" bug), same trigger (mirror dummy-interface creation racing the pcap-open attempt at NI startup). It's a known, recurring issue as of 2026-09-09, unfixed as of this build (`551d4490`), just now surfacing through a different test (`TestMgmtTrafficRoutedViaApp` expects the reported VIF IPs rather than the NI's `ipAssignments`).
+
+### TestStorageSuite: failure analysis
+
+#### TestZVolProvisionedSizeReported
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.4]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.4:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+No genuine matches — confirmed this is a first-time failure signature, not previously recorded in the ledger.
+
+**Root cause:** This is a test-infrastructure failure, not an EVE/pillar code defect. `gotest.json` shows the broker provisioned a fresh SDN Proxmox VM (VM 108) at 07:19:04, powered it on, and got its uplink IP `192.168.170.4` at 07:19:06 — normal so far. But the subsequent `Failed to connect to SDN gRPC at 192.168.170.4:50121 (will retry): ... no route to host` warning then repeated every ~6s continuously for the entire ~4m46s retry budget (07:19:20 → 07:24:06) without a single success, at which point the test's `openTunnelToSDN` (setup.go:823) gave up with a `Fatalf`. For comparison, the immediately preceding test in this same run (`TestVolumeSizeAlignment`) hit the identical `no route to host` warning on its own freshly-booted SDN VM, but only for ~29s/3 retries before `Connected to SDN gRPC` succeeded at 07:15:03 — showing this warning is normally a brief, expected race during SDN VM boot, not a hard failure. Here, that boot-time race never resolved at all, indicating this particular SDN VM instance (or its network path from the broker on the Proxmox host) never actually came up correctly. Live `evetest sdn status`/`ssh`/`logs` all currently fail (`SDN client is not initialized`, SSH `connection reset by peer`), and `evetest eve ssh/logs` fail with "network model not applied"/"not onboarded" — all consistent with the SDN VM still being unreachable now, not merely slow. This doesn't share a root cause with any of the other failures already documented in the ledger, and there's no prior entry for this test or this SDN-gRPC/no-route-to-host signature, so it appears to be a new, one-off Proxmox/SDN-provisioning infra hiccup rather than a recurring or code-level issue.
+
 ## [2026-09-10 -- 0.0.0-master-551d4490 (run #33)](https://github.com/milan-zededa/eve/actions/runs/34414897742)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/33/)
