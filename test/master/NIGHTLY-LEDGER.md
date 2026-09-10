@@ -2,6 +2,34 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-10 -- 0.0.0-master-551d4490 (run #33)](https://github.com/milan-zededa/eve/actions/runs/34414897742)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/33/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live `evetest eve flow-logs flowlog-test-app` shows the exact expected record now exists: `src:"10.50.0.2" srcPort:39324 dest:"10.17.17.25" destPort:80 protocol:6 aclId:2 ... action:ActionAccept`, with the TCP connection closing (`endTime`) at 23:27:50 UTC. The test's `phase1-traffic-generated` checkpoint was reached at 23:26:01 UTC and the 180s `Eventually` deadline hit at 23:29:01 UTC — only ~71s after the connection actually closed. Live `sysctl net.netfilter.nf_conntrack_tcp_timeout_time_wait` confirms the device sets this to 270s, deliberately larger than the flow-log code's `conntrackFlowExtraTimeout` (150s), so the conntrack entry only becomes flow-log-eligible ~120s after close (≈23:29:50), plus up to another randomized sweep interval — comfortably past the test's 71s remaining budget, so the record simply hadn't been collected/published yet when the test gave up.
+
+This is the identical root cause already documented twice in `live-ledger.md` for `TestFlowLog` earlier today (2026-09-09), in run #31 (build `68014620`) and run #32 (build `551d4490`): a test-timeout-margin bug in `evetest/tests/networking/netinst_test.go` that doesn't account for the TIME_WAIT-eligibility delay baked into the sysctl tuning, not a pillar/EVE defect. So this is a known, recurring issue as of today (2026-09-09), reproduced for a third consecutive time, with no fix landed between runs.
+
 ## [2026-09-09 -- 0.0.0-master-551d4490 (run #32)](https://github.com/milan-zededa/eve/actions/runs/34381743343)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/32/)
