@@ -2,6 +2,93 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-10 -- 0.0.0-master-551d4490 (run #35)](https://github.com/milan-zededa/eve/actions/runs/34471430167)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/35/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+This is the exact same recurring issue seen in the ledger. Live evidence confirms it:
+
+**Root cause:** The expected flow record now exists live (`evetest eve flow-logs flowlog-test-app`): `src:"10.50.0.2" srcPort:42158 dest:"10.17.17.25" destPort:80 protocol:6 aclId:2 ... action:ActionAccept`, with the TCP connection closing (`endTime`) at 13:36:11 UTC. The test's `phase1-traffic-generated` checkpoint fired at 13:34:22 UTC, so the 180s `Eventually` deadline hit at ~13:37:22 — only ~71s after the connection actually closed. Live `sysctl net.netfilter.nf_conntrack_tcp_timeout_time_wait` confirms it's set to 270s on the device, deliberately larger than the flow-log code's `conntrackFlowExtraTimeout` (150s), so the conntrack entry only becomes flow-log-eligible ~120s after close (~13:38:11), plus up to another randomized sweep interval — well past the test's remaining ~71s budget, so the record simply hadn't been collected/published yet when the test gave up.
+
+This is a **known, recurring issue**, not a new bug: the identical `TestFlowLog` failure (same 180s timeout, same allowed-HTTP-ACE record, same `10.50.0.2 → 10.17.17.25:80` flow) is documented in `live-ledger.md` for run #31 (2026-09-09), run #32 (2026-09-09), and run #33 (2026-09-10, same build `551d4490`) — today's failure is the fourth consecutive reproduction with no fix landed. The root cause is a test-timeout-margin bug in `evetest/tests/networking/netinst_test.go` (line 2437) that doesn't account for the TIME_WAIT-eligibility delay baked into the device's sysctl tuning — it's a test-harness defect, not a pillar/EVE regression.
+
+
+#### TestLocalNIWithMultiplePorts
+
+##### Failure
+
+```
+timed out after 5m0.00110518s (excluding download) waiting for app "6252cd46-e8c6-4ccd-8b7a-27a05e399815" (multi-port-app) on device "edge-dev" to reach RUNNING state (last state: LOADING)
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+`multi-port-app`'s volume spent **4m41s stuck in `RESOLVING_TAG`** (14:11:48→14:16:27, per live `evetest eve logs`) with zero log activity from `zedbox`/`downloader` during that entire window — the resolve request against the OCI registry at `192.168.170.2:5000` simply hung. Once it finally unblocked, download (100% in ~5s) and image loading proceeded normally, but by then almost the whole 5-minute app-start budget was gone, so the test's `Eventually` expired while the app was still in `LOADING`, just before it reached `CREATING_VOLUME` at 14:16:59. Live probing confirms why: `curl http://192.168.170.2:5000/v2/` returns `200` in 6ms, while `curl https://192.168.170.2:5000/v2/` fails instantly with an SSL handshake error (exit 35) — the registry is plain-HTTP-only, but `go-containerregistry`'s ping logic tries HTTPS first for non-localhost hosts and the pillar download path (`context.Background()`, no per-request deadline) can leave that failed/hanging TLS attempt unresolved for minutes before falling back.
+
+This is the exact same root-cause family already recorded in `live-ledger.md` for **run #31 (2026-09-09)**, `TestLocalNetInstanceACLsWithFlowLog` (`acl-app-1` against the same `192.168.170.2:5000` registry, stuck in `RESOLVING_TAG` indefinitely) — there it never resolved during the observation window, here it eventually resolved after ~4m41s, but it's the same HTTPS-probe-hang-against-an-HTTP-only-registry defect, not a new bug. It's a known/recurring issue since at least 2026-09-09, and does not overlap with this run's already-investigated `TestFlowLog` finding (conntrack/flow-log timing), which is unrelated.
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.030s.
+vlan-switch-ni: Network instance is in error state
+networkID:"c2133a07-6e6f-4aed-bcbe-1925933158d6"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"0705d853-2d52-48b1-a1ce-0d9dab5a5ba6"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789053546  nanos:556760492}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+Confirms the bridge and its `group_fwd_mask` (now `0`/healthy) are currently present — the absence at failure time was indeed transient. This is enough evidence.
+
+###### Root cause
+
+This is the same known, recurring `TestSwitchNIPortConfigRace` bug, now reproducing for at least the fifth time. Live logs show, at 15:19:06.545–.651 UTC, the reconciler tearing down the old `bn2` bridge and recreating it as `vlan100` (`VLANBridge/vlan100` create with `expectedBridgeID:0`) as part of this test's deliberate port-config churn; the `BridgeFwdMask/vlan100` item that ran in that same pass at .587 failed with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory`, immediately followed (.650–.651) by the reconciler detecting a bridge-identity mismatch and redoing the bridge with `expectedBridgeID:14` — i.e. the bridge was transiently absent from sysfs mid-recreation. Live inspection now confirms `vlan100`'s bridge and `group_fwd_mask` (value `0`) are present and healthy, confirming the absence was transient rather than a lasting device fault.
+
+This is not a new bug: it's the identical `BridgeFwdMask/vlan100`/`group_fwd_mask` failure already documented in `live-ledger.md` for this exact test in run #31 (2026-09-09), run #32 (2026-09-09), and run #34 (2026-09-10, same build `551d4490`), and shares the same root-cause family as run #26's (2026-09-08) `TCMirror.Create`/`Parent Qdisc doesn't exists` variant — a lack of race-tolerance in the NI reconciler's `Create` paths for bridge-dependent items (`BridgeFwdMask`, `TCMirror`) when the underlying bridge is transiently torn down/recreated during port reconfiguration. So this has been a known, recurring, unfixed issue since at least 2026-09-08, and today's failure is a further reproduction of the same defect rather than a new one.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 8): timed out waiting for LastProcessedConfig >= 2026-09-10 12:29:22.915080761 +0000 UTC
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+`edge-dev3`'s reboot for the cluster→standalone conversion is the direct cause, but the real bug is in the test's timeout budget, not EVE. Live evidence: `edge-dev3`'s `ZInfoDevice` shows `lastRebootReason: "BootReasonKubeTransition, Transition from cluster mode to single node"` at 12:29:24 and `bootTime` 12:30:33 — i.e. the device correctly rebooted (as `conversion_test.go`'s own comments describe: kube-init sees the `EdgeNodeClusterConfig` disappear, marks `ConvertToSingleNode`, and must reboot before k3s state can be restored). Live device metrics now show `last_processed_config: {12:29:22.915080761}`, exactly matching the config timestamp the test was waiting for (`edgedevice.go:317`/`323`) — so the config *was* eventually confirmed, just not before the test gave up.
+
+The test's `ApplyConfig(convertedCfg, true, true)` (`conversion_test.go:212`) uses the generic `waitUntilConfirmed` path, which is bound by the fixed `deviceApplyConfigTimeout = 2 * time.Minute` (`harness.go:97`, `edgedevice.go:280/300`). But this particular config change forces a reboot+k3s-restore cycle before zedagent can publish an updated `LastProcessedConfig` metric — the device only came back up at 12:30:33 (69s after fetching the config) and needed further boot-up time (zedbox init, ~758 goroutines, metrics not yet flushed) before the metric with the matching timestamp was actually published, landing only ~15-90s after the 12:31:23 deadline. The test author was clearly aware a reboot could take much longer (they later wait up to 20 minutes for `converted-node-standalone` at line 217-231), but didn't extend the immediate `ApplyConfig` confirm-timeout for this particular per-device withdrawal, so it's racing a fixed 2-minute budget against an inherently reboot-bound operation.
+
+This is a distinct failure mode from the earlier `TestClusterToSingleConversion` entry in the ledger (2026-09-08, run #26: survivors never dropping `edge-dev3` from `kubectl get nodes` due to `drainAndDeleteNode`'s apiserver-unreachable race) — that was about node removal on the *survivors*, this is about the *converted node's* config-confirmation timing before drain/removal even matters. I found no prior ledger entry matching this "failed to confirm the latest config"/`LastProcessedConfig` signature, so this looks like a new, previously-unseen test-timeout-margin bug rather than a recurring one.
+
 ## [2026-09-10 -- 0.0.0-master-551d4490 (run #34)](https://github.com/milan-zededa/eve/actions/runs/34447233841)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/34/)
