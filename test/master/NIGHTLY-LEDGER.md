@@ -2,6 +2,148 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-10 -- 0.0.0-master-551d4490 (run #36)](https://github.com/milan-zededa/eve/actions/runs/34517740536)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/36/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestLocalNI
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.5]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.5:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence from `gotest.json` shows SDN VM `sdn-5231a41b` (Proxmox VM 109) was provisioned and powered on normally, getting uplink IP `192.168.170.5` at 20:08:35. The very first gRPC connect attempt at 20:08:55 got `i/o timeout` (host route up, VM not yet listening), but starting at 20:09:07 every retry for the next ~4m30s (through 20:13:37, when the test's budget expired) got `connect: no route to host` instead — a permanent, not transient, failure mode indicating the VM's network path died entirely after the initial boot phase, rather than the gRPC service just being slow to start. Live `evetest sdn status`/`ssh`/`logs` right now still fail (`SDN client is not initialized`, SSH `connection reset by peer`), confirming the SDN VM is still unreachable, not merely having been slow.
+
+This is the same failure signature as run #34's `TestZVolProvisionedSizeReported` (also today, 2026-09-10): a freshly-provisioned SDN VM (VM 108, IP `192.168.170.4`) that got its uplink IP but then was never reachable over gRPC for the whole retry window, while an adjacent test's SDN VM in that same run connected fine after a few seconds. That prior instance was judged a one-off Proxmox/SDN-provisioning infra hiccup with no earlier ledger history. Seeing the identical pattern reproduce on a second, independently-provisioned SDN VM within the same nightly run suggests this may be an emerging recurring infra issue (first appeared today) rather than a true one-off — worth flagging to whoever owns the Proxmox/SDN broker infrastructure — but it is not an EVE/pillar code defect, and there's no other failure in this run yet to share a root cause with.
+
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live flow-log evidence confirms the exact same pattern as the ledger's prior `TestFlowLog` failures: `evetest eve flow-logs flowlog-test-app` shows the expected record now exists — `src:"10.50.0.2" srcPort:55232 dest:"10.17.17.25" destPort:80 protocol:6 aclId:2 ... action:ActionAccept` — with the TCP connection closing (`endTime`) at 20:35:24 UTC. The test's `phase1-traffic-generated` checkpoint fired at 20:33:35 UTC, so the 180s `Eventually` deadline hit at 20:36:35 — only ~71s after the connection actually closed. The device's `nf_conntrack_tcp_timeout_time_wait` is (as before) 270s, deliberately larger than the flow-log code's `conntrackFlowExtraTimeout` (150s), so the conntrack entry only becomes flow-log-eligible ~120s after close (~20:37:24) plus up to another randomized sweep interval — comfortably past the test's remaining ~71s budget, so the record simply hadn't been collected/published yet when the test gave up.
+
+This does **not** share a root cause with this run's earlier `TestLocalNI` failure (that was an SDN VM/Proxmox connectivity issue, unrelated). It **is** a known, recurring issue: identical `TestFlowLog` failures with this same message, same allowed-HTTP-ACE record, and the same conntrack-timeout-margin root cause are documented in the ledger for runs #31 and #32 (2026-09-09), and #33 and #35 (2026-09-10, same build `0.0.0-master-551d4490`) — this is at least the sixth consecutive reproduction, spanning three days, with no fix landed. It remains a test-timeout-margin bug in `evetest/tests/networking/netinst_test.go` (line 2437/2486), not a pillar/EVE regression.
+
+
+#### TestNetworkAdapterPassthrough
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.6]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.6:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+I have enough evidence now.
+
+###### Root cause
+
+Live evidence (`gotest.json`) shows a fresh SDN Proxmox VM (VM 108) for `TestNetworkAdapterPassthrough` powered on at 21:41:06 and got uplink IP `192.168.170.6`, but every gRPC connect retry from 21:41:21 through 21:46:04 (~4m40s, the full retry budget) failed with `no route to host` — never once succeeding — before `openTunnelToSDN` gave up. Live checks right now confirm the SDN VM is still unreachable, not merely slow: `evetest sdn status` → `SDN client is not initialized`, `evetest sdn ssh`/`evetest eve ssh` → `Connection reset by peer` / `network model not applied`.
+
+This is the exact same failure signature as this run's earlier `TestLocalNI` failure (SDN VM `192.168.170.5`, same "boots, gets IP, then permanently no-route-to-host" pattern) and shares a root cause with it — a freshly-provisioned SDN VM whose network path from the Proxmox broker never comes up, as opposed to the normal brief boot-time race (which typically resolves in a few seconds/retries, as seen for adjacent tests in this and prior runs). Per the ledger, this identical signature also occurred earlier today in run #34 (`TestZVolProvisionedSizeReported`, VM 108/`192.168.170.4`) and was judged a one-off Proxmox/SDN-provisioning infra hiccup at the time — but with three independent occurrences now within the same day (run #34, and two in this run #35: `TestLocalNI` and `TestNetworkAdapterPassthrough`), this looks like an emerging recurring Proxmox/SDN broker infrastructure problem rather than a true one-off, and worth escalating to whoever owns that infra. It is not an EVE/pillar code defect.
+
+### TestLPSSuite: failure analysis
+
+#### TestNetworkLocalChanges
+
+##### Failure
+
+```
+
+Timed out after 153.516s.
+The function passed to Eventually failed at /evetest/tests/lps/helpers_test.go:134 with:
+Unexpected error:
+    <*fmt.wrapError | 0xc001193a20>: 
+    failed to execute script over SSH for app 0a67b56d-a4a2-45dd-aad7-a29bc34782bb: SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:37314->172.20.20.123:2222: read: connection timed out (stderr: )
+    {
+        msg: "failed to execute script over SSH for app 0a67b56d-a4a2-45dd-aad7-a29bc34782bb: SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:37314->172.20.20.123:2222: read: connection timed out (stderr: )",
+        err: <*fmt.wrapError | 0xc001193a00>{
+            msg: "SSH dial to 172.20.20.123:2222 failed: ssh: handshake failed: read tcp 250.250.250.1:37314->172.20.20.123:2222: read: connection timed out",
+            err: <*fmt.wrapError | 0xc0011939e0>{
+                msg: "ssh: handshake failed: read tcp 250.250.250.1:37314->172.20.20.123:2222: read: connection timed out",
+                err: <*net.OpError | 0xc003b554a0>{
+                    Op: "read",
+                    Net: "tcp",
+                    Source: <*net.TCPAddr | 0xc002c80a20>{
+                        IP: [250, 250, 250, 1],
+                        Port: 37314,
+                        Zone: "",
+                    },
+                    Addr: <*net.TCPAddr | 0xc002c80a50>{
+                        IP: [172, 20, 20, 123],
+                        Port: 2222,
+                        Zone: "",
+                    },
+                    Err: <*os.SyscallError | 0xc0011939c0>{
+                        Syscall: "read",
+                        Err: <syscall.Errno>0x6e,
+                    },
+                },
+            },
+        },
+    }
+occurred
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live device logs show the failure exactly coincides with the test's own network-revert step: at 21:34:50 the harness submitted the empty LPS config to revert eth0's local override, which at 21:34:51.98 triggered NIM/zedrouter to release/re-lease DHCP on both eth0/eth1 and briefly delete+recreate the local-NI's DNAT port-forward rules (`2222→10.11.12.128:22`) — deleted at 21:34:52.238, fully restored by 21:34:53.234. The app (`lps-app`) itself never rebooted or lost its IP (`evetest eve app-info` shows a single continuous `RUNNING` since boot), and no device-side errors/warnings appear anywhere in the following ~2.5 minutes — the device network stack was fully healthy again within ~1s of the revert. Yet the harness's SSH dial (source `250.250.250.1`, the SDN tunnel) stayed stuck on a single attempt for the full ~153s budget with a low-level TCP `read: connection timed out` rather than retrying, meaning one dial attempt landed in that ~1s reconfiguration window, the connection wedged, and — since the test's SSH helper has no shorter per-attempt timeout — it consumed nearly the entire `Eventually` budget before failing.
+
+This is the same root-cause family already documented in the ledger for this exact test on 2026-09-09 (run #31): the LPS config-revert step's brief NAT/DHCP teardown racing a single un-timeout-bounded SSH dial attempt. It's a known, recurring issue since 2026-09-09 (this is its second occurrence), and it's a test-harness timeout/retry-margin gap rather than a new EVE/pillar defect — the device itself recovers well within a second.
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.011s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (2883584 / 0). Aborting the download
+
+uuid:"29f444e7-9b7d-4c70-a8ec-a3a70c4eea1f"  displayName:"v-vhdx"  usage:{createTime:{seconds:-62135596800}  refCount:1  lastRefcountChangeTime:{seconds:1789067375  nanos:285616332}}  state:DOWNLOAD_STARTED  volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (2883584 / 0). Aborting the download\n"  timestamp:{seconds:1789067376  nanos:682866675}  severity:SEVERITY_NOTICE  entities:{entity:ENTITY_CONTENT_TREE  entity_id:"113b0b8e-a0bc-4681-99df-488dc61014b6"}  retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+This confirms the exact same mechanism identified in prior ledger entries. I have sufficient evidence now.
+
+###### Root cause
+
+Live logs confirm the identical mechanism seen in previous ledger entries: at 19:09:36.021 the datastore HTTP server for `v-vhdx.vhdx` ignored the Range request (`server ignored Range; skipping copiedBytes manually`), so `downloader` (`download.go:320`) logged `Update progress for v-vhdx.vhdx: 2883584/0` — nonzero `currentSize` but zero `totalSize` — and 386ms later hit the unconditional `currentSize > totalSize` check at `pkg/pillar/cmd/downloader/download.go:328`, aborting with `Size '0' provided in image config ... incorrect`. That error then propagated up through the blob/content-tree/volume status chain exactly as in `TestVolumes`'s prior failures.
+
+This is the same test/failure signature recorded in `live-ledger.md` for run #32 (2026-09-09, same build family `551d4490`), and I confirmed the code state is unchanged: `download.go`'s `currentSize > totalSize` check still has no `totalSize > 0` guard on current `master`. The three "downloader: don't abort a download on a transient zero total size" fix commits (`b2c75e0df`, `4dce98f55`, `ed743e546`) still exist only on unmerged branches (`dpc-fixes`, `evetest-ci`, `upgrade-test-change`), not on master or the tested build. So this is a **known, recurring issue since at least 2026-09-09**, unfixed as of today's build — the fix branch containing the guard has still not been merged to master.
+
 ## [2026-09-10 -- 0.0.0-master-551d4490 (run #35)](https://github.com/milan-zededa/eve/actions/runs/34471430167)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/35/)
