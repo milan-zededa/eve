@@ -2,6 +2,56 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-11 -- 0.0.0-master-551d4490 (run #37)](https://github.com/milan-zededa/eve/actions/runs/34548841403)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/37/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.022s.
+vlan-switch-ni: Network instance is in error state
+networkID:"6d6d8b80-ac14-4134-a987-0eb059e38b48"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"c93bdef3-4bb9-45dd-90f4-4f03f746e227"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789097086  nanos:753521714}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+This confirms the same known pattern from the ledger, now healed live (bridge and `group_fwd_mask`=0 present and healthy, exactly as in prior occurrences).
+
+**Root cause:** Live logs show the reconciler creating `VLANBridge/vlan100` at 03:24:46.749 (`expectedBridgeID:0`), with the `BridgeFwdMask/vlan100` item run in that same pass failing at 03:24:46.863 with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory` — immediately followed at .919–.920 by the reconciler detecting a bridge-identity mismatch and redoing the bridge with `expectedBridgeID:14`, i.e. the bridge was transiently absent from sysfs mid-recreation during this test's deliberate port-config churn. Live inspection now confirms `vlan100`'s bridge and `group_fwd_mask` (value `0x0`) are present and healthy, confirming the absence was transient, not a lasting device fault. This is not a new bug and doesn't share a root cause with anything else in this run — it's the same `TestSwitchNIPortConfigRace` defect family recorded repeatedly in `live-ledger.md`: first as a regression caught by this brand-new test on 2026-09-03/08 (run #26, `TCMirror.Create`/`Parent Qdisc doesn't exists`), then this identical `BridgeFwdMask.Create`/`group_fwd_mask` symptom on 2026-09-09 (run #32) and again on 2026-09-10 (runs #35, #36) — a lack of race-tolerance in the reconciler's `Create` paths for bridge-dependent items when the bridge is transiently torn down/recreated during port reconfiguration (the `8f277c37b` commit hardened `Delete` paths for this but not `Create`). This is a known, recurring issue since at least 2026-09-08, still unfixed as of this build (`0.0.0-master-551d4490`), reproducing today verbatim.
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.010s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (1310720 / 0). Aborting the download
+
+uuid:"8f75d5d0-4ca9-4f07-adad-0c1c5b620268"  displayName:"v-vhdx"  usage:{createTime:{seconds:-62135596800}  refCount:1  lastRefcountChangeTime:{seconds:1789088997  nanos:824377356}}  state:DOWNLOAD_STARTED  volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (1310720 / 0). Aborting the download\n"  timestamp:{seconds:1789089000  nanos:43427923}  severity:SEVERITY_NOTICE  entities:{entity:ENTITY_CONTENT_TREE  entity_id:"3c0f444a-9a03-4100-a179-0c0dbeaa54b1"}  retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+The unmerged fix branches (`dpc-fixes`, `evetest-ci`, `upgrade-test-change`) still exist remotely, unmerged into master, confirming the ledger's note. I have enough evidence now.
+
+###### Root cause
+
+Live device logs confirm the identical mechanism documented in the ledger: at 01:09:59.044 the datastore HTTP server serving `v-vhdx.vhdx` ignored the Range request (`server ignored Range; skipping copiedBytes manually`), and 627ms later `downloader` logged `Update progress for v-vhdx.vhdx: 1310720/0` — nonzero `currentSize` but zero `totalSize` — which immediately trips the unconditional `currentSize > totalSize` check at `pkg/pillar/cmd/downloader/download.go:325`, aborting with `Size '0' provided in image config ... incorrect`. That error then propagates up through `doUpdateContentTree` → `doUpdateVol` → the volume's `volumeErr`, exactly matching this run's failure output.
+
+This is the **same test/failure signature recorded in `live-ledger.md` for run #36 (2026-09-10)**, which itself traced back to run #32 (2026-09-09) — so this is a **known, recurring issue since at least 2026-09-09**, now reproducing for at least a third consecutive day. I verified the code state is unchanged on current `master`: `download.go`'s `currentSize > totalSize` check still has no `totalSize > 0` guard, and the three fix commits (`b2c75e0df`, `4dce98f55`, `ed743e546`) remain only on unmerged branches (`dpc-fixes`, `evetest-ci`, `upgrade-test-change`), not on master or in the tested build (`0.0.0-master-551d4490`, same build as prior occurrences). There's no other failure in this run to share a root cause with. It's not a new EVE/pillar regression — it's the same unfixed downloader defect awaiting merge.
+
 ## [2026-09-10 -- 0.0.0-master-551d4490 (run #36)](https://github.com/milan-zededa/eve/actions/runs/34517740536)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/36/)
