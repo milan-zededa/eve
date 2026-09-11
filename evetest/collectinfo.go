@@ -291,8 +291,10 @@ func (th *TestHarness) collectCoverageFromAllDevices() {
 // collectCoverageTimeout so the caller does not need to manage the deadline.
 //
 // Detection works by counting .covcounters files before sending SIGUSR2 and
-// polling until the count increases. If the before-count snapshot fails, a
-// 3-second fallback sleep is used instead.
+// polling until the count increases (a fixed 3-second sleep instead, if the
+// before-count snapshot fails), then polling until zedbox no longer holds
+// any file under the coverage directory open, since a file's existence
+// alone doesn't mean zedbox is done writing it.
 func (th *TestHarness) collectCoverageFromDevice(ctx context.Context, devName string) {
 	if !viper.GetBool(constants.CollectCoverageEnv) ||
 		viper.GetString(constants.ExternalArtifactDirEnv) == "" {
@@ -353,6 +355,41 @@ func (th *TestHarness) collectCoverageFromDevice(ctx context.Context, devName st
 				return
 			case <-time.After(pollInterval):
 			}
+		}
+	}
+
+	// A file existing only means zedbox has created it, not finished
+	// writing it -- covdata merge fails with EOF on a file SCP'd mid-write.
+	// FlushCoverage (pkg/pillar/agentlog/coverage.go) rewrites covmeta on
+	// every flush too, not just covcounters, so check the whole directory:
+	// poll /proc/<pid>/fd on the device for zedbox to no longer hold any
+	// file under it open before copying anything.
+	const openCheckPollInterval = 1 * time.Second
+	const openCheckTimeout = 30 * time.Second
+	openCheckCmd := fmt.Sprintf(`
+PID=$(pgrep -x zedbox)
+if [ -z "$PID" ]; then exit 1; fi
+for fd in /proc/"$PID"/fd/*; do
+	case "$(readlink "$fd" 2>/dev/null)" in
+	%s/*) exit 1 ;;
+	esac
+done
+exit 0`, eveCoverageDir)
+	openCheckDeadline := time.Now().Add(openCheckTimeout)
+	for {
+		if th.runScriptOnEVEOverSSH(ctx, devName, openCheckCmd, nil, nil, 0) == nil {
+			break
+		}
+		if time.Now().After(openCheckDeadline) {
+			th.log.Warnf("Coverage directory on device %q still has an open "+
+				"file (or zedbox's pid was undeterminable) after %v; "+
+				"proceeding with whatever was written", devName, openCheckTimeout)
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(openCheckPollInterval):
 		}
 	}
 
