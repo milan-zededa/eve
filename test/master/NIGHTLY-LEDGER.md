@@ -2,6 +2,84 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-11 -- 0.0.0-master-0c954e83 (run #38)](https://github.com/milan-zededa/eve/actions/runs/34572329223)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/38/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+The function passed to Eventually failed at /evetest/tests/networking/netinst_test.go:2437 with:
+expected an outbound flow record for the allowed HTTP ACE (2) from 10.50.0.2 to 10.17.17.25:80
+Expected
+    <*flowlog.FlowRecord | 0x0>: nil
+not to be nil
+```
+
+##### Claude's conclusion
+
+Good — only `TestFlowLog` failed in this run; every other subtest so far shows `pass`. No shared root cause with another failure in this run since there isn't one.
+
+###### Root cause
+
+This is the well-known **`TestFlowLog` conntrack-timeout-margin issue**, reproducing again with identical mechanics:
+
+- Live evidence: `evetest eve flow-logs flowlog-test-app` shows the exact expected record now exists (`src:"10.50.0.2" srcPort:57822 dest:"10.17.17.25" destPort:80 protocol:6 aclId:2 ... action:ActionAccept`), with the TCP connection closing (`endTime`) at **10:05:51 UTC**. The test's `phase1-traffic-generated` checkpoint fired at **10:04:02 UTC**, so its 180s `Eventually` deadline hit at **10:07:02 UTC** — before the record could possibly become visible.
+- The device's live `nf_conntrack_tcp_timeout_time_wait` is confirmed at **270s**, while `pkg/pillar/nistate/linux_flow.go:39` hardcodes `conntrackFlowExtraTimeout = 150`s, and `convertConntrackToFlow` (line 183) only turns a conntrack entry into a flow record once its *remaining* timeout drops below that 150s threshold — i.e. ~120s after the connection closes. That puts eligibility at ~10:07:51, a full 49s after the test already gave up. The device's `flowlogTask` log confirms this: it ran at 10:05:17 (before close) and again at 10:07:05 (3s after the test's deadline, still too early to have picked up the now-eligible record).
+- This is a **known, recurring issue**, not new: the identical `TestFlowLog` failure/root cause is recorded in the ledger for runs #31, #32 (2026-09-09) and #33, #35, #36 (2026-09-10) — this is at least the **seventh consecutive reproduction** across three days, with the same unfixed test-timeout margin in `evetest/tests/networking/netinst_test.go` (line 2437/2486), not a pillar/EVE regression.
+- No other test failed in this run, so there's no shared root cause to consider.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 8): timed out waiting for LastProcessedConfig >= 2026-09-11 12:22:13.098302288 +0000 UTC
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence confirms the same mechanism already documented in the ledger: config version 8 (withdrawing `edge-dev3` from the cluster) was fetched by the device at 12:22:14, and the harness began waiting (with the fixed 2-minute `deviceApplyConfigTimeout`) for `LastProcessedConfig >= 2026-09-11 12:22:13.098`. That config change forces `edge-dev3` to reboot back to standalone mode — the harness itself observed the reboot completing at 12:23:26 — but pillar's bootstrap after the reboot is still ongoing well past the timeout: live `nim`/`zedagent` logs show the DPC with `TimePriority: 12:22:13.098302288` only reaching `DPC_SUCCESS` at 12:24:59, and `domainmgr`/`volumemgr` were still re-subscribing to `EdgeNodeClusterConfig`/`ContentTreeConfig` and zedagent was still reprocessing controller certs at 12:25:22–12:25:26 — over 3 minutes after the config was fetched, i.e. well past the 2-minute deadline (12:24:14) at which the test gave up.
+
+This is the identical failure signature ("failed to confirm the latest config"/`LastProcessedConfig` timeout on the withdrawn node) recorded in `live-ledger.md` for run #35 on 2026-09-10, where the same conclusion was reached: the test's `ApplyConfig` confirm-timeout is a fixed 2 minutes, but this particular per-device cluster-withdrawal path is inherently reboot-bound and routinely exceeds that budget. So this is a **known, recurring issue since at least 2026-09-10**, reproducing again today — a test-timeout-margin bug in the harness (`conversion_test.go:212` / `edgedevice.go:280-327`), not a new EVE/pillar regression. It does not share a root cause with any other failure noted so far in this run (this is the only failure reported).
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.010s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (6422528 / 0). Aborting the download
+
+uuid:"019206a0-8cf6-43cb-a0d6-235e9db5bfd7"  displayName:"v-vhdx"  usage:{createTime:{seconds:-62135596800}  refCount:1  lastRefcountChangeTime:{seconds:1789120802  nanos:884581647}}  state:DOWNLOAD_STARTED  volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (6422528 / 0). Aborting the download\n"  timestamp:{seconds:1789120804  nanos:160268221}  severity:SEVERITY_NOTICE  entities:{entity:ENTITY_CONTENT_TREE  entity_id:"4b483b47-6072-4fe9-8f9b-813d916ee25d"}  retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+Only `TestVolumes` ran/failed in this run so far — no other failure to share a root cause with. This confirms the pattern is identical to the recurring ledger issue. I have sufficient evidence.
+
+###### Root cause
+
+Live device logs confirm the same mechanism documented repeatedly in the ledger: at 10:00:02.985 the datastore HTTP server serving `v-vhdx.vhdx` ignored the Range request (`server ignored Range; skipping copiedBytes manually`), and ~900ms later `downloader` logged `Update progress for v-vhdx.vhdx: 6422528/0` — nonzero `currentSize` but zero `totalSize` — which trips the unconditional `currentSize > totalSize` check at `pkg/pillar/cmd/downloader/download.go:325`, aborting with `Size '0' provided in image config ... incorrect`. That error propagates through `doUpdateContentTree` → `doUpdateVol` → the volume's `volumeErr`, exactly matching this run's failure output. I confirmed the code on current `master` still has no `totalSize > 0` guard on that check.
+
+This is the **same test/failure signature recorded in `live-ledger.md`** for runs #32 (2026-09-09), #35 and #36 (2026-09-10) — a **known, recurring issue since at least 2026-09-09**, now reproducing for a fourth consecutive day on the same build family (`0.0.0-master-551d4490`/`-...`). There's no other failure in this run to share a root cause with, since `TestVolumes` is the only test that has run so far. Per prior ledger notes, the fix (a `totalSize > 0` guard) exists only on unmerged branches, not on master — not a new EVE/pillar regression, just still unfixed.
+
 ## [2026-09-11 -- 0.0.0-master-551d4490 (run #37)](https://github.com/milan-zededa/eve/actions/runs/34548841403)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/37/)
