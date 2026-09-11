@@ -2,6 +2,41 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-11 -- 0.0.0-master-e213aba5 (run #39)](https://github.com/milan-zededa/eve/actions/runs/34605755112)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/39/)
+
+### TestAppsSuite: failure analysis
+
+_Paused for live investigation but nothing was recorded (see the job log)._
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"4e8ef0c1-0a74-4326-907a-2230803a1f63"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789142604  nanos:452979381}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  IPAddrs:"fe80::16:3eff:fe02:0"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"cd663959-9de7-4115-bd16-5aecfa3fee5d"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+Confirmed the bug is still present unfixed on current master, matching the ledger's prior diagnosis.
+
+###### Root cause
+
+Live `zedrouter` logs show the identical race documented previously: at 16:03:10.956 `zedrouter` attempted to open a pcap capture on mirror interface `eth1-m` (bridge `eth1`, NI `069b9e62-c9eb-4fe2-81e3-0b3db6efbdd8`), but the reconciler didn't actually create `DummyInterface/eth1-m` until 16:03:11.081 — 78ms later — so the open failed with `unknown interface eth1-m: route ip+net: no such network interface`. `pkg/pillar/nistate/linux.go` sets `ni.cancelPCAP` before the `sniffDNSandDHCP` goroutine runs (lines 251-254/307-311), and when `pcap.OpenLive` fails inside that goroutine it only logs and returns without clearing `cancelPCAP`, so the `ni.cancelPCAP == nil` retry guard never re-fires — confirmed live: `vif1`/`nbu2x1` attached at 16:03:21.738 with no subsequent pcap retry log for `eth1-m` anywhere afterward, which is why `zedrouter` never reports an IP for that VIF and the test's `Eventually` (expecting 2 VIFs with IPs) timed out.
+
+This is the same defect (unfixed on current master, confirmed via code read) already recorded in the ledger for this exact test in run #34 (2026-09-10), which itself traces back to the same `nistate/linux.go` "give up after first failed pcap open" bug first seen via `TestAirGapSwitchNI` in run #31 (2026-09-09). So this is a **known, recurring issue since at least 2026-09-09**, reproducing again verbatim today — not a new EVE/pillar regression. No other suite has been investigated in this run to compare for a shared root cause.
+
+### TestLPSSuite: failure analysis
+
+_Paused for live investigation but nothing was recorded (see the job log)._
+
 ## [2026-09-11 -- 0.0.0-master-0c954e83 (run #38)](https://github.com/milan-zededa/eve/actions/runs/34572329223)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/38/)
