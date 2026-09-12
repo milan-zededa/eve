@@ -2,6 +2,74 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-12 -- 0.0.0-master-03335b43 (run #41)](https://github.com/milan-zededa/eve/actions/runs/34666428017)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/41/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.028s.
+vlan-switch-ni: Network instance is in error state
+networkID:"6fbf579b-9845-431c-b202-5a96887d80e1"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"738fcc7d-d855-4075-ae69-f1d3afc4c5b6"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789186575  nanos:166894619}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+Confirmed — bridge and `group_fwd_mask` (value `0x0`) are now present and healthy, matching every prior occurrence in the ledger where the failure was transient.
+
+**Root cause:** Live logs at 04:16:15.157–.215 UTC show the NI reconciler deleting the old `bn2` bridge and creating `VLANBridge/vlan100` (`expectedBridgeID:0`) as part of this test's deliberate port-config churn; the `BridgeFwdMask/vlan100` item running against it at .215 failed with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory`, immediately followed at .291–.345 by the reconciler detecting a bridge-identity mismatch and redoing the bridge with `expectedBridgeID:14` — i.e. the bridge was transiently absent from sysfs mid-recreation. Live inspection now confirms `vlan100`'s `group_fwd_mask` is present and healthy (`0x0`), so the absence was transient, not a lasting device fault.
+
+This is not a new bug — it's the same `TestSwitchNIPortConfigRace` defect recorded repeatedly in `live-ledger.md` (first exposed as a regression by this new test on 2026-09-03/2026-09-08, run #26, with a `TCMirror.Create`/"Parent Qdisc doesn't exists" variant; this identical `BridgeFwdMask`/`group_fwd_mask` symptom then recurred in runs #31, #32, #34–#36, and again in today's earlier run entry). Root cause is a lack of race-tolerance in the NI reconciler's `Create` paths for bridge-dependent items (`BridgeFwdMask`, `TCMirror`) when the bridge is transiently torn down/recreated during port reconfiguration — commit `8f277c37b` hardened `Delete` paths for this but not `Create`. This is a known, recurring, still-unfixed issue since at least 2026-09-08, reproducing again verbatim on today's build (`0.0.0-master-03335b43`).
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestActiveBackupBond
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.6]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.6:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+This is the identical, recurring "SDN VM unreachable" infrastructure failure already documented multiple times in `live-ledger.md`, not a new bug or an EVE/pillar defect. Live `gotest.json` for this run shows SDN Proxmox VM 107 (`sdn-979b11a1`) was provisioned and powered on normally, obtaining uplink IP `192.168.170.6` at 04:17:11, but every gRPC connect retry from 04:17:25 through 04:22:11 (the full ~5-minute budget) failed with `no route to host` — never once succeeding — before `openTunnelToSDN` gave up. Live checks right now reproduce exactly the same signature seen in past occurrences: `evetest sdn status`/`net-model`/`logs` → "SDN client is not initialized", `evetest sdn ssh` → TCP connects but resets during SSH key exchange, and `evetest eve info`/`collect-info` → device "not onboarded"/"network model not applied" — i.e. the SDN VM's network path never actually came up, so nothing downstream (including the EVE device itself) could be configured.
+
+This same "SDN VM gets uplink IP but gRPC/SSH stays unreachable for the entire retry window" pattern has appeared in the ledger three times before: first on 2026-09-10 (run #34, `TestZVolProvisionedSizeReported`), then again the same day (run #36, `TestNetworkAdapterPassthrough`), and again on 2026-09-11 (run #37). Each time it was judged a Proxmox/SDN-provisioning infra hiccup rather than a code-level bug, and it has now recurred a fourth time here on `TestActiveBackupBond` — so it's a known, recurring (though still not root-caused) infra issue dating back to 2026-09-10, unrelated to any pillar/EVE code change.
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.011s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (3276800 / 0). Aborting the download
+
+uuid:"e57dbe1d-8021-4167-aab2-eb15c2c5671c"  displayName:"v-vhdx"  usage:{createTime:{seconds:-62135596800}  refCount:1  lastRefcountChangeTime:{seconds:1789188660  nanos:641262900}}  state:DOWNLOAD_STARTED  volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (3276800 / 0). Aborting the download\n"  timestamp:{seconds:1789188662  nanos:277398446}  severity:SEVERITY_NOTICE  entities:{entity:ENTITY_CONTENT_TREE  entity_id:"727b7fa3-06f5-4183-adfa-b5f1a8635fe6"}  retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live `downloader` logs on the paused device show the exact same mechanism as prior occurrences: the datastore HTTP server ignored the Range request (`server ignored Range; skipping copiedBytes manually` at 04:51:01.086), then a progress update logged `Update progress for v-vhdx.vhdx: 3276800/0` (nonzero `currentSize`, zero `totalSize`) at 04:51:01.942, which trips the `currentSize > totalSize` check in `pkg/pillar/cmd/downloader/download.go`, aborting with `Size '0' provided in image config ... is incorrect` — identical to the failure text.
+
+This is the same `TestVolumes`/`v-vhdx` bug recorded in `live-ledger.md` for runs #32, #35, #36 and #37 (2026-09-09 through 2026-09-11) — a known, recurring issue since at least 2026-09-09. However, the situation has changed: a fix (`2e809b3ee downloader: don't abort download when declared size is unknown (0)`) guarding the check with `totalSize > 0` was merged to master on 2026-09-11 and is present at current HEAD (`018ec1b29`). The device image actually under test here is `0.0.0-master-03335b43`, which I confirmed via `git merge-base` predates that fix commit — so this run simply used a stale EVE build from before the fix landed, not a regression of the fix itself. This is unrelated to the `018ec1b29` "personal testing overrides" commit; no other suite has been investigated yet in this run to compare for a shared root cause.
+
 ## [2026-09-12 -- 0.0.0-master-018ec1b2 (run #40)](https://github.com/milan-zededa/eve/actions/runs/34641374067)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/40/)
