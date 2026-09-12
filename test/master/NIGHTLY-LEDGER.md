@@ -2,6 +2,94 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-12 -- 0.0.0-master-08a14977 (run #42)](https://github.com/milan-zededa/eve/actions/runs/34680667078)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/42/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.000260039s (excluding download) waiting for app "f40b668a-6265-452c-a34a-bd02e150fc7f" (flowlog-test-app) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+This confirms it: `flowlog-test-app` pulls `lfedge/evetest-ubuntu-ctr:1.0` from the same `192.168.170.2:5000` datastore that was previously root-caused as HTTP-only, hitting the identical hang.
+
+Root cause: `flowlog-test-app` is stuck in `RESOLVING_TAG` (confirmed live via `evetest eve app-info`), with its tag-resolve TCP connection to the registry `192.168.170.2:5000` (image `lfedge/evetest-ubuntu-ctr:1.0`, per `evetest eve config`) sitting `ESTABLISHED` with a stalled, non-zero send queue — never completing or erroring. Live `curl` from the device confirms the registry is HTTP-only (`http://…/v2/` → clean `200`) while HTTPS immediately fails at the TLS layer (`wrong version number`); since the datastore isn't registered as `insecure`/localhost, `go-containerregistry`'s ping/resolve path only tries HTTPS and the pillar OCI resolve call uses `context.Background()` with no request deadline, so once a connection reaches `ESTABLISHED` without a fast TLS rejection it can hang indefinitely rather than falling back to HTTP.
+
+This is the same root-cause family already documented twice in `live-ledger.md`: `TestLocalNetInstanceACLsWithFlowLog`/`acl-app-1` (run #31, 2026-09-09, never resolved) and `multi-port-app` (2026-09-09 entry, ~4m41s stuck before eventually resolving) — both against the identical `192.168.170.2:5000` registry with the identical HTTPS-probe-hang mechanism. It's unrelated to the earlier `TestFlowLog` conntrack-timing failures also recorded in the ledger (those were a different, already-fixed-understood flow-log-collection-timing issue, not a resolve hang). So this is a known, recurring issue dating back to at least 2026-09-09, now recurring on `TestFlowLog`/`flowlog-test-app` for what appears to be the first time under this specific test name.
+
+### TestAppsSuite: failure analysis
+
+_Paused for live investigation but nothing was recorded (see the job log)._
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"47bf124a-f85a-4117-9b6e-865457eca748"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789204455  nanos:230497512}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  IPAddrs:"fe80::16:3eff:fe02:0"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"e7120acb-63aa-4e9a-aa10-2a538b9f600e"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+I already have git log context from the system reminder (HEAD is `08a14977c`, unrelated evetest/coverage-tooling commits — nothing touching `nistate/linux.go` or `zedrouter`), and enough live evidence to confirm the diagnosis.
+
+###### Root cause
+
+`zedrouter`'s NI-state pcap capture on the mirror interface `eth1-m` (for NI `268734cb-9eca-4870-82f8-1f7c77384e85`, bridge `eth1`, which carries vif1/`nbu2x1` of `mgmt-gw-app`) failed at 09:14:01.967 with `unknown interface eth1-m: route ip+net: no such network interface`, because the reconciler didn't actually create `DummyInterface/eth1-m` until 09:14:02.342 — 375ms later. `pkg/pillar/nistate/linux.go` sets `ni.cancelPCAP` before the `sniffDNSandDHCP` goroutine runs, and when `pcap.OpenLive` fails inside that goroutine it just logs and returns without clearing `cancelPCAP`, so the retry guard never re-fires: even after vif1 (`nbu2x1`) attached at 09:14:12.469, no subsequent pcap-open attempt for `eth1-m` appears anywhere in the logs, which is exactly why `zedrouter` never reports an IP for vif1 and the test's `Eventually` (expecting 2 VIFs with IPs) timed out.
+
+This is a **known, recurring issue since at least 2026-09-09** (first seen via `TestAirGapSwitchNI`, run #31) and has already hit this exact test twice before, verbatim: run #38 (2026-09-10) and run #39 (2026-09-11), both in `live-ledger.md`. Today's failure is the same signature again (same error string, same startup race, same `nistate/linux.go` "give up after first failed pcap open" defect), still unfixed on current master — not a new regression, and unrelated to the recent evetest/coverage-tooling commits at HEAD (`08a14977c` etc.), which don't touch `zedrouter`/`nistate`.
+
+### TestLPSSuite: failure analysis
+
+_Paused for live investigation but nothing was recorded (see the job log)._
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev2")
+```
+
+##### Claude's conclusion
+
+I have enough evidence now.
+
+**Root cause:** This is chronic control-plane/etcd slowness on the joining nodes, not a hard failure — the cluster eventually converged, just far too slowly. Live logs on `edge-dev2` show its embedded etcd logging "apply request took too long" continuously (2351 occurrences) from ~10:52 onward, culminating in a leader-election loss and `k3s exited: exit status 1` at 11:22:28, followed by an etcd `force-new-cluster` recovery restart at 11:23:06; `edge-dev3` shows the identical pattern (2170 occurrences), while `edge-dev1` (the first node to join) was comparatively healthy (427 occurrences, zero crashes). Storage health for the joining nodes flapped FAILED↔DEGRADED↔HEALTHY the entire time (matching the Longhorn-instability theme from the ledger's only prior `TestThreeNodesCluster` entry). The harness logged "Waiting for cluster nodes ... to become ready" every minute from 10:52:37 until it gave up at 11:21:37 (~29 minutes); live `evetest cluster info` right now shows all three nodes actually finished joining and reached Ready only around 11:22–11:24 — i.e. convergence completed just ~1-2 minutes after the test's timeout, a near-miss rather than a permanently broken cluster.
+
+This is **not the same failure signature** as the one prior `TestThreeNodesCluster` ledger entry (run #32, 2026-09-09), which was about post-join SSH-app-reachability breaking due to Longhorn-driven k3s/VMI churn — today's is a pure join/readiness-timeout on two of the three nodes. I found no ledger entry matching this exact "Timed out waiting for cluster nodes to become ready" message, so this looks like a new (or at least previously unrecorded) manifestation of the same underlying etcd/Longhorn-instability class of problem, rather than a confirmed long-running known issue. No other suite failed in this run, so there's nothing else to correlate it with.
+
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 5): timed out waiting for LastProcessedConfig >= 2026-09-12 12:06:59.326359946 +0000 UTC
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+This is the same known, recurring issue documented in `live-ledger.md` for run #35 (2026‑09‑10) and again for run #40 (2026‑09‑11, config version 8): the test's `ApplyConfig` confirm step uses a fixed 2‑minute `deviceApplyConfigTimeout`, but converting `edge-dev3` out of the cluster forces a reboot + full pillar/zedbox re-bootstrap before it can publish an updated `LastProcessedConfig`, which routinely exceeds that budget.
+
+Live evidence on `edge-dev3` confirms the identical mechanism: `/proc/uptime` shows the device rebooted only ~103s ago (boot ≈ 12:07:43, ~44s after fetching config version 5 at 12:06:59, matching the harness's timeout deadline of ~12:08:59), and at 12:09:19–12:09:21 — already past that deadline — logs show it's still deep in post-reboot bootstrap: `zedkube` cycling through leader-election/attestation states (`StateNonceWait`/`StateInternalQuoteWait`/`StateInternalEscrowWait`), and `domainmgr` only just re-subscribing to `EdgeNodeClusterConfig` at 12:09:21. This is not a new EVE/pillar regression — it's the harness racing a fixed 2‑minute confirm-timeout against an inherently reboot-bound cluster-withdrawal path, a known issue since at least 2026‑09‑10 (config version 8 that time, version 5 today, same signature both times). It's unrelated to the earlier `TestThreeNodesCluster` failure in this run (etcd/Longhorn join-readiness slowness), which is a distinct issue.
+
 ## [2026-09-12 -- 0.0.0-master-03335b43 (run #41)](https://github.com/milan-zededa/eve/actions/runs/34666428017)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/41/)
