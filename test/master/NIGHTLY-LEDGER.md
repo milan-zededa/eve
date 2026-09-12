@@ -2,6 +2,181 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-12 -- 0.0.0-master-03335b43 (run #43)](https://github.com/milan-zededa/eve/actions/runs/34695189622)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/43/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestPortForwarding
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.5]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.5:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+Root cause: this is the SDN VM's network path failing to come up, not an EVE/pillar bug. Live `gotest.json` shows a fresh SDN Proxmox VM (`sdn-29886669`, VM 110) was provisioned and powered on for `TestPortForwarding`, obtained uplink IP `192.168.170.5` at 14:30:43, but every gRPC connect retry from 14:30:57 through 14:35:43 (~50 retries, the full 5-minute budget) failed with `no route to host` before `openTunnelToSDN` gave up. Live checks right now reproduce the identical signature: `evetest sdn status/logs` → "SDN client is not initialized", `evetest sdn ssh` → TCP connects but resets during SSH key exchange, and `evetest eve info` → device "not onboarded" — i.e. the SDN VM never actually became reachable on its network path.
+
+This is a known, recurring infra issue: the ledger records the identical "uplink IP obtained, gRPC retries fail with `no route to host` for the entire budget" pattern at least four times before — 2026-09-10 (run #34, `TestVolumeSizeAlignment`/similar), 2026-09-10 (run #36, `TestNetworkAdapterPassthrough`), 2026-09-11 (run #37, one-off SDN test), and most recently run #41 (2026-09-12, `TestActiveBackupBond`) — so it's been recurring since at least 2026-09-10. It shares no root cause with the other failure already analyzed in this same run (`TestFlowLog`, which was a container-registry HTTPS-probe hang) — this is purely an SDN/Proxmox VM provisioning hiccup, unrelated to any EVE/pillar code path.
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.037s.
+vlan-switch-ni: Network instance is in error state
+networkID:"55cfaaf1-fbe7-42b0-895c-87a6f84912e5"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"5b5e0b12-3d51-4949-b06d-83946a897ec9"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789227450  nanos:853129753}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+This matches the identical, well-documented `TestSwitchNIPortConfigRace` defect family exactly.
+
+Root cause: live logs at 15:37:30.838–31.288 UTC show the NI reconciler creating `VLANBridge/vlan100` with `expectedBridgeID: 0` while `BridgeFwdMask/vlan100` runs in the same pass and fails with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory` (and even `VLANBridge/vlan100 "link vlan100 is not a bridge"`), immediately followed by the reconciler detecting a bridge-identity mismatch and redoing the bridge with `expectedBridgeID: 14` — i.e. the bridge was transiently torn down/recreated mid-reconcile during this test's deliberate port-config churn. Live inspection confirms `vlan100`'s `group_fwd_mask` is now present and healthy (`0x0`), so the absence was transient, not a lasting fault — consistent with the reconciler's known gap of race-tolerance in bridge-dependent `Create` paths (`BridgeFwdMask`, `TCMirror`) versus already-hardened `Delete` paths (commit `8f277c37b`).
+
+This does not share a root cause with the earlier-investigated `TestPortForwarding` failure in this run (an unrelated SDN VM `no route to host` provisioning issue). It is, however, the same test/error signature already recorded once earlier in this very run (`live-ledger.md` run #42, networkID `6fbf579b...`, timestamp ~15:16:15 UTC) — same build `03335b43` — so this is a second reproduction within the same run, and per the ledger it's been a known, recurring, still-unfixed issue since at least 2026-09-08 (first exposed by this test as a regression, runs #26, #31, #32, #34–#36, and now #42 twice).
+
+### TestBootstrapSuite: failure analysis
+
+#### TestBootstrapWithLastResortDisabled
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.6]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.6:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+This is the SDN Proxmox VM never coming up network-wise, not an EVE/pillar defect. Live evidence: `evetest sdn status`/`net-model` return "SDN client is not initialized," and `evetest sdn ssh` gets a TCP connection that resets during SSH key exchange — the SDN VM's network path is dead, not just slow. `gotest.json` confirms VM 106 (`sdn-240723a0`) was prepared at 16:28:24, got uplink IP `192.168.170.6`, but every gRPC connect retry from 16:28:40 through 16:33:26 (the full ~4m46s budget, 50 consecutive attempts) failed with `no route to host` before the test gave up — it never once succeeded.
+
+This is a known, recurring infra issue per `live-ledger.md`: first seen 2026-09-10 (run #34, `TestZVolProvisionedSizeReported`, then judged a one-off), recurred the same day (run #36, `TestNetworkAdapterPassthrough`), and again earlier today in run #41 (`TestActiveBackupBond`, same build `03335b43`) — now a 4th occurrence in run #42 with a different suite (`TestBootstrapSuite`), same exact "gets uplink IP but gRPC/SSH never becomes reachable" signature each time. It doesn't share a root cause with any other failure investigated in this run and is unrelated to pillar/EVE code — it's a Proxmox/SDN-VM provisioning hiccup on the test infrastructure side.
+
+### TestControllerFaultsSuite: failure analysis
+
+#### TestDeferredQueueDropsReported
+
+##### Failure
+
+```
+
+Timed out after 480.000s.
+When passed a matcher, ReceiveMatcher's channel *must* receive something.
+```
+
+##### Claude's conclusion
+
+That earlier test passed, so it's unrelated. I now have enough to write the root-cause summary.
+
+###### Root cause
+
+The test itself passed — the deferred-queue drop/rejection assertions succeeded (`rejections-reported` checkpoint hit at 16:59:35) — but it then hung in cleanup's `settleApp()`, waiting up to 480s for the app to be reported `HALTED`. Live evidence shows the app actually *did* halt correctly on-device: `AppInstanceStatus`/`DomainStatus` on the EVE device both show `State:119` (HALTED) since 16:59:48, and zedagent's logs show it built and queued exactly two `ZiApp` info messages carrying `state:HALTED` at 16:59:48.273 and 16:59:48.323. Both were immediately dropped by `handleDeferred` with `controller responded 404 Not Found` — because the test's fault (armed to reject `/info` with 404) was still in effect at that exact moment, just before `ClearControllerFaults()` ran at 16:59:49. After that, no further `handleAppInstanceStatusModify`/`PublishAppInfoToZedCloud` log line for this app UUID ever appears, and the Adam DB's `info` archive confirms no `ZiApp` record for this app was received after 16:58:30 (RUNNING) — the two HALTED reports were the last attempts and both were discarded. Since a 404 is treated as a permanent rejection (not retried via the deferred queue) and nothing else re-triggers a fresh `AppInstanceStatus`-driven info publish once the object stops changing, the controller never learned the app reached HALTED, so the test's watch on `ZInfoApp` blocked for the full 8-minute timeout. This does not share a root cause with the sibling `TestDeferredQueueBacklogReported` in this run (which passed) or with this same test's failure in the ledger's run #26 (2026-09-08), which was an unrelated image-staleness issue (missing `DeferredQueueMetric` feature entirely). This specific "final HALTED report racing/lost against fault-clear" failure mode does not appear elsewhere in the ledger, so it looks like a new/first-seen issue rather than a recurring one — likely a genuine gap in the test (not accounting for the possibility that the app's terminal-state report itself can be dropped by the very fault the test just armed) or, less likely, in zedagent's lack of a resend path for a dropped info object once its source status stops changing.
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"4776864c-6310-436d-8245-482c84bfb62c"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789223118  nanos:149209691}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"6680f9e8-58de-4124-bb88-76191288a125"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+I already have the git context from the system reminder (HEAD `08a14977c`, recent commits are all evetest/coverage tooling changes unrelated to `zedrouter`/`nistate`), so no need to re-fetch it.
+
+###### Root cause
+
+**Same pcap-open race in `pkg/pillar/nistate/linux.go` documented in the ledger.** Live `zedrouter` logs on the paused device show, for NI `bc288a6d-4a7a-4961-b8ba-df0abad8b140` (bridge `eth1`, mirror `eth1-m`, carrying vif1/`nbu2x1` of `mgmt-gw-app`): at `14:25:04.089` pcap capture on `eth1-m` fails with `unknown interface eth1-m: route ip+net: no such network interface`, and only **62ms later**, at `14:25:04.151`, the NI reconciler actually executes `create for DummyInterface/eth1-m` — i.e. the pcap-open was attempted before the dummy interface existed. `grep` over the full log buffer confirms `"Installing pcap on eth1-m"` appears exactly once, with no subsequent retry, even though `nbu2x1`'s TC-mirror rules were installed later at `14:25:19.820` — so the sniffer never got a working handle for that bridge, and `zedrouter` never reports an IP for vif1, exactly matching the app-info snapshot (vif0/`nbu1x1` has `IPAddrs:"10.60.10.150"`, vif1/`nbu2x1` has none) and the test's timeout.
+
+This is a **known, recurring issue**: `live-ledger.md`'s top entry (run #42, same day) already root-caused this identical test/signature to the same `nistate/linux.go` defect (pcap-open failure never clears the retry guard so a later-attaching VIF's mirror capture is permanently stuck), and further back it was first seen via `TestAirGapSwitchNI` (run #31, 2026-09-09) and hit this same test verbatim on runs #38 (2026-09-10) and #39 (2026-09-11). This run (version `03335b43`, matching ledger run #41, which hadn't yet recorded this failure) is simply another recurrence — still unfixed on current master, and unrelated to the recent evetest/coverage-tooling commits at HEAD, none of which touch `zedrouter`/`nistate`.
+
+
+#### TestVLANSubinterfacesOnTopOfLAGs
+
+##### Failure
+
+```
+
+Timed out after 300.001s.
+Expected to satisfy: App2 receives IP from VLAN 30 subnet
+AppID:"023b0a2e-c419-4e94-b175-55c1a2ae34fe"  appVersion:"1"  AppName:"vlan30-bond-app"  bootTime:{seconds:1789225607  nanos:166512008}  state:RUNNING  network:{macAddr:"02:16:3e:00:00:02"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x1"}  volumeRefs:"dac81afe-f0e6-47c3-95da-a1ef6c3e3486"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+This is the same recurring pcap-open race in `pkg/pillar/nistate/linux.go` already documented in the ledger and in the earlier `TestMgmtTrafficRoutedViaApp` failure investigated in this run. Live `zedrouter` logs show that at `15:06:18.902` it attempted to install pcap capture on the mirror interface `vlan30bond-m` for NI `f58aa66f-b70a-4794-9916-26b2a9dc2834` (bridge `vlan30bond`), but failed at `15:06:18.905` with `unknown interface vlan30bond-m: route ip+net: no such network interface` — the reconciler didn't actually create `DummyInterface/vlan30bond-m` until `15:06:20.041`, 1.1s later. `AddVif(vlan30bond, nbu1x1, 02:16:3e:00:00:02, 023b0a2e-...)` for `vlan30-bond-app` happened later still, at `15:06:40.990`, but "Installing pcap on vlan30bond-m" appears exactly once in the whole run (the failed attempt) with no retry ever firing — matching the known `cancelPCAP` guard bug where a failed `pcap.OpenLive` never gets cleared, so ARP/DHCP snooping for that NI's lifetime is permanently broken.
+
+This shares the exact same root cause as the `TestMgmtTrafficRoutedViaApp` failure already investigated earlier in this run, and as the earlier failure of this *same* test (`TestVLANSubinterfacesOnTopOfLAGs`) already recorded for run #42 in `live-ledger.md` — there it was App3 (`vlan30-eth2-app`) not getting an IP via mirror `bn2-m`; here it's App2 (`vlan30-bond-app`) not getting an IP via mirror `vlan30bond-m`, same defect, different VIF/mirror hit by the same startup race. This is a known, recurring issue tracked in the ledger since at least 2026-09-09 (first seen via `TestAirGapSwitchNI`), unfixed on current master (build `03335b43`).
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for app "fc91ed20-8de9-457d-9979-45bb9635864d" to be scheduled in cluster "test-cluster"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+The app (`container-app`, UUID `fc91ed20…`) is permanently stuck in `CREATING_VOLUME` and was never even scheduled as a pod/VMI (`zedkube` on edge-dev1 repeatedly reports `AppKubeStatus:NotInCluster` for it, and `kubectl get vmi` shows nothing). Live evidence shows `volumemgr`'s one-shot `virtctl image-upload` (`RolloutDiskToPVC`) got interrupted at ~92% after 96s (`13:49:24`) exactly when edge-dev1's embedded k3s restarted — `ps` on the live device shows `k3s init`/`k3s server` processes only ~9 min old, started at `13:49`, and `zedkube` logged apiserver `connection refused`/`apiserver not ready` from `13:49:54`–`13:50:04`. The immediate retry then failed instantly (`"Failed after 0.035623 seconds ... PVC not found"`, `13:49:54.296`) because the apiserver was still down, and `volumemgr` never retried the upload again (no further `virtctl args` invocation in the logs since). Separately, the CDI `cdi-upload-*` pod for the same PVC did complete successfully at `13:51:13` via the cluster's own CSI/CDI path, but `volumemgr`'s internal state machine never noticed and never advanced the app past `CREATING_VOLUME`, so nothing downstream (domainmgr scheduling the VMI) ever fires — matching the test's "timed out waiting for app to be scheduled" failure.
+
+This is a new, previously-unrecorded failure signature (no `RolloutDiskToPVC`/`virtctl`/scheduling-timeout entries anywhere in `live-ledger.md`), though it's the same underlying class of problem the ledger already documents repeatedly since at least 2026-09-09/09-10: node-join churn on this cluster triggers transient k3s/etcd restarts and Longhorn storage flapping, previously manifesting as readiness timeouts or SSH-unreachability — here it instead hit a non-retrying corner of `volumemgr`'s image-upload path, permanently stalling volume creation. No other suite failure in this run to correlate with.
+
+
+#### TestTieBreakerCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev1")
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence on the paused devices shows this is the **same failure mechanism** as `TestThreeNodesCluster`, investigated earlier in this same run (recorded in `live-investigation.md`): chronic etcd/control-plane overload during node join causes k3s to crash and restart on the joining nodes, blowing through the harness's readiness-wait window. `TestTieBreakerCluster` began waiting at 14:09:48 for all three nodes, but `ps` on the live devices shows `k3s init`/`k3s server` only ~15 minutes old on edge-dev2 (started 14:26) and edge-dev3 (started 14:30) — i.e. both non-first nodes crash-restarted well into the wait. edge-dev2's `k3s.log` contains 2502 occurrences of `"apply request took too long"` and shows etcd raft connectivity to edge-dev3's peer (`2e154af3a8bff02b`) repeatedly flapping (`lost TCP streaming connection`, `dial tcp 10.244.244.4:2380: connect: connection refused`) right around the 14:29:37–14:30:35 restart window — the same etcd-apply-slowness/raft-instability signature (2351/2170 occurrences) seen on the equivalent nodes in `TestThreeNodesCluster`. `evetest cluster info` also shows storage health continuously flapping `HEALTHY`↔`DEGRADED`↔`FAILED` across all three nodes, matching the Longhorn-instability theme both from this run's earlier failure and the ledger.
+
+This is the same root cause as the `TestThreeNodesCluster` failure earlier in this run, and both trace to the ledger's recurring "etcd apply-request/Longhorn instability during cluster join" issue class (documented there since at least 2026-09-09, though the exact "cluster nodes to become ready" timeout message itself first appeared only in this run's `TestThreeNodesCluster` entry, so it's not yet a long-standing named ledger entry beyond today). Notably this time all three nodes (not just two) failed to become ready in the 29-minute window, and by the time of this live investigation `kubectl get nodes` shows all three eventually reached `Ready` — again a slow-convergence near-miss rather than a permanently broken cluster, consistent with the underlying issue being control-plane/storage churn timing rather than a functional defect.
+
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev1")
+```
+
+##### Claude's conclusion
+
+No prior ledger entry mentions this exact "Edge Node Certificate get fail during kube-init join decision" signature — this appears to be a new, previously-unrecorded failure mode. I have enough evidence for a solid root-cause conclusion.
+
+###### Root cause
+
+This is a **different bug** from the earlier `TestThreeNodesCluster`/`TestTieBreakerCluster` failures in this same run (which were caused by etcd/Longhorn slowness during join) — this time `edge-dev2` never even attempted to join the etcd-backed cluster. Live evidence on `edge-dev2`: `zedkube` received the correct `EdgeNodeClusterConfig` (join_server_ip `10.244.244.2`, cluster `test-cluster`) at `14:49:03.769`, but its `publishKubeConfigStatus` calls repeatedly failed with `"Edge Node Certificate get fail"` (`lookupEdgeNodeCert(...) not found`) until `14:50:03.829`, when the cert finally became available and decryption succeeded. Meanwhile `kube-init` (`/persist/kubelog/k3s-install.log`) didn't wait for that: it logged `"single-node config for edge-dev2: node-name only"` at `14:49:36` and started `k3s server` standalone (no `--server`/`--cluster-init`/etcd flags, `--etcd-servers=unix://kine.sock`) at `14:49:56` — roughly 27 seconds *before* the correctly-decrypted clustered `KubeConfig` was ready. `kube-init` never revisited that single-node decision once k3s was running, so `edge-dev2` bootstrapped its own isolated single-node k3s/kine cluster and never joined the `test-cluster` etcd quorum shared by `edge-dev1`/`edge-dev3` (confirmed by `kubectl get nodes` on `edge-dev1` showing only `edge-dev1`/`edge-dev3`, and `evetest cluster info` showing `edge-dev2` permanently stuck at `NODE_ADMISSION_JOINING` reporting only itself). This is exactly what the harness's "waiting for cluster nodes to become ready" 30-minute timeout caught (the wait started right when this test's own initial 3-node cluster formation began, at `14:49:25`).
+
+This is a new, previously-unrecorded failure signature — no entry in `live-ledger.md` mentions `"Edge Node Certificate get fail"` or a node bootstrapping standalone via kine instead of joining. It's not the same root cause as the earlier `TestThreeNodesCluster`/`TestTieBreakerCluster` failures in this run (which converged, just slowly, due to etcd apply-slowness); nor is it the same as the two prior `TestClusterToSingleConversion` ledger entries (2026-09-08 node-removal race, 2026-09-10/09-11 config-confirmation-timeout-after-reboot) — this failure happens during initial 3-node formation, before any conversion logic runs, and is a genuine kube-init/zedkube race rather than a test-timeout-budget issue.
+
 ## [2026-09-12 -- 0.0.0-master-08a14977 (run #42)](https://github.com/milan-zededa/eve/actions/runs/34680667078)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/42/)
