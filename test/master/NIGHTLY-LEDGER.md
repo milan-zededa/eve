@@ -2,6 +2,76 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-13 -- 0.0.0-master-03335b43 (run #45)](https://github.com/milan-zededa/eve/actions/runs/34729399208)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/45/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.024s.
+vlan-switch-ni: Network instance is in error state
+networkID:"d79b9372-0898-4b23-909e-755c8c85e92f"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"vlan100"  ports:"vlan100"  bridgeNum:2  bridgeName:"vlan100"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"d21791f9-1b86-4830-ba46-8cd88858aae9"}  networkErr:{description:"failed items: BridgeFwdMask/vlan100 (failed to zero-out forwarding mask for bridge vlan100: open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789272780  nanos:816384969}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+This confirms the exact same bridge-recreate race documented in the ledger. I have enough evidence now.
+
+###### Root cause
+
+This is the same known, recurring `BridgeFwdMask`/`VLANBridge` create-path race already logged in `live-ledger.md` for `TestSwitchNIPortConfigRace` (runs #26, #31, #32, #34–#36, #42, #43) and for the sibling `vlan100` port-config-race scenario. Live `zedrouter` logs show the reconciler tearing down and rebuilding `vlan100` repeatedly during this test's deliberate port churn: at `04:12:43.423` it created `VLANBridge/bn2` after moving the port away, then at `04:13:00.143` recreated `VLANBridge/vlan100` (`expectedBridgeID: 0`) in the same pass that ran `BridgeFwdMask/vlan100`, which failed with `open /sys/class/net/vlan100/bridge/group_fwd_mask: no such file or directory` — the bridge sysfs directory transiently didn't exist because `vlan100` wasn't a real bridge yet at that instant (`VLANBridge/vlan100 with error: link vlan100 is not a bridge`, same timestamp). The reconciler self-healed 250ms later (`04:13:00.762`, "Fixed config items: BridgePort/vlan100/nbu2x1, VLANBridge/vlan100"), then rebuilt the bridge once more with `expectedBridgeID: 14` at `04:13:01.096`, and live inspection right now confirms `group_fwd_mask` is healthy (`0x0`) and `vlan100` is a proper bridge — so this was transient, not a lasting fault.
+
+This failure has no relation to the earlier `TestSwitchNIPortConfigRace` failure already recorded for this same run/build in the ledger's top entry (that one, at `23:16–23:17` on 2026-09-12, was the unrelated pcap-retry/IP-race defect in `nistate/linux.go`) — this is a second, distinct rerun of the test roughly 5 hours later hitting a different bug. This `BridgeFwdMask`/bridge-recreate race is a known, recurring issue per `live-ledger.md`, first attributed to this test in run #26/#31/#32 (~2026-09-08/09), recurring in runs #34–#36, #42 (twice), and most recently #43 — so it has been an open, unfixed defect since at least 2026-09-08, still present on today's build (`0.0.0-master-b5242393`).
+
+### TestBootstrapSuite: failure analysis
+
+#### TestBootstrapWithMgmtVLANUsingOverrideJSON
+
+##### Failure
+
+```
+Failed to setup devices [edge-dev]: rpc error: code = Unknown desc = failed to setup EVE device "edge-dev": failed to upload disk image "/root/.evetest/images/eve-f11f6bf8-edge-dev/disk.qcow2" to storage "local": Post "https://10.208.13.184:8006/api2/json/nodes/farfalle/storage/local/upload": write tcp 10.208.13.67:39858->10.208.13.184:8006: write: broken pipe
+```
+
+##### Claude's conclusion
+
+**Root cause: recurring Proxmox API upload flakiness against the storage backend, not an EVE/pillar defect.** Live `gotest.json` for this test shows 3 upload attempts of the EVE device's `disk.qcow2` to Proxmox node `farfalle` storage `local`: attempt 1 failed with `unexpected end of JSON input` (02:10:11), attempts 2 and 3 both failed identically with `write tcp 10.208.13.67:*->10.208.13.184:8006: write: broken pipe` (02:10:16, 02:10:21) — the connection to the Proxmox API host was accepted but died mid-write of the image body each time. The harness then tore down before any device/SDN was provisioned, which live checks confirm: `evetest sdn status` → "SDN client is not initialized", `evetest eve info` → "no EVE devices are currently onboarded" — there's nothing further live to inspect.
+
+This shares the same root cause as the earlier `TestBootstrapWithTransparentProxy` failure in this very run (00:09:52–00:10:21, logged in `live-ledger.md`), which hit the identical `broken pipe` writing to the same `farfalle:8006`/storage `local` endpoint — that time uploading the SDN image, this time the EVE device image. Per the ledger, that first occurrence was itself noted as a new, not-previously-recorded signature (no prior "broken pipe"/farfalle/8006 matches before this run), so this is not a long-standing known issue — it's the same infra-side Proxmox connectivity problem recurring for the second time within tonight's run (#44), pointing at instability on the Proxmox host/network path rather than in EVE or pillar code.
+
+### TestStorageSuite: failure analysis
+
+#### TestVolumes
+
+##### Failure
+
+```
+
+Told to stop trying after 0.011s.
+Stop waiting for: volume v-vhdx is created
+Volume reports an error: Found error in content tree v-vhdx-image attached to volume v-vhdx: 
+Size '0' provided in image config of 'v-vhdx.vhdx' is incorrect.
+Download status (5570560 / 0). Aborting the download
+
+uuid:"34905987-5904-4b56-8e10-5635d8c01ca5" displayName:"v-vhdx" usage:{createTime:{seconds:-62135596800} refCount:1 lastRefcountChangeTime:{seconds:1789262075 nanos:304371794}} state:DOWNLOAD_STARTED volumeErr:{description:"Found error in content tree v-vhdx-image attached to volume v-vhdx: \nSize '0' provided in image config of 'v-vhdx.vhdx' is incorrect.\nDownload status (5570560 / 0). Aborting the download\n" timestamp:{seconds:1789262076 nanos:619495217} severity:SEVERITY_NOTICE entities:{entity:ENTITY_CONTENT_TREE entity_id:"3e42b373-6132-43ce-afc0-4eca9f9047a8"} retry_condition:"Will retry in 1m0s; have retried 0 times"}
+```
+
+##### Claude's conclusion
+
+Confirmed live evidence matches exactly. This is a known, long-recurring bug with a stale device build.
+
+###### Root cause
+
+Live logs on the paused device confirm the same mechanism seen throughout `live-ledger.md`: the datastore server for `v-vhdx.vhdx` "ignored Range; skipping copiedBytes manually" (01:14:35.704), then `downloader` logged `Update progress for v-vhdx.vhdx: 5570560/0` (nonzero `currentSize`, zero `totalSize`) at 01:14:36.398, immediately tripping the unconditional `currentSize > totalSize` check and aborting with `Size '0' provided in image config ... incorrect` — this propagated through `doUpdateContentTree`/`doUpdateVol` into the reported `volumeErr`, matching the failure verbatim.
+
+This is a **known, recurring issue**, documented in the ledger for `TestStorageSuite/TestVolumes` going back to at least **2026-09-09 (run #31)**, and recurring repeatedly through runs #32/#35/#36/#37/#41+ up to today. The fix (guarding the check with `totalSize > 0`, landed as `2e809b3ee`/`ed743e546` et al.) **is present on current master** (`git merge-base --is-ancestor 2e809b3ee HEAD` succeeds), but the device under test here is running image `0.0.0-master-03335b43`, and `git merge-base --is-ancestor 2e809b3ee 03335b43c` fails — confirming the deployed build predates the fix. So, as with the identical entry from this same run at ledger line 470, this is a **stale test image**, not a regression: master already has the guard, the nightly device build just hasn't picked it up yet. No other suite has failed in this run to compare for a shared root cause.
+
 ## [2026-09-13 -- 0.0.0-master-b5242393 (run #44)](https://github.com/milan-zededa/eve/actions/runs/34713594419)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/44/)
