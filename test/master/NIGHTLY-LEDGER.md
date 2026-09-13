@@ -2,6 +2,81 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-13 -- 0.0.0-master-ebd50eb8 (run #46)](https://github.com/milan-zededa/eve/actions/runs/34744410714)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/46/)
+
+### TestControllerFaultsSuite: failure analysis
+
+#### TestDeferredQueueDropsReported
+
+##### Failure
+
+```
+
+Timed out after 480.001s.
+When passed a matcher, ReceiveMatcher's channel *must* receive something.
+```
+
+##### Claude's conclusion
+
+This is a known, recurring issue — confirmed by an earlier ledger entry for this exact test/failure, and today's evidence matches it precisely.
+
+**Root cause:** The test itself passed its main assertions (rejections-reported checkpoint hit at 08:13:54), but hangs in cleanup's `settleApp()` waiting for the app to be reported HALTED. Live evidence: `AppInstanceStatus`/`DomainStatus` on the device both show `State:119` (HALTED) since ~08:14:08, and zedagent's logs show it published a `ZiApp` info message with `state:HALTED` at 08:14:07.823 — but this happened while the test's 404-on-`/info` fault was still armed (`ClearControllerFaults()` didn't run until 08:14:09.124). That HALTED report was dropped by the deferred queue as a permanent rejection (404 = "controller doesn't know this object", not retried), and since the app's state never changes again after HALTED, nothing re-triggers a fresh per-app info publish — confirmed by Adam's `info` DB and `evetest eve app-info` still showing the stale `RUNNING` state minutes later, and zedagent's logs showing no further `PublishAppInfoToZedCloud` for this app UUID after 08:14:07 (only periodic device-level info, which doesn't carry per-app state). The controller therefore never learns the app reached HALTED, so the test's watch blocks for the full 8-minute `convergeTimeout`.
+
+This is the identical failure mode recorded in the ledger for this same test, first seen 2026-09-08 (there attributed to an unrelated missing-feature/image-staleness issue) and already analyzed in detail as this exact "final HALTED report racing/lost against fault-clear" scenario in a prior run of this same suite (`live-ledger.md` line 271-287, same root cause description verbatim). It's a race: the app halts fast enough that its terminal-state report gets caught by the same fault the test just armed, exposing either a test gap (not accounting for the terminal report itself being droppable) or a genuine gap in zedagent's info-retry logic for objects that stop changing after a dropped report. It does not share a root cause with the earlier suite runs in today's session (`TestDeferredQueueBacklogReported` ran and completed fine beforehand).
+
+### TestLPSSuite: failure analysis
+
+#### TestNetworkLocalChanges
+
+##### Failure
+
+```
+
+Timed out after 153.580s.
+The function passed to Eventually failed at /evetest/tests/lps/helpers_test.go:134 with:
+Unexpected error:
+    <*fmt.wrapError | 0xc0015b6d00>: 
+    failed to execute script over SSH for app cfce1cd2-43db-4d11-8ffc-2babba67a959: SSH session creation failed: ssh: unexpected packet in response to channel open: <nil> (stderr: )
+    {
+        msg: "failed to execute script over SSH for app cfce1cd2-43db-4d11-8ffc-2babba67a959: SSH session creation failed: ssh: unexpected packet in response to channel open: <nil> (stderr: )",
+        err: <*fmt.wrapError | 0xc0015b6c80>{
+            msg: "SSH session creation failed: ssh: unexpected packet in response to channel open: <nil>",
+            err: <*errors.errorString | 0xc003f71420>{
+                s: "ssh: unexpected packet in response to channel open: <nil>",
+            },
+        },
+    }
+occurred
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live device logs show the SSH failure lines up exactly with `TestNetworkLocalChanges`'s own network-revert step: at 08:36:37 the test submitted the empty LPS config, and at 08:36:38.475 `nim` began a DPC re-verify that (a) released/re-leased DHCP on eth0, briefly removing its `172.20.20.123` address from 08:36:38.514 to 08:36:39.909, and (b) had `zedrouter` delete the local-NI's DNAT port-forward rules (`2222→10.11.12.128:22`) at 08:36:38.844 and only recreate them at 08:36:40.602 — with the whole DPC cycle not reaching `DPC_SUCCESS` until 08:36:43–44. The harness's TCP connect to `172.20.20.123:2222` (logged "Connected... on attempt 1/3") landed at 08:36:38.126, just before this ~2s NAT/address flap, so this time the raw TCP session was already established when the DNAT rule and eth0 IP were pulled out from under it — producing the SSH-layer symptom "unexpected packet in response to channel open" (a corrupted/redirected mid-handshake session) rather than the TCP-level dial/handshake timeout seen previously. The app (`lps-app`, `cfce1cd2-...`) never rebooted (single boot at 08:34:47, still `RUNNING`), and the device fully recovered (DPC_SUCCESS, DNAT rules restored) well before the test's 153s budget expired, confirming this is a transient harness/device race, not a lasting defect. This is the same root-cause family already recorded in `live-ledger.md` for `TestLPSSuite`/`TestNetworkLocalChanges` — first seen 2026-09-09 (run #31), recurring again 2026-09-10 (run #36) — i.e. a known, recurring issue since 2026-09-09: the LPS config-revert step's brief NAT/DHCP teardown racing a single un-timeout-bounded SSH session, just surfacing today with a slightly different low-level SSH error signature than the prior two occurrences.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 8): timed out waiting for LastProcessedConfig >= 2026-09-13 09:57:05.290902696 +0000 UTC
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+This is the same known, recurring issue documented in `live-ledger.md`, reproducing for at least the fourth time (2026‑09‑10 config v8, 2026‑09‑11 config v8, 2026‑09‑12 config v5, and now 2026‑09‑13 config v8 again): `TestClusterToSingleConversion`'s `ApplyConfig` confirm step uses a fixed 2‑minute `deviceApplyConfigTimeout`, but withdrawing `edge-dev3` from the cluster forces a full reboot + pillar/zedbox re-bootstrap before it can publish an updated `LastProcessedConfig`, which routinely blows through that budget.
+
+Live evidence on `edge-dev3` confirms the identical mechanism: config version 8 (timestamp `09:57:05.290902696Z`) was fetched, and `/proc/uptime` shows the device has only been up **44.75s** as of now (`09:59:28`), i.e. it rebooted around `09:58:43` — well past the harness's ~`09:59:05` deadline. `ps -ef` on the device currently shows only kernel threads and `/sbin/init` — `zedbox`/`zedagent`/`zedkube`/`domainmgr` haven't even started yet — so it's still mid-boot, nowhere near able to publish a fresh `last_processed_config` (the metrics endpoint still reports the stale pre-reboot value from `09:18:40`).
+
+This is unrelated to any other issue in this run and matches exactly the mechanism (and even the same config version, 8) recorded for the 2026‑09‑10 and 2026‑09‑11 occurrences: a test-timeout-margin bug in the harness racing a fixed 2‑minute confirm window against an inherently reboot-bound per-device cluster-withdrawal path — not a new EVE/pillar regression.
+
 ## [2026-09-13 -- 0.0.0-master-03335b43 (run #45)](https://github.com/milan-zededa/eve/actions/runs/34729399208)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/45/)
