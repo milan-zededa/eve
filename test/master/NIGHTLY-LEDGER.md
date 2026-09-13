@@ -2,6 +2,156 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-13 -- 0.0.0-master-03335b43 (run #47)](https://github.com/milan-zededa/eve/actions/runs/34761384855)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/47/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.00098094s (excluding download) waiting for app "56a7900d-aa7d-4cf5-ada0-88fdc87252e5" (flowlog-test-app) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+That confirms it: local socket at `7B1414AC:C5B3 → 02AAA8C0:1388` (192.168.170.2:5000) is state `01` (ESTABLISHED) with a non-zero `tx_queue` (0xD7), i.e. a stalled connection that never completes/errors — exactly the same stuck-HTTPS-probe pattern from before.
+
+###### Root cause
+
+`flowlog-test-app` is stuck in `RESOLVING_TAG` while pulling `lfedge/evetest-ubuntu-ctr:1.0` from datastore `docker://192.168.170.2:5000` (confirmed via `evetest eve app-info` and `evetest eve config`). Live `ss`/`/proc/net/tcp` on the device shows the tag-resolve connection to `192.168.170.2:5000` sitting `ESTABLISHED` with a non-zero, stalled `tx_queue`, and a live `curl` confirms the registry is HTTP-only (`http://…/v2/` → clean `200`) while HTTPS fails immediately with `wrong version number`. Since the datastore isn't marked insecure/localhost, `go-containerregistry`'s resolve path only tries HTTPS with no request deadline, so the connection hangs rather than falling back to HTTP — this is the identical mechanism already root-caused in this same run's ledger entry for `TestFlowLog` (timestamped earlier today), and per `live-ledger.md` it's a known, recurring issue against this same registry going back to at least 2026-09-09 (`TestLocalNetInstanceACLsWithFlowLog` run #31, and a `multi-port-app` occurrence). This is not a new bug — it's a re-occurrence of the long-standing HTTPS-probe-hang-against-an-HTTP-only-registry defect in the OCI tag-resolution path, not a pillar/EVE regression from recent commits.
+
+
+#### TestPortForwarding
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.4]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.4:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+This confirms the identical signature seen repeatedly in the ledger: SDN client uninitialized, SSH resetting during key exchange, device not onboarded. This is exactly the same recurring infra pattern, not a new bug.
+
+###### Root cause
+
+Test-infrastructure failure, not an EVE/pillar code defect. The broker provisioned SDN VM `sdn-114d8a89`, which obtained uplink IP `192.168.170.4` at 18:03:22, but every gRPC tunnel-connect retry from 18:03:37 through at least 18:05:31 failed with `no route to host` (per `gotest.json`), matching the reported error exactly. Live checks right now reproduce the identical signature: `evetest sdn status`/`logs` → "SDN client is not initialized", `evetest sdn ssh` → TCP connects then resets during SSH key exchange, and `evetest eve info` → device "not onboarded" — the SDN VM's network path never came up at all.
+
+This does not share a root cause with the earlier `TestFlowLog` failure in this same run (that was an unrelated HTTPS-probe-hang against the HTTP-only registry). It is, however, a well-established, recurring infra issue per `live-ledger.md`: the identical "uplink IP obtained, then every gRPC/SSH connect attempt fails with `no route to host` for the entire retry budget" pattern — including this exact same test, `TestPortForwarding` — has been recorded repeatedly since at least 2026-09-10 (runs #34, #36), again on 2026-09-11 (run #37), and twice earlier in today's runs #41 and #42 (once against `TestPortForwarding` itself, at uplink IP `192.168.170.5`). It's a Proxmox/SDN-VM provisioning hiccup on the test infrastructure side, unrelated to EVE/pillar code.
+
+### TestControllerFaultsSuite: failure analysis
+
+#### TestDeferredQueueDropsReported
+
+##### Failure
+
+```
+
+Timed out after 480.001s.
+When passed a matcher, ReceiveMatcher's channel *must* receive something.
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live `zedagent` logs confirm the exact drop: at 17:46:37.827 the app (`adcd97a9-…`, reported-app) transitioned to `HALTING`, and at 17:47:09.282 zedagent published its terminal `HALTED` info message and immediately tried to send it (17:47:09.289) — but the test's armed `/info` 404 fault was still active, so it was dropped as a permanent rejection (`dropping message, controller responded 404 Not Found`) at 17:47:09.298, three seconds before the test's `ClearControllerFaults()` ran at 17:47:12. Since the app's state never changes again after HALTED, no further `PublishAppInfoToZedCloud` call for this app UUID ever fires (confirmed — only the unrelated device-level 495a7ee2 object keeps retrying every ~30s afterward), so `evetest eve app-info` still shows the stale `RUNNING` state and the test's `settleApp()` watch blocks for the full 8-minute timeout.
+
+This is a known, recurring issue: it matches, evidence-for-evidence, the top entry already in `live-ledger.md` for this same test/build/run, and per that entry's own analysis this exact "final HALTED report racing/lost against fault-clear" failure mode has been recurring since it was first attributed to this test on 2026-09-08. It does not share a root cause with the other suite failures earlier in this run — `TestDeferredQueueBacklogReported` (the previous test in the same suite) passed cleanly beforehand, so this is isolated to the race between the app's terminal-state report and the fault-clear timing in `TestDeferredQueueDropsReported` specifically.
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestPNACWithoutProxy
+
+##### Failure
+
+```
+failed to get device "edge-dev" ECDH certificate: context deadline exceeded
+```
+
+##### Claude's conclusion
+
+No other failures in this run and no prior occurrence of this test/signature in the ledger — this is a new failure, not a recurrence.
+
+###### Root cause
+
+The device onboarded successfully into Adam at 16:08:34, and tpmmgr locally generated both EdgeNodeCert entries (restricted-signing at 16:08:24, ECDH-exchange by 16:08:26 — `zedrouter: msrv: EdgeNodeCert, len 2`). zedagent then sent 4 concurrent `POST .../attest` requests at 16:08:55–56 (its normal multi-interface retry behavior) to publish those certs. Adam's log shows one of those concurrent requests hit: `Failed to attestProcess: failed to get device options: getDeviceOptions failed to unmarshal: unexpected end of JSON input` — Adam read its own per-device `options.json` while another goroutine was mid-write (truncated/empty JSON), a file-write race in the Adam test-controller stub, not in EVE. That's the last `/attest` request ever seen — no retries followed for the remaining ~90s before the test's fixed deadline — so the device's ECDH cert (type `CERT_TYPE_DEVICE_ECDH_EXCHANGE`) never landed in Adam's `certs.json` (which still only has the type-11 restricted-signing cert), and the harness's polling GET on `/admin/device/.../certs` eventually hit `context deadline exceeded`.
+
+This is a distinct failure signature from anything in `live-ledger.md` (no `attestProcess`/`getDeviceOptions`/`TestPNAC` hits there) and no other test failed in this same run, so it doesn't share a root cause with an earlier failure — it looks like a new, first-seen issue, most likely a race condition in the Adam mock controller's file-based device-options storage rather than an EVE regression.
+
+
+#### TestVLANSubinterfacesOnTopOfLAGs
+
+##### Failure
+
+```
+
+Timed out after 300.001s.
+Expected to satisfy: App2 receives IP from VLAN 30 subnet
+AppID:"e9a68b2a-446f-4250-a0bc-551471e51689"  appVersion:"1"  AppName:"vlan30-bond-app"  bootTime:{seconds:1789322432  nanos:703249299}  state:RUNNING  network:{macAddr:"02:16:3e:00:00:02"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x2"}  volumeRefs:"ed3597a4-de04-4142-928b-db04b6390bb0"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence confirms the same known pcap-race bug already logged multiple times in the ledger for this exact test. Zedrouter's log shows it attempted `Installing pcap on vlan30bond-m` for NI `fcf1daec-...` (`ni2-vlan30-bond`) at `17:59:53.747`, but it failed 3ms later with `unknown interface vlan30bond-m: route ip+net: no such network interface` — the reconciler didn't actually create `DummyInterface/vlan30bond-m` until `17:59:54.519`, ~770ms later. No further "Installing pcap" attempt is ever logged afterward (confirmed via full device log search), matching the known `cancelPCAP`-guard bug in `pkg/pillar/nistate/linux.go` where a failed `pcap.OpenLive` never clears the retry guard. I confirmed the DHCP exchange itself succeeded on the wire: the SDN's `dnsmasq` lease file for VLAN 30 shows App2's MAC (`02:16:3e:00:00:02`) got `172.22.30.19` — but zedrouter's `AppNetworkStatus`/`IPAssignments` for that MAC is still `null`, since it never captured the packet to learn the IP.
+
+This is the same recurring issue already recorded in `live-ledger.md` for this exact test (`TestVLANSubinterfacesOnTopOfLAGs`, App3 in run #40, App2 again in run #43) and for the sibling `TestAirGapSwitchNI`/`TestMgmtTrafficRoutedViaApp` failures — known/recurring since at least **2026-09-09**, unfixed on current master. It does **not** share a root cause with the other failure already investigated in this run (`TestPNACWithoutProxy`, an unrelated Adam-controller `attestProcess`/`getDeviceOptions` file-write race) — these are two independent, coincidentally co-occurring bugs in the same run.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for app "ee993922-972e-4b63-ae91-b085305bc32b" to be scheduled in cluster "test-cluster"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence confirms this is the same chronic etcd/control-plane overload during cluster formation that's been recurring in this suite since at least 2026‑09‑09 — specifically the same failure signature ("Timed out waiting for app ... to be scheduled in cluster") already seen once before, in run #43 on 2026‑09‑12.
+
+On `edge-dev1` (host of app `container-app`, still `CREATING_VOLUME`), `k3s.log` shows 959 "apply request took too long" etcd warnings and 4 crash/restarts within the device's 33‑minute uptime (`k3s.log.restart.*` at 15:38:14, 15:41:19, 15:44:09, plus the current `k3s server`/`k3s init` processes only 67s old at investigation time), with load average 8.24 on a 4‑vCPU node and repeated `connection refused`/proxy-dialer errors to peer 10.244.244.4:6443. This churn delayed the app's `cdi-upload-*` pod all the way through scheduling (PVC-scratch-not-found retries), image pull, and container start — it only actually started running its upload server at ~15:43:50, seconds before the test's 10‑minute wait (15:34:17–15:44:17) expired, so the volume never finished uploading and `domainmgr` never got to scheduling the VMI/pod (confirmed: PVCs Bound, `cdi-upload` pod Running but no VMI/virt-launcher pod exists anywhere in the cluster).
+
+This is the same root-cause class as run #43 (2026‑09‑12, ledger line ~414–420), which hit the identical "app never scheduled" message via a related mechanism (a stalled/non-retried `volumemgr` upload after a k3s restart); today's manifestation is the upload simply never getting a large enough uninterrupted window due to repeated k3s crash-restarts. It also shares the same underlying etcd/Longhorn-instability-during-join issue documented in the ledger going back to at least 2026‑09‑09, though the exact "waiting for app to be scheduled" symptom is a variant first seen only in run #43, so it isn't yet a long-standing named entry beyond these last two occurrences.
+
+### TestStorageSuite: failure analysis
+
+#### TestVaultZvolTrimReclaimsBlocks
+
+##### Failure
+
+```
+
+fstrim should reclaim at least ~256 MiB of ghost blocks; trimmed 190656512 bytes (output: "/persist/vault: 181.8 MiB (190656512 bytes) trimmed\n")
+Expected
+    <int64>: 190656512
+to be >=
+    <int>: 209715200
+```
+
+##### Claude's conclusion
+
+Confirmed: no prior ledger entries for `TestVaultZvolTrimReclaimsBlocks` or this fstrim failure signature — this is a first-time (new) failure, not a recurring one.
+
+###### Root cause assessment
+
+`fstrim -v /persist/vault` reclaimed only 181.8 MiB (190,656,512 bytes) against a required ≥200 MiB (256 MiB written), a ~74 MiB shortfall. Live evidence points to concurrent I/O contention on the shared `persist` ZFS pool during the test's write→delete→trim window:
+
+- `zpool iostat -v persist 1 3`, run right now while the run is paused, still shows active background writes to the pool (up to 177 write ops / 11.1 MB/s in the first sample) even with no test actively driving I/O — confirming this eve-k device has continuous background write churn on the same pool that backs `/persist/vault`.
+- `/persist/vault/containerd` alone holds 6.2 GiB, and `/persist/vault/volumes/replicas` (Longhorn) exists on this node — exactly the two concurrent writers the test's own doc comment calls out as sources of unrelated churn on this dataset ("image pulls, replica I/O, k3s state churn").
+- The test's tight timeline (all of vault-readiness wait, baseline trim, 256 MiB write, and delete+trim happened in ~107s between 15:43:33–15:45:20) leaves a narrow but real window where a concurrent writer on the ext4-on-zvol filesystem could reuse a portion of the just-freed blocks from `rm trim_test` before `fstrim` ran over them, so those blocks were no longer eligible for DISCARD — accounting for the shortfall.
+
+This does not appear related to the earlier `TestControllerFaultsSuite`/`TestDeferredQueueDropsReported` entry in the ledger (different suite, different subsystem — controller-queue timeout vs. storage/ZFS trim), and no PR diff was supplied for this run, so no code-change correlation can be assessed. Given the test explicitly designed its assertion around fstrim's own reported count *because* concurrent cluster I/O on this dataset is expected and unavoidable, this looks like a flaky-by-design race between the 256 MiB test write/delete and background Longhorn/containerd/k3s writes to the same zvol, rather than a regression in trim/DISCARD or vault logic itself.
+
 ## [2026-09-13 -- 0.0.0-master-ebd50eb8 (run #46)](https://github.com/milan-zededa/eve/actions/runs/34744410714)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/46/)
