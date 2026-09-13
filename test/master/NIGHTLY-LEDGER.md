@@ -2,6 +2,142 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-13 -- 0.0.0-master-b5242393 (run #44)](https://github.com/milan-zededa/eve/actions/runs/34713594419)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/44/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNetInstanceACLsWithFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.000217071s (excluding download) waiting for app "142cb6cb-dec5-4d4c-898d-b1b013b180d3" (acl-app-2) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+App entered `RESOLVING_TAG` at 21:29:43 and never left it through the full 5-minute timeout at 21:37:45.
+
+Root cause: `acl-app-2` (uuid `142cb6cb...`) is hung in `RESOLVING_TAG` resolving its image tag against the registry at `192.168.170.2:5000`. Live evidence: `/proc/net/tcp` shows a connection from the device to `192.168.170.2:5000` sitting `ESTABLISHED` (state `01`) with a non-zero, unflushed `tx_queue` (`0x10F`) — i.e. the resolve request is stuck mid-flight rather than erroring out. A live `curl` from the device confirms why: plain HTTP to that registry returns a clean `200`, but HTTPS fails immediately with `wrong version number` (it's an HTTP-only registry), so `go-containerregistry`'s HTTPS-first ping/resolve — issued with no request deadline (`context.Background()`) — can hang indefinitely instead of falling back to HTTP once it doesn't get a fast rejection.
+
+This is the exact same signature already hit twice earlier in this same run (`acl-app-1` in `TestSwitchNetInstanceACLs`/multi-port-app, `flowlog-test-app` in `TestFlowLog`) against the same registry, and per `live-ledger.md` it's a known/recurring issue going back to at least run #31 (2026-09-09, `TestLocalNetInstanceACLsWithFlowLog`). This is not a new bug — it's the same HTTPS-probe-hang-against-an-HTTP-only-registry defect in the OCI tag-resolution path.
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app has IPs from both application subnets
+AppID:"9662b4ce-10cd-48ee-b50a-6deeb7922eed"  appVersion:"1"  AppName:"container-app"  bootTime:{seconds:1789255023  nanos:587726566}  state:RUNNING  network:{macAddr:"02:16:3e:00:00:01"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:00:00:02"  devName:"vif1"  IPAddrs:"10.53.100.181"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu2x1"}  volumeRefs:"17522573-22c0-4bf4-b1d5-736ff2644e2e"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+This is a well-documented, known bug: a permanent "give up after first failed pcap open" defect in `pkg/pillar/nistate/linux.go`'s ARP/DHCP snooping for switch network instances.
+
+**Root cause:** Live `zedrouter` logs show that at 23:16:49.250, zedrouter tried to install a pcap capture on the mirror interface `bn2-m` (for `multiswitch-ni`, which carries `vif0`/`nbu1x1` of `container-app`), and it failed immediately with `unknown interface bn2-m: route ip+net: no such network interface` — because the NI reconciler didn't actually create `DummyInterface/bn2-m` until 233ms later, at 23:16:49.483. `StartCollectingForNI` sets `ni.cancelPCAP` before the `sniffDNSandDHCP` goroutine runs, and when `pcap.OpenLive` fails inside that goroutine it just logs and returns without clearing `ni.cancelPCAP`, so the retry guard never re-fires — even after `nbu1x1` attached later at 23:17:05, no further "Installing pcap on bn2-m" attempt appears anywhere in the logs (unlike the sibling `vlan100-m` mirror for `vlan-switch-ni`, which succeeded on its one attempt). I confirmed the underlying connectivity was actually fine: the SDN's own `dnsmasq` log for `multiport-network` shows a complete DHCP exchange for the app's MAC (`02:16:3e:00:00:01`), granting it `10.53.20.180` at 23:17:53 — but since zedrouter's snooper never got a working pcap handle, it never observed that lease, so `container-app`'s vif0 never got an `IPAddrs` in `AppNetworkStatus`, causing the test's `Eventually` to time out waiting for IPs on both application subnets.
+
+This does **not** share a root cause with the earlier-investigated `TestSwitchNetInstanceACLsWithFlowLog` failure in this run (an unrelated OCI-registry HTTPS-probe-hang). It **is however the same known, recurring `nistate/linux.go` pcap-retry defect** documented extensively in `live-ledger.md`, first seen via `TestAirGapSwitchNI` on 2026-09-09 (run #31) and recurring across many different tests and runs since (`TestMgmtTrafficRoutedViaApp`, `ni3-eth2`/VLAN switch-NI tests, `ni-lan`, etc.) — a long-standing, still-unfixed issue dating back to at least 2026-09-09, now manifesting for the first time under `TestSwitchNIPortConfigRace` specifically (this test's ledger entries previously only showed the unrelated `BridgeFwdMask`/`group_fwd_mask` bug).
+
+### TestBootstrapSuite: failure analysis
+
+#### TestBootstrapWithTransparentProxy
+
+##### Failure
+
+```
+Failed to setup devices [edge-dev]: rpc error: code = Unknown desc = failed to setup SDN device: failed to upload disk image "/root/.evetest/images/sdn-abbb2b4d/evetest-sdn.img.qcow2" to storage "local": Post "https://10.208.13.184:8006/api2/json/nodes/farfalle/storage/local/upload": write tcp 10.208.13.67:60284->10.208.13.184:8006: write: broken pipe
+```
+
+##### Claude's conclusion
+
+No prior "broken pipe"/upload/8006/farfalle matches in the ledger — this is a new failure signature, not previously recorded. I have enough evidence now.
+
+###### Root cause
+
+**Root cause: transient network/TLS failure between the evetest broker and the Proxmox API host (`10.208.13.184:8006`, node `farfalle`) during the SDN disk-image upload, not an EVE/pillar defect.** Live `gotest.json` shows the EVE device VM (107) was successfully prepared, but all 3 upload attempts of the SDN qcow2 image (`POST .../nodes/farfalle/storage/local/upload`) failed identically with `write tcp 10.208.13.67:*->10.208.13.184:8006: write: broken pipe` at 00:09:52, 00:09:57, and 00:10:02 — the connection was accepted but died mid-write of the (multi-hundred-MB) upload body each time, pointing to the Proxmox API server or an intermediate path dropping/resetting the connection rather than a client-side bug. This occurred before any SDN VM or EVE device onboarding happened, so `evetest sdn status`/`evetest eve info` now correctly report no client/device initialized — the harness had already torn down the partially-provisioned EVE VM (107) by 00:10:16 per its own logs, and there's nothing further live to inspect for this failure. It doesn't share a root cause with any other failure in this run (no other suite in this run has been investigated yet), and this exact "broken pipe" / upload-to-`farfalle`/8006 signature does not appear anywhere in `live-ledger.md`, so this looks like a new, not-previously-recorded infra hiccup rather than a known recurring issue.
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestIntermittentConnectivity
+
+##### Failure
+
+```
+Failed to receive SDN tunnel properties: rpc error: code = Unavailable desc = unable to connect to SDN gRPC service on any of the uplink IPs ([192.168.170.4]): failed to establish tunnel to SDN: rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 192.168.170.4:50121: connect: no route to host"
+```
+
+##### Claude's conclusion
+
+This is exactly the same signature confirmed live: `evetest sdn status`/`logs` return "SDN client is not initialized", `evetest sdn ssh` gets a TCP connection that resets during SSH key exchange, and the EVE device is "not onboarded" — the SDN VM's network path never came up.
+
+**Root cause:** The SDN VM (`sdn-8aecfaba`, Proxmox VM 106) was powered on and reported uplink IP `192.168.170.4` at 21:40:37, but every gRPC tunnel-connect retry from then through 21:45:39 (the full 5-minute budget) failed with `no route to host` before `openTunnelToSDN` gave up (`setup.go:823` per the stack trace). Live checks right now reproduce the identical state: `evetest sdn status`/`logs` → "SDN client is not initialized," `evetest sdn ssh` → TCP connects but resets during SSH key exchange, and `evetest eve info` → device "not onboarded" — i.e. the SDN VM never actually became reachable on its network path, matching the earlier-run signature verbatim.
+
+This does not share a root cause with any other failure in this run (no other suite failures have been logged for this run yet). Per `live-ledger.md`, this is a well-established, recurring infra issue — the identical "uplink IP obtained, then every gRPC/SSH connect attempt fails with `no route to host` for the entire retry budget" pattern has been recorded repeatedly since at least 2026-09-10 (runs #34, #36), again on 2026-09-11 (run #37), and twice more in today's earlier runs #41 and #42 (`TestActiveBackupBond`, `TestPortForwarding`, `TestBootstrapWithLastResortDisabled`). It's a Proxmox/SDN-VM provisioning hiccup on the test infrastructure side, unrelated to EVE/pillar code.
+
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"ad48b802-5525-4708-90f9-d3f5e5e13a71"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789249870  nanos:720399418}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  IPAddrs:"fe80::16:3eff:fe02:0"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"ff916b8c-5215-441e-aa83-8105bc4a5e2c"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+Confirmed — only one attempt, no retry, matching the known bug pattern exactly.
+
+###### Root cause
+
+Same defect as the ledger's recurring `nistate/linux.go` pcap-open race, confirmed live in this device's `zedrouter` log: at `21:50:39.285` it tried `Installing pcap on eth1-m` for NI `5ebe05aa-4b77-4d3a-bca3-428c1c7225d6` (bridge `eth1`, carrying vif1/`nbu2x1` of `mgmt-gw-app`) and failed with `unknown interface eth1-m: route ip+net: no such network interface`, but the NI reconciler didn't actually create `DummyInterface/eth1-m` until `21:50:39.377` — 92ms later. `AddVif(eth1, nbu2x1, ...)` didn't happen until `21:50:59.142`, and "Installing pcap on eth1-m" appears exactly once in the whole log with no retry, so the ARP/DHCP snooper never got a working handle on that mirror and `zedrouter` never reports an IP for vif1 — exactly matching the app-info snapshot (vif0 has `10.60.10.150`, vif1 has none) and the test's 180s timeout.
+
+This is the same root cause as the earlier `TestIntermittentConnectivity` failure's underlying class of issue is different (that one was an SDN VM reachability problem, unrelated), but this failure itself is identical to the multiple `TestMgmtTrafficRoutedViaApp` entries already logged in `live-ledger.md` for this same run (#43) and prior runs, and is the same defect first identified via `TestAirGapSwitchNI` on 2026-09-09 — a known, recurring, unfixed issue (pcap-open-before-dummy-interface-exists race in `pkg/pillar/nistate/linux.go`, with the failed-open guard never clearing to allow retry) that has now surfaced repeatedly across many different switch-NI tests through at least today's build.
+
+
+#### TestLACPBond
+
+##### Failure
+
+```
+
+Timed out after 300.001s.
+Expected to satisfy: LACP bond has IP, no errors and reports LACP status
+machineArch:"x86_64"  cpuArch:"x86_64"  platform:"x86_64"  ncpu:4  memory:7796  storage:40006  powerCycleCounter:-1  minfo:{manufacturer:"QEMU"  productName:"Standard PC (Q35 + ICH9, 2009)"  version:"pc-q35-10.1"  serialNumber:"7FVBLC16"  UUID:"Not Settable"  biosVendor:"EDK II"  biosVersion:"unknown"  biosReleaseDate:"02/02/2022"}  assignableAdapters:{type:PhyIoNetEth  name:"ethernet0"  members:"ethernet0"  usedByBaseOS:true  ioAddressList:{macAddress:"da:39:78:d0:19:f2"}  usage:PhyIoUsageMgmtAndApps}  assignableAdapters:{type:PhyIoNetEth  name:"ethernet1"  members:"ethernet1"  usedByBaseOS:true  ioAddressList:{macAddress:"1e:68:56:62:e1:30"}  usage:PhyIoUsageMgmtAndApps}  assignableAdapters:{type:PhyIoNetEth  name:"ethernet2"  members:"ethernet2"  usedByBaseOS:true  ioAddressList:{macAddress:"ce:30:0f:9c:43:d9"}  usage:PhyIoUsageMgmtAndApps}  dns:{DNSservers:"127.0.0.1:53"  DNSsearch:"test."}  storageList:{device:"nbd12"}  storageList:{device:"vda"  total:65536}  storageList:{device:"nbd0"}  storageList:{mountPath:"/persist/checkpoint"}  storageList:{mountPath:"/persist/clear/volumes"}  storageList:{mountPath:"/hostfs"  total:273}  storageList:{device:"vda4"  total:5  partitionLabel:"CONFIG"  partitionTypeGuid:"13307e62-cd9c-4920-8f9b-91b45828b798"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30054"}  storageList:{device:"nbd10"}  storageList:{device:"nbd11"}  storageList:{device:"nbd5"}  storageList:{mountPath:"/persist/vault/verifier"}  storageList:{mountPath:"/persist/status"}  storageList:{mountPath:"/persist/agentdebug"}  storageList:{mountPath:"/persist/vault/containerd"}  storageList:{mountPath:"/persist/ingested"}  storageList:{device:"/persist/vector/data/buffer/v2/dev_upload_socket/buffer-data-0.dat"}  storageList:{mountPath:"/persist/certs"}  storageList:{device:"vda3"  total:10240  partitionLabel:"IMGB"  partitionTypeGuid:"5dfbf5f4-2848-4bac-aa5e-0d9a20b745a6"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30053"}  storageList:{mountPath:"/persist/log"}  storageList:{mountPath:"/persist/pubsub-large"}  storageList:{device:"vda2"  total:10240  partitionLabel:"IMGA"  partitionTypeGuid:"5dfbf5f4-2848-4bac-aa5e-0d9a20b745a6"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30052"}  storageList:{device:"nbd1"}  storageList:{device:"nbd8"}  storageList:{mountPath:"/persist/containerd-system-root"}  storageList:{mountPath:"/config"  total:5}  storageList:{mountPath:"/persist/newlog"}  storageList:{mountPath:"/"  total:3898}  storageList:{mountPath:"/persist/clear"}  storageList:{mountPath:"/persist/vault/volumes"}  storageList:{mountPath:"/persist/patchEnvelopesCache"}  storageList:{mountPath:"/persist/vault/downloader"}  storageList:{device:"nbd9"}  storageList:{device:"vda1"  total:2048  partitionLabel:"EFI System"  partitionTypeGuid:"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30051"}  storageList:{device:"nbd6"}  storageList:{mountPath:"/persist/vault"}  storageList:{mountPath:"/persist/tmp"}  storageList:{mountPath:"/persist"  total:40006  storageLocation:true}  storageList:{device:"nbd4"}  storageList:{device:"/persist/vector/data/buffer/v2/keep_sent_queue_socket/buffer-data-0.dat"}  storageList:{mountPath:"/persist/netdump"}  storageList:{device:"vda7"  total:2048  partitionLabel:"EFI System"  partitionTypeGuid:"c12a7328-f81f-11d2-ba4b-00a0c93ec93b"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30056"}  storageList:{device:"vda9"  total:40953  partitionLabel:"P3"  partitionTypeGuid:"5f24425a-2dfa-11e8-a270-7b663faccc2c"  partitionUuid:"ad6871ee-31f9-4cf3-9e09-6f7a25c30059"}  storageList:{device:"nbd15"}  storageList:{device:"nbd14"}  storageList:{mountPath:"/persist/patchEnvelopesUsageCache"}  storageList:{device:"nbd13"}  storageList:{device:"nbd7"}  storageList:{mountPath:"/persist/memory-monitor/output"}  storageList:{device:"nbd3"}  storageList:{device:"nbd2"}  storageList:{mountPath:"/persist/nettrace"}  bootTime:{seconds:1789251402}  swList:{activated:true  partitionLabel:"IMGA"  partitionDevice:"/dev/vda2"  partitionState:"active"  status:INSTALLED  shortVersion:"0.0.0-pr34713594419-b5242393-kvm-amd64"  downloadProgress:100  userStatus:UPDATED}  swList:{partitionLabel:"IMGB"  partitionDevice:"/dev/vda3"  partitionState:"unused"  status:INITIAL}  HostName:"f30734de-2529-46b0-9847-cf5ac44939f5"  lastRebootReason:"NORMAL: First boot of device - at 2026-09-12T22:17:29.849557002Z"  lastRebootTime:{seconds:1789251449  nanos:849557002}  systemAdapter:{status:{version:1  key:"zedagent"  timePriority:{seconds:1789251504  nanos:769828168}  lastSucceeded:{seconds:1789251512  nanos:253204304}  ports:{ifname:"eth0"  name:"ethernet0"  free:true  proxy:{}  macAddr:"da:39:78:d0:19:f2"  dns:{}  up:true  err:{timestamp:{seconds:1789251512  nanos:253063832}}  usage:PhyIoUsageMgmtAndApps  networkUUID:"00000000-0000-0000-0000-000000000000"  mtu:1500  config_source:{origin:NETWORK_CONFIG_ORIGIN_CONTROLLER  submitted_at:{seconds:1789251504  nanos:769828168}}  pnac_status:{}}  ports:{ifname:"eth1"  name:"ethernet1"  free:true  proxy:{}  macAddr:"da:39:78:d0:19:f2"  dns:{}  up:true  err:{timestamp:{seconds:1789251512  nanos:253067723}}  usage:PhyIoUsageMgmtAndApps  networkUUID:"00000000-0000-0000-0000-000000000000"  mtu:1500  config_source:{origin:NETWORK_CONFIG_ORIGIN_CONTROLLER  submitted_at:{seconds:1789251504  nanos:769828168}}  pnac_status:{}}  ports:{ifname:"bond1"  name:"lacp-bond"  isMgmt:true  free:true  dhcpType:4  subnet:"172.20.20.0/24"  domainname:"test."  proxy:{}  macAddr:"da:39:78:d0:19:f2"  IPAddrs:"172.20.20.123"  IPAddrs:"fe80::851d:da7a:126a:663e"  defaultRouters:"172.20.20.1"  dns:{DNSservers:"10.16.16.25"  DNSdomain:"test."}  up:true  err:{description:"interface bond1: no suitable IP address available"  timestamp:{seconds:1789251512  nanos:253128905}  severity:SEVERITY_ERROR}  networkUUID:"b319bc45-2c79-4464-b519-e0f45e1d9fe1"  mtu:1500  config_source:{origin:NETWORK_CONFIG_ORIGIN_CONTROLLER  submitted_at:{seconds:1789251504  nanos:769828168}}  pnac_status:{}  bond_status:{mode:BOND_MODE_802_3AD  mii_monitor:{enabled:true  polling_interval:100}  arp_monitor:{}  lacp:{lacp_rate:LACP_RATE_FAST  active_aggregator_id:1  partner_mac:"ca:fe:fe:80:68:22"  actor_key:9  partner_key:9}  members:{logicallabel:"ethernet0"  mii_up:true  lacp:{aggregator_id:1  actor_churn_state:BOND_LACP_CHURN_STATE_MONITORING  partner_churn_state:BOND_LACP_CHURN_STATE_MONITORING}}  members:{logicallabel:"ethernet1"  mii_up:true  lacp:{aggregator_id:1  actor_churn_state:BOND_LACP_CHURN_STATE_MONITORING  partner_churn_state:BOND_LACP_CHURN_STATE_MONITORING}}}}  ports:{ifname:"eth2"  name:"ethernet2"  isMgmt:true  free:true  dhcpType:4  subnet:"172.20.21.0/24"  domainname:"test."  proxy:{}  macAddr:"ce:30:0f:9c:43:d9"  IPAddrs:"172.20.21.146"  IPAddrs:"fe80::6d3c:ab03:4057:9b83"  defaultRouters:"172.20.21.1"  dns:{DNSservers:"10.16.17.25"  DNSdomain:"test."}  up:true  err:{timestamp:{seconds:1789251512  nanos:253049657}}  usage:PhyIoUsageMgmtAndApps  networkUUID:"b2e3cd7c-7b94-421a-8ad5-b7da9a1a5e67"  mtu:1500  config_source:{origin:NETWORK_CONFIG_ORIGIN_CONTROLLER  submitted_at:{seconds:1789251504  nanos:769828168}}  pnac_status:{}}}}  HSMStatus:NOTFOUND  dataSecAtRestInfo:{status:DATASEC_AT_REST_DISABLED  info:"TPM is either absent or not in use"  vaultList:{name:"Application Data Store"  status:DATASEC_AT_REST_DISABLED  vaultErr:{description:"TPM is either absent or not in use"  timestamp:{seconds:1789251493  nanos:497527698}  severity:SEVERITY_ERROR}  pcrStatus:PCR_DISABLED}}  sec_info:{sha_root_ca:"\xdf4j\x1c\xac(m\xff\x0e@c\xfd\xce\\'\x87\x96ζ\x8f\xbf&\xb9\x88\xaf\xe1Vkm%\xb16"}  configItemStatus:{configItems:{key:"app.allow.vnc"  value:{value:"true"}}  configItems:{key:"debug.default.loglevel"  value:{value:"debug"}}  configItems:{key:"debug.default.remote.loglevel"  value:{value:"debug"}}  configItems:{key:"debug.enable.console"  value:{value:"true"}}  configItems:{key:"debug.enable.ssh"  value:{value:"ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC+H1RQUqHjFBJgGpslC73XsLz8Fg5WpNPble9naKyWz1Um8D2bOtQK/yguCImPeBYcH7/73z8dtC6d+dT0UF26+o7Vh6RN/U2X/5nkaZr7oM5QwwZTsD7Nd2Szww9wrRhXvpV0aFgUBDM9BIF1qBQxLNd+Jp8uttrgF3zj/cm7+SXllG54sv8WFBMfTX7J8cQ1jxLyp/Sc6PXK0zBaVzZwhmCCmI6CIzJK6ahMRgXm2vSP6doYibkB3ETSskaCXSHxDiZoaQK2ZY+GqNZkUusbau43MXVPTiJknXqUcmXhQmwyMSltQ3G54jcgn4TDObSQnW7vGdLI7zIEAHnk5D1BmKzQUBh5aRLdhBtb6T3uvVtAqGgnXWKD+d2GjMiy4G31zfIlArvC3G8LxwsDoxQL0XKaFjnEmXIptVXC68zq+laIM8YGDDOCEc6RfczP7lA4p6rv0gQUfTNqy0P3a4ulvIDb4hET1Gkh+Azkuw1do9NIhXPxDBmPdkTnKwJv6XelpdCPCw1QT5o7WdOkUgorf/e03jGDnnn1QBWpSPB9gLB/oDmT/Gzm8tCYaq7ggwYUq1fSMBvnbFaclH1KVcC2Gwn8UPLt9HHa/mGywuISZYl3gy7ztlKyAjHEZH053U7I8OaMvv/CFo9aR4Teeb5848REZYAes+yJIz3lJV1K5Q=="}}  configItems:{key:"newlog.allow.fastupload"  value:{value:"true"}}  configItems:{key:"timer.config.interval"  value:{value:"5"}}  configItems:{key:"timer.deviceinfo.interval"  value:{value:"30"}}  configItems:{key:"timer.download.retry"  value:{value:"60"}}  configItems:{key:"timer.location.app.interval"  value:{value:"20"}}  configItems:{key:"timer.location.cloud.interval"  value:{value:"300"}}  configItems:{key:"timer.metric.interval"  value:{value:"20"}}  configItems:{key:"timer.test.baseimage.update"  value:{value:"60"}}}  last_boot_reason:BOOT_REASON_FIRST  hardware_watchdog_present:true  capabilities:{HWAssistedVirtualization:true  IOVirtualization:true}  state:ZDEVICE_STATE_ONLINE  storage_info:{pool_name:"/persist"  storage_type:STORAGE_TYPE_INFO_EXT4  storage_state:STORAGE_STATUS_ONLINE  disks:{disk_name:{name:"/dev/vda9"  serial:"unknown"}  status:STORAGE_STATUS_ONLINE  smart_status:"failed"}}  attestation_info:{state:ATTESTATION_STATE_COMPLETE}  api_capability:API_CAPABILITY_DEFERRED_QUEUE_METRICS  optional_capabilities:{hw_inventory_support:true}  device_name:"edge-dev"
+```
+
+##### Claude's conclusion
+
+**Root cause:** This is the same known NIM port-retest race documented for `TestLACPBond` in run #40 (earlier today) and originally in run #26 (2026-09-08). Live evidence from this device's `/run/nim/DeviceNetworkStatus/global.json` matches that pattern exactly: `bond1` (lacp-bond) and `ethernet2` are both same-cost mgmt ports; `eth2` failed at `22:18:31.463Z` but was immediately retested and succeeded at `22:18:32.253Z`, while `bond1`'s failure recorded at `22:18:32.253Z` (matching the "no suitable IP address available" error in the test's failure snapshot) wasn't cleared until `22:23:32.504Z` — a full `NetworkTestInterval` (300s) later, arriving just after the test's own 300.001s timeout. Per `controllerconn.VerifyAllIntf`, once `eth2` satisfies `requiredSuccessCount`, `bond1`'s stale failed `TestResults` aren't refreshed until the next full DPC test rotation, so with both intervals set to 300s it's a coin-flip whether the bond's error clears in time. This is not related to the earlier `TestIntermittentConnectivity`/SDN-VM-reachability failure in this run — different mechanism entirely. Per `live-ledger.md`, this exact race has recurred intermittently for `TestLACPBond` since at least 2026-09-08 (run #26), most recently again earlier today (run #40) — it's a known, unfixed timing issue, not a new regression.
+
+### TestUpgradeSuite: failure analysis
+
+#### TestEVEUpgradeKVMtoKVM
+
+##### Failure
+
+```
+EVE upgrade to 0.0.0-pr34713594419-b5242393-kvm-amd64 failed: Download 0% done
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+The device (info file `01789248539882603640` in the Adam DB, timestamped 21:29:11) recorded a `swErr` on the IMGB base-os entry: `"Retry download in 1m0s: rootfs-...img failed: lookupDatastoreConfig(c47ba22f-5938-41ec-8a8e-67d16d23d248) error: Get(zedagent/DatastoreConfig) unknown key c47ba22f-5938-41ec-8a8e-67d16d23d248"` — volumemgr/downloader tried to resolve the BaseOsConfig's datastore UUID before zedagent had actually published that `DatastoreConfig` object over pubsub, a transient startup-ordering race (only ~3 min after first boot). Because `addUserSwInfo` in `pkg/pillar/cmd/zedagent/reportinfo.go` unconditionally flips `UserStatus` to `FAILED` whenever `SwErr` is non-empty but doesn't refresh `SubStatusStr` to match, the controller reported the stale `"Download 0% done"` string (left over from the `DOWNLOAD_STARTED`/0%-progress case) instead of the real error — and evetest's `waitForUpgrade` prefers `SubStatusStr` over `SwErr.Description`, so it fatal'd on the misleading text rather than the actual (retryable) cause.
+
+Live evidence confirms this was purely transient: the device's own downloader retried and succeeded fully by 21:29:42 (100% progress, `DOWNLOADED`), the image was installed to IMGB, and by 21:29:46 baseosmgr set IMGB to `"updating"` — the device is now mid-reboot into the new image (unreachable via SSH) with the upgrade otherwise proceeding normally, entirely after evetest had already failed the test. The identical `lookupDatastoreConfig(...) unknown key` race recurred harmlessly again at 21:32:08 right after the device's reboot (self-corrected in ~7s), showing it's a generic pubsub-ordering race between volumemgr and zedagent, not specific to this run.
+
+I found no prior `TestEVEUpgradeKVMtoKVM` entry and no other ledger entry mentioning `lookupDatastoreConfig`/"unknown key"/DatastoreConfig races, so this does not appear to be a known/recurring issue in the ledger — it looks like a first-time-observed occurrence. No PR diff was provided in this task, so I can't comment on PR relatedness.
+
 ## [2026-09-12 -- 0.0.0-master-03335b43 (run #43)](https://github.com/milan-zededa/eve/actions/runs/34695189622)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/43/)
