@@ -2,6 +2,65 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-14 -- 0.0.0-master-03335b43 (run #49)](https://github.com/milan-zededa/eve/actions/runs/34797892351)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/49/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Told to stop trying after 0.031s.
+vlan-switch-ni: Network instance is in error state
+networkID:"546078ac-6cd2-4cc6-9bdb-6aabe642e6cc"  networkVersion:"1"  instType:1  displayname:"vlan-switch-ni"  activated:true  CurrentUplinkIntf:"ethernet3"  ports:"ethernet3"  bridgeNum:2  bridgeName:"eth3"  ipAssignments:{macAddress:"02:16:3e:00:00:02"  ipAddress:"10.53.100.181"}  vifs:{vifName:"nbu2x1"  macAddress:"02:16:3e:00:00:02"  appID:"b42c9b66-ddeb-4e29-850c-e1a0f19606a7"}  assignedAdapters:{type:PhyIoNetEth  name:"ethernet3"  members:"ethernet3"  usedByAppUUID:"35b47967-76a8-4e6a-b56f-0b16caaf0956"  ioAddressList:{macAddress:"d6:42:ef:26:d8:c8"}}  networkErr:{description:"failed items: BridgeFwdMask/eth3 (failed to zero-out forwarding mask for bridge eth3: open /sys/class/net/eth3/bridge/group_fwd_mask: no such file or directory)"  timestamp:{seconds:1789368338  nanos:559214967}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+I have enough evidence for the current run (#48). Two earlier failures this run (`TestIntermittentConnectivity`, `TestMgmtTrafficRoutedViaApp`) are unrelated (DNS/NIM-retest cadence and a test-predicate race, respectively) — no shared root cause with this one.
+
+###### Root cause
+
+Live device logs show `zedrouter`'s NI reconciler repeatedly deleting/recreating the `eth3` bridge (0.0.0-master-03335b43, `TestSwitchNIPortConfigRace`'s deliberate port-config churn moving `ethernet3`/`keth3` and the app VIF `nbu2x1` between NI configurations). At 06:45:38.549–.551 the reconciler tore down `bn2`'s `TCMirror`/`BridgePort`/`VLANPort`/`TCIngress`/`BridgeFwdMask` items for `eth3`, and the `BridgeFwdMask/eth3` delete at 06:45:38.598 (the retry logged just before) failed with `open /sys/class/net/eth3/bridge/group_fwd_mask: no such file or directory` — surfaced by zedagent at 06:45:38.662, matching the reported `networkErr` timestamp — because the bridge was transiently absent from sysfs mid-recreation (the new `VLANBridge/eth3` create didn't finish until 06:45:39.105–40.065, `expectedBridgeID` moving 0→16). Live inspection right now confirms `eth3` is a healthy bridge with `keth3`/`nbu2x1` attached and `group_fwd_mask 0`, i.e. it self-healed and this was transient, not a lasting fault.
+
+This is the same **known, recurring** `BridgeFwdMask`/bridge-recreate race documented extensively in `live-ledger.md` — a lack of race-tolerance in the NI reconciler's bridge-dependent `Create`/`Delete` paths when the underlying bridge is torn down/recreated during `TestSwitchNIPortConfigRace`'s port churn (commit `8f277c37b` hardened some `Delete` paths but not all `Create` paths). It's been recurring since it was first exposed as a regression by this test on 2026-09-03/09-08 (run #26) and has reappeared in runs #31, #32, #34–#36, #42, #43, always against the synthetic `vlan100` bridge — today's occurrence is the same defect family but the first time it's hit the *physical-port* bridge `eth3` itself (and on a delete-path retry rather than a create), so it's a new manifestation of an old, still-unfixed bug rather than a new one.
+
+### TestControllerFaultsSuite: failure analysis
+
+#### TestDeferredQueueDropsReported
+
+##### Failure
+
+```
+
+Timed out after 480.000s.
+When passed a matcher, ReceiveMatcher's channel *must* receive something.
+```
+
+##### Claude's conclusion
+
+**Root cause:** `reported-app` (`4927c1c3-…`) transitioned to `HALTED` (state 119) at 03:34:27.147, and zedagent published/sent its terminal `ZiApp` info at 03:34:27.168–.174 — but the test's armed `/info` 404 fault (active 03:33:55.716 → 03:34:28.773) was still in effect, so it was dropped as a permanent rejection at 03:34:27.183, ~1.6s before `ClearControllerFaults()` ran. Live evidence confirms this stands: `AppInstanceStatus` on the device still shows `State:119`/`Activated:false` (truly HALTED locally), but that was the last `PublishAppInfoToZedCloud` call ever logged for this app UUID — since its state never changes again, nothing re-triggers a fresh publish, so Adam/the harness's `app-info` view is stuck at `RUNNING` and `settleApp()` blocked for the full 8-minute timeout.
+
+This does not share a root cause with today's earlier suite failures — `TestDeferredQueueBacklogReported` (the test immediately prior in the same suite) passed cleanly (193.8s). It **is** a known, recurring issue: this exact "terminal HALTED report raced/lost against fault-clear" mechanism was first accurately identified in run #46 (2026-09-13) — explicitly called first-seen there — recurred again in run #47 later that same day, and this is now its third occurrence (run #48, today). Note: the ledger's run #47 entry loosely attributes this to "since 2026-09-08" (run #26), but run #46's own analysis shows the 2026-09-08 occurrence was actually a different, unrelated bug (missing `DeferredQueueMetric`/image staleness) — so 2026-09-13 is the accurate start date for this specific race. No PR diff was supplied for this investigation, so no code-change correlation applies; this looks like a genuine gap (either in the test's fault-window sizing, or in zedagent lacking a resend path for a dropped info object once its source status stops changing) rather than a fresh regression.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev3")
+```
+
+##### Claude's conclusion
+
+**Root cause:** `edge-dev3`'s Longhorn/CDI pods are stuck crash-looping with `exec /usr/local/sbin/longhorn-manager: exec format error` (confirmed live via `kubectl logs`, reproducible on repeat calls, not a one-off) — and the identical failure occurs on `edge-dev2`, while `edge-dev1` (the first node to join) runs the exact same `longhornio/longhorn-manager:v1.9.1` image successfully. Node arch is confirmed `x86_64` on `edge-dev3`, ruling out a genuine cross-arch mismatch, so this looks like a corrupted/truncated image layer or overlay unpack specific to these two nodes. Pod events on `edge-dev3` show every Longhorn pod (`longhorn-manager`, `longhorn-ui` x2, `longhorn-driver-deployer`) hit `SandboxChanged: Pod sandbox changed, it will be killed and re-created` simultaneously ~15 minutes into the run — a mass sandbox invalidation consistent with the node's containerd/CRI runtime being disrupted mid-join, after which the re-created containers came up unable to exec their binaries. Because Longhorn never became healthy on `edge-dev3` (`cluster info` shows its `storage.health` stuck `FAILED` throughout), the node never satisfied cluster readiness, producing the reported timeout. This shares the same broader "joining-node instability during 3-node etcd-backed cluster formation" issue class documented in `live-ledger.md` as recurring since at least 2026-09-09, but every prior `TestThreeNodesCluster`/related ledger entry describes a different concrete mechanism (etcd apply-slowness/raft flapping, CSI `node-driver-registrar` no-route-to-host, or a stalled volume upload) — none mention an `exec format error`/corrupted-binary symptom, so this specific manifestation appears to be new/previously unrecorded, not a confirmed repeat of an exact known bug.
+
 ## [2026-09-14 -- 0.0.0-master-03335b43 (run #48)](https://github.com/milan-zededa/eve/actions/runs/34779372694)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/48/)
