@@ -2,6 +2,125 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #51)](https://github.com/milan-zededa/eve/actions/runs/34915466635)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/51/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.000908175s (excluding download) waiting for app "f9597448-001b-4171-91ec-23e4a529d367" (flowlog-test-app) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+`flowlog-test-app` is stuck in `RESOLVING_TAG` while pulling its image from datastore `docker://192.168.170.2:5000` (confirmed via `evetest eve app-info`/`evetest eve config`). Live evidence on the device confirms the exact known failure mode: `/proc/net/tcp` shows a connection to `192.168.170.2:5000` in `ESTABLISHED` state with a stalled, non-zero `tx_queue` (`0000010F`), and a live `curl` from the device shows the registry is HTTP-only — `http://192.168.170.2:5000/v2/` returns a clean `200`, while `https://192.168.170.2:5000/v2/` fails immediately with `wrong version number`. Since the datastore config doesn't mark the registry as insecure/HTTP, the OCI tag-resolution path only attempts HTTPS with no request deadline, so the connection hangs indefinitely instead of falling back to HTTP, blocking the app from ever reaching `RUNNING`.
+
+This is not a new issue — it's the same HTTPS-probe-hang-against-an-HTTP-only-registry defect documented extensively in `live-ledger.md` for `TestFlowLog`/this same `192.168.170.2:5000` registry, recurring repeatedly since at least **2026-09-09** (first as `TestLocalNetInstanceACLsWithFlowLog` in run #31, and recurring again multiple times through today's earlier runs). No other suite failure has been reported in this run to compare for a shared root cause, and no PR diff was supplied for correlation.
+
+
+#### TestApplicationGateway
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+Expected to satisfy: app-gw reports 3 VIFs with IPs
+AppID:"776d1c92-fc2e-40c8-ab9e-b26a4b14059b"  appVersion:"1"  AppName:"app-gw"  bootTime:{seconds:1789440060  nanos:5703868}  state:RUNNING  network:{macAddr:"02:16:3e:01:00:00"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x2"}  network:{macAddr:"02:16:3e:01:00:01"  devName:"vif1"  IPAddrs:"172.28.1.2"  defaultRouters:"172.28.1.1"  dns:{}  ipv4_up:true  localName:"nbu2x2"}  network:{macAddr:"02:16:3e:01:00:02"  devName:"vif2"  IPAddrs:"172.28.2.2"  defaultRouters:"172.28.2.1"  dns:{DNSservers:"172.28.2.1"}  ipv4_up:true  localName:"nbu3x2"}  volumeRefs:"e1f771d7-cc9a-484d-8023-6b197cdc60aa"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+The guest actually completed DHCP successfully — the SDN's dnsmasq log for the `app-network` segment (bridged to EVE's `ethernet1`/switch NI `ni-eth1`) shows a full DORA exchange for `vif0`'s MAC `02:16:3e:01:00:00` completing with `DHCPACK ... 10.203.10.150` at `02:41:11`, just 11s after boot — well inside the 180s test window. However, EVE's own reporting of that VIF never reflects it: every `PublishAppInfoToZedCloud` for `app-gw` from boot through the timeout shows `vif0` with `defaultRouters:"<nil>"` and no `IPAddrs`, and live `evetest eve ni-info ni-eth1` right now still shows `ipAssignments:{macAddress:"02:16:3e:01:00:00"}` with no address populated — while the sibling local-NI vifs (`vif1`/`vif2`) correctly report their static IPs. Since `ni-eth1` is a switch NI, EVE relies on DHCP/ARP pcap-snooping (`nistate/linux_flow.go`) via the `bn2-m` mirror to learn the guest's DHCP-assigned IP, and the mirror/TC rules for `nbu1x2` were confirmed in place (`02:41:03`) before the DHCP handshake (`02:41:10-11`), yet the assignment was still never recorded — pointing to a bug in pillar's switch-NI DHCP-snoop → VIF-IP-assignment path rather than anything wrong with the app, network config, or DHCP server. This does not share the earlier `TestFlowLog` failure's root cause (an unrelated HTTPS-probe-hang against an HTTP-only registry), and this specific test/failure (`TestApplicationGateway`, "3 VIFs with IPs") does not appear anywhere in `live-ledger.md`, so it looks like a new, not-previously-recorded occurrence.
+
+
+#### TestNICCountChangeOrderedInterface
+
+##### Failure
+
+```
+timed out after 3m0.000688621s (excluding download) waiting for app "3ac6e657-52fe-453f-b76e-16af755672a2" (container-app) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+No prior ledger entries mention this specific `IngestBlob`/CAS-load-hang mechanism, so this appears to be a new failure mode not previously recorded.
+
+###### Root cause
+
+`container-app` (uuid `3ac6e657...`) never hangs in `RESOLVING_TAG` as the failure summary's "last state" suggests — live device logs show it actually cleared tag-resolution and download in under a second and progressed all the way to `LOADING` at 100% by 03:41:15 (confirmed via `evetest eve logs`/`app-info`). The real blocker is downstream: `zedbox`'s `IngestBlob` for one specific 26.9MB image layer (`sha256:1dde92b8...`) logged "Attempting to load blob" into containerd/CAS at 03:41:42 and never logged "Loaded the blob successfully" — it's still stuck there 6+ minutes later at investigation time, whereas the identical blob loaded in well under a second (0.7s) the first time this same image was ingested earlier in the run (03:31:49–03:31:50). Since `doUpdateContentTree` requires all component blobs loaded before the content tree can reach `LOADED`, this single stuck CAS ingest permanently blocks the volume, so `domainmgr` never gets a chance to schedule the VM and the app can never reach `RUNNING` — consistent with the reported 3-minute timeout. There's also a lone kernel `clocksource: Long readout interval` warning at 03:41:27 (a ~1.3s host scheduling stall) right around when the hang began, suggesting host/VM contention as a possible trigger, though a single blip wouldn't normally explain a hang lasting many minutes. This does not match the root cause of the other failures already investigated in this run (`TestFlowLog`'s HTTPS-probe-hang-against-HTTP-only-registry, and `TestApplicationGateway`'s switch-NI DHCP-snoop bug) — those never got past `RESOLVING_TAG`/DHCP-snooping, whereas here that stage completed cleanly. It also doesn't match anything in `live-ledger.md` (no prior entries mention `IngestBlob`/CAS blob-load hangs), so this looks like a new, previously-unrecorded failure mode rather than a known recurring issue. I was unable to get an interactive SSH session on the device (evetest's SSH tunnel reported "failed to detect any IP address," despite the device's own reported info showing a valid, up management IP) to directly inspect the live containerd/CAS state, so I can't confirm the exact reason the ingest call itself is blocked (e.g. containerd daemon contention, disk I/O stall, or a lock/deadlock in the CAS ingest path).
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev3")
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence shows all three devices (`edge-dev1/2/3`) rebooted together at 03:54:42, then never re-formed the 3-node etcd cluster: `edge-dev1`'s `/persist/kubelog/k3s-install.log` shows kube-init logging `"single-node config for edge-dev1: node-name only"` at 03:55:54 (identical to its initial single-node startup at 03:35:58) and starting `k3s server` standalone again, and its `zedkube` log confirms this with a steady stream of `clusterStatusHTTPHandler: not control-plane and etcd` from 04:00 onward. `kubectl get nodes` on `edge-dev1` and `edge-dev3` each show only themselves (not a 3-node cluster), and `edge-dev2` has no running `k3s server` process at all (kubectl fails with `connection refused` to `localhost:8080`) — so instead of resuming the joined cluster after the reboot, each node fell back to (or lost) its single-node bootstrap path, which is exactly what the harness's 30-minute "waiting for cluster nodes to become ready" timeout caught. Separately, `edge-dev1`'s kubevirt `virt-api` pods are stuck `CrashLoopBackOff` with `exec /usr/bin/virt-api: exec format error`, blocking kube-init's own readiness wait — the same "exec format error" symptom class the ledger recorded for `longhorn-manager` in run #48 (2026-09-14), though on a different binary this time. No other suite failure occurred earlier in this same run to correlate with. This is a recurring, known issue class: the ledger documents an essentially identical kube-init "single-node config" race (falling back to standalone instead of joining) for `edge-dev2` in run #42 (2026-09-12), and separately documents etcd/Longhorn join-instability and "exec format error" crash-looping (run #48, 2026-09-14) as long-standing recurring themes for this suite dating back to at least 2026-09-09 — today's failure looks like the same "post-reboot kube-init falls back to single-node" bug from 2026-09-12, now triggered by a full 3-node simultaneous reboot rather than a cert-fetch race.
+
+### TestStorageSuite: failure analysis
+
+#### TestVaultZvolTrimReclaimsBlocks
+
+##### Failure
+
+```
+
+Timed out after 120.001s.
+/persist/vault ext4-on-zvol must be mounted before writing test data
+Expected success, but got an error:
+    <*fmt.wrapError | 0xc001647dc0>: 
+    failed to execute script over SSH for EVE device edge-dev: Process exited with status 32 (stderr: time="2026-09-15T02:35:55Z" level=warning msg="DEPRECATION: The support for cgroup v1 is deprecated since containerd v2.2 and will be removed by no later than May 2029. Upgrade the host to use cgroup v2."
+    )
+    {
+        msg: "failed to execute script over SSH for EVE device edge-dev: Process exited with status 32 (stderr: time=\"2026-09-15T02:35:55Z\" level=warning msg=\"DEPRECATION: The support for cgroup v1 is deprecated since containerd v2.2 and will be removed by no later than May 2029. Upgrade the host to use cgroup v2.\"\n)",
+        err: <*ssh.ExitError | 0xc0011c5f00>{
+            Waitmsg: {status: 32, signal: "", msg: "", lang: ""},
+        },
+    }
+```
+
+##### Claude's conclusion
+
+No prior occurrences of this exact SSH/exec exit-32 symptom found in the ledger. I have enough evidence now to conclude.
+
+**Root cause:** The `/persist/vault` ext4-on-zvol *was* actually mounted very early — kernel log shows `EXT4-fs (zd0): mounted filesystem ... r/w` at 02:29:07.946, only ~56s after this freshly-provisioned device's first boot (02:28:11.808) — so the test's mount-readiness gate wasn't waiting on a real unmet condition. The failure is instead in the SSH transport used to check it: `eve exec pillar mountpoint -q /persist/vault` runs via `ctr t exec` into the pillar container (per `pkg/dom0-ztools/rootfs/bin/eve`), and I confirmed live that `mountpoint`'s own exit code for a non-mounted/nonexistent path is `1`, not `32` — so the reported "status 32" isn't the command's logical answer but a wrapper/exec-layer failure. Live evidence shows this device is severely CPU-starved during that window: load average is currently 9.12 on only 4 vCPUs, `volumemgr`/`vaultmgr` watchdog log lines show a ~4.5-minute gap with no activity (02:30:12 → 02:34:55/02:35:17) right as this single-node EVE-K cluster was standing up k3s/kubevirt/CDI/Longhorn control-plane components (`virt-operator`, `cdi-operator`, `virt-api`, `longhorn-manager`, `containerd` all near the top of current CPU usage), and `containerd` itself is at 15% CPU with an `exe` process pegged at 133%/18%. This matches the same broader "chronic CPU/etcd/control-plane overload during single/multi-node cluster formation on this EVE-K device profile" issue class documented repeatedly in the ledger since at least 2026-09-09 (e.g., `TestThreeNodesCluster`/`TestTieBreakerCluster` timeouts) — but this is the first ledger occurrence of that overload manifesting as an SSH/`ctr exec` transport failure inside `TestStorageSuite` rather than a k3s scheduling/readiness timeout. It's unrelated to the only prior `TestVaultZvolTrimReclaimsBlocks` ledger entry (run #45, 2026-09-13), which was a different symptom entirely (fstrim reclaiming less than expected due to background write contention, not an SSH exec failure), so this is effectively a new manifestation rather than a repeat of that specific bug.
+
+### TestUpgradeSuite: failure analysis
+
+#### TestEVEUpgradeKubevirtToKubevirt
+
+##### Failure
+
+```
+Timed out waiting for device "edge-dev" to upgrade to 0.0.0-master-604fd6a5-k-amd64
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence points to a mid-run network/infra outage on the SDN emulator's path, not an EVE/pillar defect. `gotest.json` shows the harness's SDN tunnel proxy started failing with `connection reset by peer` and `Failed to send keepalive ping: EOF` between 03:42:30–03:42:37, and the Adam controller's `adam-stdout` log corroborates this independently: the device's own last request to Adam is at 03:41:51, after which it goes completely silent — confirming the device itself lost its network path (not just the harness's control tunnel), which is consistent with an SDN VM/network-stack outage rather than a device-side hang. The device flipped `ONLINE → SUSPECT` at 03:47:07 (roughly one missed heartbeat cycle later) and never recovered through the 04:01:45 timeout; live checks right now (`evetest sdn status`, `evetest eve ssh`) still fail with `i/o timeout` dialing the SDN gRPC endpoint `192.168.170.6:50121`, showing the outage is ongoing, not transient.
+
+This doesn't share a root cause with anything else in this run — the two prior upgrade tests (`TestEVEUpgradeKVMtoKVM`, `TestEVEUpgradeKVMtoKVMWithOCIDatastore`) both passed cleanly using the same SDN/broker infra for ~28 minutes beforehand, ruling out an upgrade-code regression. Per the ledger, this exact test previously failed on 2026-09-08 for an unrelated reason (a mistagged kvm-vs-kubevirt test image causing an explicit, safe upgrade rejection) — that is not what happened here. The ledger does record a recurring *class* of SDN/broker network flakiness (VM provisioned but gRPC path never comes up, "no route to host"), but every prior instance of that occurred at initial SDN-VM boot/provisioning; this run's signature — a stable connection that dies mid-test with `connection reset by peer` and drives the device to `SUSPECT` — doesn't match those and doesn't appear anywhere in the ledger, so it looks like a new manifestation of that broader infra-flakiness class rather than a previously-recorded exact repeat.
+
 ## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #50)](https://github.com/milan-zededa/eve/actions/runs/34884207026)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/50/)
