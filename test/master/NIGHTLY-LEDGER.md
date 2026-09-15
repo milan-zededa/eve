@@ -2,6 +2,76 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #52)](https://github.com/milan-zededa/eve/actions/runs/35010946707)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/52/)
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"d27389cb-c3be-43ce-87d5-3502e534fa75"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789511824  nanos:941921379}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  IPAddrs:"10.60.20.150"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu2x1"}  volumeRefs:"8e7ba88f-3130-4c59-839c-9930728ae395"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence confirms this is the same pcap/mirror-interface race documented repeatedly in the ledger. At `22:36:52.323` pillar logs show `NI State (FlowStats): Installing pcap on eth0-m (mirror from bridge eth0, bridge-num 2)...` immediately followed by `unknown interface eth0-m: route ip+net: no such network interface` — the pcap capture open for `ni-wan`'s mirror (`eth0-m`) raced ahead of the `DummyInterface/eth0-m` creation, which only completes ~0.1s later at `22:36:52.430`. Because pcap capture is opened once at `StartCollectingForNI` time and never retried/refreshed after a failed open, `ni-wan`'s ARP/DHCP snooping never ran, so `vif0` (`nbu1x1`, MAC `02:16:3e:02:00:00`) never got its IP recorded — confirmed live via `evetest eve ni-info ni-wan`, which shows `ipAssignments:{macAddress:"02:16:3e:02:00:00"}` with no `ipAddress` ever populated, while the sibling `ni-lan`/`vif1` (whose `eth1-m` pcap opened successfully) correctly reports `10.60.20.150`.
+
+This is a known, recurring issue: the exact same defect class (pcap permanently failing after a raced/failed open against a not-yet-ready mirror interface, silently starving one switch-NI VIF of its IP) is recorded in `live-ledger.md` under this identical test (`TestMgmtTrafficRoutedViaApp`, run #50, earlier today 2026-09-15) and traced back to first appearing as `TestAirGapSwitchNI` in run #31 (2026-09-09). Today's manifestation is a mirror-image variant: previously `vif1`/`eth1` was the one starved while `vif0`/`eth0` succeeded; here it's the reverse (`vif0`/`eth0` starved, `vif1`/`eth1` succeeded) — consistent with a race whose loser varies run-to-run rather than a fixed side. No other suite failures are present in this run's `gotest.json` to correlate against, and no PR diff was supplied for this investigation.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestTieBreakerCluster
+
+##### Failure
+
+```
+timed out waiting for apps/NIs to be removed from device "edge-dev1" (apps: 1, NIs: 1)
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+`TestTieBreakerCluster` failed on a **near-miss race**, not a permanent hang: the harness's app/NI-removal wait for `edge-dev1` timed out at 19:58:52, but live logs show cleanup was already in flight and completed only seconds later — `domainmgr` logged `doCleanup: failed to cleanup domain ... (waitforvmi failed ... VMI still available)` at 19:58:59, the domain finally reached `HALTED` at 19:58:59.21, and `zedrouter`'s NI reconciler executed the actual iptables/NI teardown at 19:59:03 — 7–11 seconds after the harness gave up. `kubectl get pods -A` and `AppInstanceStatus`/`NetworkInstanceStatus` on the device are now empty, confirming it converged fine, just too slowly.
+
+The delay traces back to kubevirt/control-plane churn on this freshly-formed 3-node cluster: `virt-controller`, `cdi-*`, and `longhorn-manager` pods all show 2–6 restarts within the ~20–25 minute cluster lifetime, and `evetest cluster info` shows storage health flapping `HEALTHY`↔`FAILED`. This is the same **etcd-apply-slowness / Longhorn-instability during cluster formation** issue class documented repeatedly in `live-ledger.md` since at least 2026-09-09 (previously manifesting as node-join-readiness timeouts in `TestThreeNodesCluster`/`TestTieBreakerCluster`). Here it instead delayed the kubevirt VMI/domain teardown between subtests. This run's earlier `TestThreeNodesCluster` actually passed (albeit slowly, 1620.88s), so it isn't the direct trigger, but shares the same underlying control-plane instability. The specific manifestation — an app/NI-removal timeout caused by `"VMI still available"` on domain cleanup — does not appear anywhere in the ledger, so this is a new symptom of the known recurring root cause rather than a previously-recorded exact repeat.
+
+### TestSecuritySuite: failure analysis
+
+#### TestVCom
+
+##### Failure
+
+```
+
+vComLink check script failed: 
+Unexpected error:
+    <*fmt.wrapError | 0xc000c464e0>: 
+    unable to reach app "bc3d686b-f619-4caa-b552-8744f731a56a" SSH on device "edge-dev": no reachable endpoint among [172.20.20.123:2222]
+    {
+        msg: "unable to reach app \"bc3d686b-f619-4caa-b552-8744f731a56a\" SSH on device \"edge-dev\": no reachable endpoint among [172.20.20.123:2222]",
+        err: <*errors.errorString | 0xc000c68c30>{
+            s: "no reachable endpoint among [172.20.20.123:2222]",
+        },
+    }
+occurred
+```
+
+##### Claude's conclusion
+
+**Root cause:** The port-forward path itself is sound — `zedrouter` installed the `172.20.20.123:2222 → 10.50.0.2:22` DNAT/SNAT/FORWARD iptables rules at 20:13:52, a full 11s before the VM even reached `RUNNING` (20:14:03), and live re-checks now (`evetest sdn ssh -- nc -zv 172.20.20.123 2222`, repeated) succeed 100% of the time, with the guest's port 22 also directly reachable. The failure was a narrow timing race at the exact moment the VM's SSH became reachable: `gotest.json` shows the harness's own "reachability" probe succeeded once at 20:14:52.648 (checkpoint `vm-ssh-ready`), but the very next connection attempts — made within ~100ms, to actually run the check script — got three rapid `connection refused` in under 5ms total, exhausting the retry budget before the harness could fall back and retry later. That signature (briefly reachable, then instantly refused, then solid forever after) is consistent with the guest's sshd bouncing once right after first-boot startup (e.g. host-key generation) rather than any EVE/pillar networking defect — the NAT rules, bridge forwarding, and app state transitions all look clean and timely in the logs.
+
+This is a brand-new failure/symptom: it doesn't appear anywhere in `live-ledger.md` (the only superficially similar `"no reachable endpoint"` entry there is from a completely different suite/root cause — an EVE-K/Longhorn/k3s crash-restart loop tearing down a KubeVirt VMI's network, which doesn't apply here since this is a plain KVM VM with no cluster involved). No other suite/test failed earlier in this run to correlate with, and no PR diff was provided for this investigation.
+
 ## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #51)](https://github.com/milan-zededa/eve/actions/runs/34915466635)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/51/)
