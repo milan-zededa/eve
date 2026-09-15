@@ -2,6 +2,105 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #50)](https://github.com/milan-zededa/eve/actions/runs/34884207026)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/50/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestSwitchNIWithMultiplePorts
+
+##### Failure
+
+```
+
+Timed out after 180.001s.
+When passed a matcher, ReceiveMatcher's channel *must* receive something.
+```
+
+##### Claude's conclusion
+
+I have enough evidence to conclude. Here's the root cause analysis:
+
+**Root cause:** This is a test-harness timing/race issue, not a pillar defect. Live evidence from the Adam controller's `info` archive shows zedagent published a `ZiNetworkInstance` info object for `switch-ni` — already containing `vifs:[{vifName:"nbu1x1", appID:"2844bd9c-..."}]` — in the very same info-POST batch (23:22:27) as the `RUNNING`/app-network-IP transition that made the test print "Reached checkpoint 'app-running'" and immediately start "Waiting for: NI reports the app VIF...". Because EVE's `ZiNetworkInstance` info is diff-published (only sent when it changes), that was the *only* `ZiNetworkInstance` message ever sent for this NI in the whole test run — none of the subsequent full-device-info batches (23:23:41, 23:24:27, 23:25:34, 23:26:40) contain another one. The test's `Eventually(channel).Should(Receive(...))` at `stp_test.go:293` appears to subscribe for *future* NI-info updates only after reaching `app-running`, so it raced against (and lost) that single, already-correct update, then had nothing further to receive for the full 180s — matching Gomega's generic "ReceiveMatcher's channel must receive something" timeout text. Confirming this, live `evetest eve ni-info switch-ni` right now shows the exact same, already-correct `vifs` entry the device reported at 23:22:27 — the data was never actually missing or wrong on the device side. No other suite failure occurred in this run to compare against, and this exact test/failure does not appear anywhere in `live-ledger.md`, so this looks like a new (not previously recorded) occurrence of a checkpoint/info-subscription race in the test harness rather than a recurring known issue.
+
+### TestDeviceConnectivitySuite: failure analysis
+
+#### TestMgmtTrafficRoutedViaApp
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app reports 2 VIFs with the reserved IPs
+AppID:"aa37c9c0-d427-472f-a35a-b0e93a82a008"  appVersion:"1"  AppName:"mgmt-gw-app"  bootTime:{seconds:1789427254  nanos:761462180}  state:RUNNING  network:{macAddr:"02:16:3e:02:00:00"  devName:"vif0"  IPAddrs:"10.60.10.150"  IPAddrs:"fe80::16:3eff:fe02:0"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:02:00:01"  devName:"vif1"  defaultRouters:"<nil>"  dns:{}  localName:"nbu2x1"}  volumeRefs:"c7692507-8cf9-4fda-be1e-90df56029f17"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence shows `vif1` (`nbu2x1`, on switch NI `ni-lan`/`eth1`) never got **any** IP — not even the IPv6 link-local address that normally appears via ND snooping — while `vif0` on `ni-wan`/`eth0` got both IPv4 (DHCP) and IPv6 fine. Pillar's `pcap` traces confirm why: capture only ever ran successfully on `eth0-m` (269 debug entries, the correct mirror for `ni-wan`), and the only capture attempt tied to `eth1` was on the **bare bridge `eth1`** itself (not the mirror `eth1-m`), and it was canceled at `23:07:29.864` — before the NI reconciler even installed the TC-mirror redirect rules for `nbu2x1→eth1-m` (`23:07:36.804`, ~7s later). This lines up with a code-level gap in `pkg/pillar/nistate/linux.go`: `zedrouter.doActivateNetworkInstance` starts `StartCollectingForNI` (which captures `ni.bridge`, including `MirrorIfName`, once) essentially in parallel with the asynchronous NI reconciler that actually creates the mirror device, while `UpdateCollectingForNI` (called on every later config/VIF change) takes no bridge argument and never refreshes `ni.bridge` — so once the pcap goroutine has locked onto a bridge/mirror snapshot, no interface-mirror correction is ever applied, permanently starving that NI's ARP/DHCP/ND snooping.
+
+This is the same defect class recorded repeatedly in `live-ledger.md` since 2026-09-09 (first via `TestAirGapSwitchNI` in run #31, recurring under `TestMgmtTrafficRoutedViaApp` and several VLAN/switch-NI tests through run #49), described there as pcap giving up permanently after a failed/raced open on the mirror interface — this run's manifestation (zero IPs at all, rather than IPv6-link-local-only) fits as a variant where the stale bridge snapshot pointed at the bare interface instead of a not-yet-created mirror. No other suite in this run failed (gotest.json shows no other fail actions), so there's no shared root cause to reconcile with.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for app "58f94a20-bf2d-4142-b40a-e3b411f48f4d" to be scheduled in cluster "test-cluster"
+```
+
+##### Claude's conclusion
+
+I have sufficient evidence to write the root cause now.
+
+###### Root cause
+
+The 3-node k3s/kubevirt cluster on `edge-dev1` (the app's assigned host) is chronically resource-starved: `free -h` shows only 345Mi free out of 7.6Gi and `uptime` shows load average 3.86–6.62 on a 4-vCPU node, and `kubectl describe node edge-dev1` shows the kubelet restarting five separate times over the last 25 minutes ("Starting kubelet" events at 25m/14m/7m19s/4m44s/109s ago), with dozens of system pods (cdi, kubevirt, longhorn-system) showing 2-4 restarts each in that same window. This churn is what stalled the app: the volume's Longhorn replicas kept flapping OFFLINE/REBUILDING/ONLINE and `cluster info` recorded the volume erroring with "attempts to upload image failed" during `CREATING_VOLUME`, so the CDI upload/volume-attach cycle never finished inside the harness's scheduling-wait window — by the time I checked live, it had *just* completed (virt-launcher pod created ~21s before, volume attach succeeded ~10s before), i.e. another slow-convergence near-miss rather than a hard break.
+
+This is the same root-cause class already investigated earlier in `live-ledger.md`: the identical message "Timed out waiting for app ... to be scheduled in cluster" occurred in run #43 (2026-09-12), also on `edge-dev1`, also due to repeated k3s/kubelet crash-restarts (etcd apply-slowness → k3s restarts → CDI upload window too short). More broadly, this belongs to the ledger's recurring "etcd apply-slowness / Longhorn-instability during cluster join/formation" issue class documented since at least **2026-09-09**, which has produced several distinct symptom variants (node-readiness timeouts, SSH-unreachable-after-VMI-churn, and now-twice this exact app-scheduling timeout). No PR diff was provided for this investigation, so no code-change correlation to assess.
+
+
+#### TestTieBreakerCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev1")
+```
+
+##### Claude's conclusion
+
+I have enough evidence to write the root cause now.
+
+**Root cause:** `edge-dev3` (the last node to join `test-cluster`) shows 1653 etcd `"apply request took too long"` warnings and repeated `watch chan error: etcdserver: mvcc: required revision has been compacted` in its `k3s.log`, causing widespread control-plane instability during the join window. This left Longhorn unhealthy on that node — `longhorn-manager-64782` is stuck `1/2 Ready` with its own local `9501/healthz` readiness probe timing out, and the `longhorn-csi-plugin-ts8kb` pod's `node-driver-registrar` container is in `CrashLoopBackOff` (14 restarts) because `longhorn-csi-plugin`'s own container can't even resolve/reach `longhorn-backend` (DNS/connect timeouts), so `/csi/csi.sock` never appears. `evetest cluster info` timestamps confirm `edge-dev1` joined first at 20:26:27 UTC while `edge-dev2`/`edge-dev3` didn't even start joining until ~20:39, with cluster `storage.health` flapping HEALTHY/FAILED/DEGRADED throughout — the CSI/storage stack never stabilized inside the harness's readiness-wait window, producing the reported timeout (nodes are now all `Ready` in `kubectl get nodes`, so this resolved shortly after).
+
+This shares the same root cause already identified for this run's earlier `TestThreeNodesCluster` failure on `edge-dev1` (etcd/control-plane churn during join stalling Longhorn/CDI convergence), and it's the **same known, recurring issue class** documented in `live-ledger.md` as "etcd apply-slowness / Longhorn-instability during cluster join/formation," tracked since at least **2026-09-09** — including two near-identical `TestTieBreakerCluster` "Timed out waiting for cluster nodes to become ready" occurrences in run #47 (2026-09-13) citing the exact same etcd-apply-slowness/Longhorn-flapping signature.
+
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 2): timed out waiting for LastProcessedConfig >= 2026-09-14 21:29:09.753308962 +0000 UTC
+```
+
+##### Claude's conclusion
+
+Confirms live: zedbox restarted at 21:31:42, still in the middle of pubsub bootstrap (subscribing/initializing all agents) well after the test's 21:31:10 deadline. This matches exactly the known reboot-bound bootstrap race.
+
+I now have sufficient evidence.
+
+###### Root cause
+
+`edge-dev3` was withdrawn from the cluster at 21:29:09, fetched config v2 at 21:29:10, and rebooted (boot time 21:29:49 per harness). The `ApplyConfig` confirm step uses a fixed 2-minute `deviceApplyConfigTimeout` (`conversion_test.go:212` / `edgedevice.go:280-327`), giving up at 21:31:10 — but live SSH into `edge-dev3` right now shows `uptime` of only 1 minute and `zedbox`/pillar logs still mid-bootstrap (agents like `volumemgr`, `zedmanager`, `zfsmanager` still creating pubsub sockets and subscribing at 21:31:42), i.e. it hadn't even reached the point of publishing an updated `LastProcessedConfig` when the harness's deadline hit. This is the identical mechanism as the earlier `TestClusterToSingleConversion` failure already analyzed in `live-investigation.md` for this run's ledger history, and it's a **known, recurring issue since at least 2026-09-10** per `live-ledger.md` (repeated on 2026-09-10 v8, 2026-09-11 v8, 2026-09-12 v5, and now 2026-09-14 v2): a test-timeout-margin bug where the withdrawal-triggered reboot + full pillar re-bootstrap routinely exceeds the fixed 2-minute confirm budget, not a new EVE/pillar regression.
+
 ## [2026-09-14 -- 0.0.0-master-03335b43 (run #49)](https://github.com/milan-zededa/eve/actions/runs/34797892351)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/49/)
