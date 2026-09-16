@@ -2,6 +2,89 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-16 -- 0.0.0-master-604fd6a5 (run #54)](https://github.com/milan-zededa/eve/actions/runs/35137871131)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/54/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestApplicationGateway
+
+##### Failure
+
+```
+
+Told to stop trying after 1.319s.
+Stop waiting for: ni-eth0 is ONLINE
+Network instance is in error state
+networkID:"8e856b3a-9f8e-44e1-ac35-023d1264d5c9"  networkVersion:"1"  instType:2  displayname:"ni-eth0"  bridgeNum:1  bridgeIPAddr:"10.50.0.1"  ipAssignments:{macAddress:"00:16:3e:f2:e9:01"  ipAddress:"10.50.0.1"}  networkErr:{description:"failed to select ports for network instance 8e856b3a-9f8e-44e1-ac35-023d1264d5c9: no port is matching label 'ethernet0'"  timestamp:{seconds:1789599314  nanos:670368470}  severity:SEVERITY_ERROR}  state:ZNETINST_STATE_ERROR  mtu:1500
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live `zedrouter` logs show a genuine boot-time race, not a config problem: `ni-eth0` (a local NI bound to port label `ethernet0`) was created at `22:55:14.486`, but `zedrouter`'s port-selection immediately failed at `22:55:14.670` with `no port is matching label 'ethernet0'` — even though the device config is correct (`deviceIoList`/`systemAdapterList` both properly map `ethernet0`→`eth0`, confirmed via `evetest eve config`). The device's `DeviceNetworkStatus` (DPC `lastresort`) was mid-verification at that exact moment (`Testing: true` from `22:55:03` to `22:55:19.887`, with the port's `LastFailed`/`LastSucceeded` results updating right around the failure), so the port wasn't yet selectable. The NI self-healed ~8s later — `zedrouter` successfully rebuilt/activated `ni-eth0` at `22:55:22.7-22.843` (confirmed live via `evetest eve ni-info ni-eth0`, now showing `state:ZNETINST_STATE_ONLINE`) — but the test's very short retry budget (`Told to stop trying after 1.319s`) caught it squarely inside that narrow error window.
+
+No other test failed earlier in this run to correlate with, and this exact failure signature (`no port is matching label`, or any `ni-eth0`/local-NI port-selection race) does not appear anywhere in `live-ledger.md` — the only prior `TestApplicationGateway` ledger entry (run #51, 2026-09-15) had an unrelated root cause (a switch-NI DHCP-snoop/pcap bug on `ni-eth1`). This looks like a new, previously-unrecorded flavor of DPC-testing/NI-creation race rather than a recurring known issue.
+
+
+#### TestSwitchNIPortConfigRace
+
+##### Failure
+
+```
+
+Timed out after 180.000s.
+Expected to satisfy: app has IPs from both application subnets
+AppID:"fe6277f5-6a29-41b5-abfd-d41991ec0f0e"  appVersion:"1"  AppName:"container-app"  bootTime:{seconds:1789602425  nanos:411959056}  state:RUNNING  network:{macAddr:"02:16:3e:00:00:01"  devName:"vif0"  defaultRouters:"<nil>"  dns:{}  localName:"nbu1x1"}  network:{macAddr:"02:16:3e:00:00:02"  devName:"vif1"  IPAddrs:"10.53.100.181"  defaultRouters:"<nil>"  dns:{}  ipv4_up:true  localName:"nbu2x1"}  volumeRefs:"90b14e9c-272a-4f05-86e9-782950d80d41"  cluster_app_running:true
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+The app instance's `vif0`/`nbu1x1` never receives an `IPAddrs` value while `vif1` does, because the switch NI it's attached to (`multiswitch-ni`, UUID `9eb1b95a-…`, bridge `bn2`) never learned its IP even though the network itself is fine: SDN's dnsmasq log (`/run/dnsmasq/dhcpsrv-multiport-network.log`) shows a complete `DHCPDISCOVER→OFFER→REQUEST→ACK` exchange for MAC `02:16:3e:00:00:01` granting `10.53.20.180` at `23:47:54`, yet live `NetworkInstanceStatus` on the device still shows `"02:16:3e:00:00:01":{"IPv4Addrs":null}` with the NI healthy/`Activated:true`/no errors. This is because zedrouter learns switch-NI IPs by ARP/DHCP-snooping via a pcap capture on the mirror interface (`bn2-m`), and `nistate/linux.go`'s `StartCollectingForNI` has a known bug where if the initial `pcap.OpenLive` on the mirror interface fails (a startup race — the reconciler doesn't create `bn2-m` until slightly after the snoop attempt), it never retries, so the DHCP lease is silently missed for the NI's lifetime even though real L2/L3 connectivity works fine.
+
+This is the exact same signature (same NI name `multiswitch-ni`, same bridge `bn2`/mirror `bn2-m`, same "app has IPs from both application subnets" timeout) as an already-documented `TestSwitchNIPortConfigRace` failure in `live-ledger.md` (the entry attributing it to the known, recurring `nistate/linux.go` pcap-retry defect first seen via `TestAirGapSwitchNI` on 2026-09-09, run #31). So this is a **known, recurring issue dating back to at least 2026-09-09**, now reproducing again in today's run — not a new bug, and not related to the earlier `TestApplicationGateway`/`BridgeFwdMask` failure already logged in this run's `live-investigation.md`, which is a separate defect family.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for cluster nodes to become ready in cluster "test-cluster" (device "edge-dev3")
+```
+
+##### Claude's conclusion
+
+No other test in this run has failed (only the pause-triggering one), so there's nothing else in this run to correlate against.
+
+###### Root cause
+
+Live evidence on `edge-dev2` shows severe etcd/control-plane overload during 3-node cluster formation: it took 81 retries (20:22:12→20:35:32, ~13.5 min) just to detect bootstrap node `edge-dev1` in cluster mode before it could even begin joining, then right around the harness's 29-minute deadline (wait started 20:13:23, timed out 20:42:23), its embedded etcd logged dozens of "apply request took too long" warnings with 2–7s raft-read latencies, overwhelming the apiserver (`finisher.go` timeout errors) until `k3s exited: exit status 1` at 20:42:53 — 30s after the test gave up. `edge-dev3` independently shows `longhorn-csi-plugin` stuck `CrashLoopBackOff` (startup-probe timeouts against `:9808/healthz`) at investigation time, and `evetest cluster info` shows storage health flapping HEALTHY↔FAILED↔DEGRADED throughout the join window — all consistent with the chronic etcd-apply-slowness/Longhorn-instability signature. This is a **known, recurring issue**: the exact failure message ("Timed out waiting for cluster nodes to become ready in cluster \"test-cluster\"...") first appears in the ledger on 2026-09-15 (run #51, both `TestThreeNodesCluster` and `TestTieBreakerCluster`), and the underlying etcd/Longhorn-instability-during-join root cause class is documented as recurring since at least 2026-09-09. One new wrinkle not previously recorded: after the crash, `edge-dev2`'s kube-init entered a brief "client trusts a retired CA, rebuilding" kubeconfig-rewrite loop before recovering — a symptom of the same crash but not previously logged in the ledger. No other test failed in this run to correlate against, and no PR diff was supplied for this investigation.
+
+
+#### TestClusterToSingleConversion
+
+##### Failure
+
+```
+Device "edge-dev3" failed to confirm the latest config (version 5): timed out waiting for LastProcessedConfig >= 2026-09-16 21:27:08.086214245 +0000 UTC
+```
+
+##### Claude's conclusion
+
+I have enough live evidence already; the collect-info archive isn't needed further.
+
+###### Root cause
+
+`edge-dev3`'s live pillar logs show the intended sequence for cluster→single-node withdrawal: at 21:27:11 zedagent logs `parseEdgeNodeClusterConfig: cluster departing`, zedkube's `drainAndDeleteNode` fails (`connection refused` to 127.0.0.1:6443, since k3s is already stopping) at 21:27:12, and the device reboots with `Reboot reason: BootReasonKubeTransition, Transition from cluster mode to single node`. The device came back `ONLINE` at 21:29:12 — one second after the test's fixed 2-minute `deviceApplyConfigTimeout` (checkpoint at 21:27:08, failure declared 21:29:11, per `conversion_test.go:212`/`edgedevice.go:327`) expired, i.e. the reboot+re-bootstrap simply outran the harness's confirm-timeout budget by a hair. (Notably, the reboot also flagged a TPM PCR-14 mismatch that fell back to an alternate vault-unlock method with no error, ruling that out as a blocker — it appears to be an expected side effect of the cluster/single mode boot-arg change, not a new defect.)
+
+This is the **same root cause as the earlier `TestThreeNodesCluster` failure was *not*** — it's unrelated to that run's etcd/Longhorn overload. Instead, it's a **known, recurring issue since at least 2026-09-10** per `live-ledger.md`: this identical "reboot-bound config-confirmation exceeds the fixed 2-minute timeout" failure on `TestClusterToSingleConversion` has recurred repeatedly (2026-09-10, 09-11, 09-12, 09-13, 09-14, and now 09-16), consistently diagnosed as a test-timeout-margin bug in the harness rather than an EVE/pillar regression.
+
 ## [2026-09-16 -- 0.0.0-master-604fd6a5 (run #53)](https://github.com/milan-zededa/eve/actions/runs/35042303584)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/53/)
