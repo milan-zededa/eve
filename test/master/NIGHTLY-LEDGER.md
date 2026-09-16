@@ -2,6 +2,48 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-09-16 -- 0.0.0-master-604fd6a5 (run #53)](https://github.com/milan-zededa/eve/actions/runs/35042303584)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/53/)
+
+### TestApplicationConnectivitySuite: failure analysis
+
+#### TestLocalNetInstanceACLsWithFlowLog
+
+##### Failure
+
+```
+timed out after 5m0.001890056s (excluding download) waiting for app "5d5e3281-aaf8-4537-b46e-2312ff1fe70e" (acl-app-1) on device "edge-dev" to reach RUNNING state (last state: RESOLVING_TAG)
+```
+
+##### Claude's conclusion
+
+This confirms the earliest occurrence is run #31 (2026-09-09), matching the ledger's own analysis text I already saw.
+
+###### Root cause
+
+`acl-app-1` is stuck in `RESOLVING_TAG` while pulling `lfedge/evetest-ubuntu-ctr:1.0` from datastore `docker://192.168.170.2:5000` (confirmed via `evetest eve config`/`app-info`). Live evidence confirms the exact known mechanism: `/proc/net/tcp` on the device shows two `ESTABLISHED` connections to `192.168.170.2:5000` (hex `02AAA8C0:1388`) with a stalled, non-zero `tx_queue` (`0000010F`), and a live check shows the registry is HTTP-only — `curl http://192.168.170.2:5000/v2/` returns a clean `200`, while `curl https://…` fails outright (handshake error, exit 35). Since the datastore isn't marked insecure/HTTP-only, the OCI tag-resolution path only attempts HTTPS with no request deadline, so the connection hangs indefinitely instead of falling back to HTTP, blocking the app from ever leaving `RESOLVING_TAG`.
+
+This is not a new bug — it's a known, recurring issue against this exact registry and even this exact test name (`TestLocalNetInstanceACLsWithFlowLog`), first recorded in `live-ledger.md` at run #31 (2026-09-09) and recurring repeatedly since (most recently again in run #51, 2026-09-15, under `TestFlowLog`/`TestApplicationGateway`/etc., all sharing the identical HTTPS-probe-hang-against-HTTP-only-registry mechanism). No other suite failures are noted in this run to correlate against, and no PR diff was supplied for this investigation.
+
+### TestNodeClusterSuite: failure analysis
+
+#### TestThreeNodesCluster
+
+##### Failure
+
+```
+Timed out waiting for app "aabe2daf-d729-44a3-a504-c2936df5e6fc" to be scheduled in cluster "test-cluster"
+```
+
+##### Claude's conclusion
+
+###### Root cause
+
+Live evidence on `edge-dev1` (`volumemgr` log, confirmed via SSH) shows app `aabe2daf...` (`container-app`)'s volume upload (`RolloutDiskToPVC`) hit a string of transient cluster-storage errors from 02:33:31–02:39:28 — `longhorn-admission-webhook: network is unreachable`, then repeated `PVC not found`/`Using existing PVC` — consistent with the same chronic etcd/Longhorn instability during 3-node cluster formation that the ledger has documented as a recurring root cause since at least 2026-09-09 (`kubectl`/`evetest cluster info` here also show storage health flapping HEALTHY↔FAILED↔DEGRADED during the ~16-minute node-join window). The app then parked in a terminal `CREATING_VOLUME` error at 02:39:28. Crucially, `volumemgr` does have a bounded retry path for this (`retryFailedClusterVolumeCreate`, added in commit `3d35218e9`), but it's only driven off the `gc` ticker, which fires every `vdiskGCTime/10` (≈6 minutes) — the retry (`attempt 1/12`, logged at 02:42:56) didn't fire until 42 seconds *after* the test's fixed 10-minute "app scheduled" timeout (02:32:14→02:42:14) had already expired.
+
+This is the same recurring failure signature/message ("Timed out waiting for app ... to be scheduled in cluster") the ledger records for `TestThreeNodesCluster` in run #43 (2026-09-12) and again in a more recent run, both tracing to the same underlying etcd/Longhorn-instability-during-join issue class (known since 2026-09-09). It's a distinct variant, though: those earlier entries found `volumemgr` never retrying at all, whereas here the newer retry logic did fire — just one gc-tick cycle too late relative to the harness's fixed wait window, so the coarse ~6-minute retry cadence is itself a contributing gap worth tightening (e.g. event-driven re-drive on cluster-storage-readiness transition rather than waiting for the next gc tick).
+
 ## [2026-09-15 -- 0.0.0-master-604fd6a5 (run #52)](https://github.com/milan-zededa/eve/actions/runs/35010946707)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/52/)
