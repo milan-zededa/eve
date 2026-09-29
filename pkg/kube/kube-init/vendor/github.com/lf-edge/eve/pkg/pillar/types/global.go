@@ -151,6 +151,11 @@ func (gs *GlobalStatus) UpdateItemValuesFromGlobalConfig(gc ConfigItemValueMap) 
 // A value of zero means we should use the default
 // All times are in seconds.
 
+// DefaultVolumemgrWorkerPoolSize is the default for VolumemgrWorkerPoolSize.
+// It matches the previously hardcoded pool size, so the setting is
+// behaviour-neutral until an operator raises it.
+const DefaultVolumemgrWorkerPoolSize = 20
+
 // GlobalSettingKey - Constants of all global setting keys
 type GlobalSettingKey string
 
@@ -195,6 +200,10 @@ const (
 	NetworkTestDuration GlobalSettingKey = "timer.port.testduration"
 	// NetworkTestInterval global setting key
 	NetworkTestInterval GlobalSettingKey = "timer.port.testinterval"
+	// NetworkTestFailInterval global setting key: minimum time a DPC must
+	// wait after a verification failure before it is eligible to be
+	// retested again (DpcManager.DpcMinTimeSinceFailure).
+	NetworkTestFailInterval GlobalSettingKey = "timer.port.testfailinterval"
 	// NetworkTestBetterInterval global setting key
 	NetworkTestBetterInterval GlobalSettingKey = "timer.port.testbetterinterval"
 	// NetworkTestTimeout global setting key
@@ -253,6 +262,16 @@ const (
 	// how many times EVE will retry to download a blob if its checksum is not verified
 	BlobDownloadMaxRetries GlobalSettingKey = "blob.download.max.retries"
 
+	// VolumemgrWorkerPoolSize global setting key
+	// maximum number of concurrent volumemgr background jobs: loading images
+	// into the CAS, and preparing, creating and destroying volumes all draw
+	// on this single pool. Work that cannot be submitted is deferred and
+	// retried, so this bounds throughput rather than correctness. Raise it on
+	// nodes running many app instances; each concurrent CAS ingest streams a
+	// layer through pillar, so the practical ceiling is pillar's memory
+	// cgroup and the disk.
+	VolumemgrWorkerPoolSize GlobalSettingKey = "volumemgr.worker.pool.size"
+
 	// Bool Items
 	// UsbAccess global setting key
 	UsbAccess GlobalSettingKey = "debug.enable.usb"
@@ -305,6 +324,13 @@ const (
 	// descheduling. Currently only "boot" is supported. When empty (default), no
 	// event-driven descheduling is performed.
 	KubernetesVmiDescheduleEvents GlobalSettingKey = "kubernetes.vmi.deschedule.events"
+	// DnidOutageThresholdForUsage : how long an app's designated node has to
+	// have been unhealthy (seconds) before another cluster node may act on
+	// that app in its place. The effective delay is this plus the Kubernetes
+	// node-monitor grace period, and is floored at the eve-app-op lease
+	// duration: a threshold below the lease is bounded by how long the lease
+	// takes to change hands, not by this value.
+	DnidOutageThresholdForUsage GlobalSettingKey = "cluster.dnid.backupnode.threshold"
 
 	// GoroutineLeakDetectionThreshold amount of goroutines, reaching which will trigger leak detection
 	// regardless of growth rate.
@@ -1176,7 +1202,8 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddIntItem(NetworkGeoRedoTime, HourInSec, 60, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(NetworkGeoRetryTime, 10*MinuteInSec, 5, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(NetworkTestDuration, 30, 10, HourInSec)
-	configItemSpecMap.AddIntItem(NetworkTestInterval, 5*MinuteInSec, 5*MinuteInSec, HourInSec)
+	configItemSpecMap.AddIntItem(NetworkTestInterval, 5*MinuteInSec, MinuteInSec, HourInSec)
+	configItemSpecMap.AddIntItem(NetworkTestFailInterval, 5*MinuteInSec, MinuteInSec, HourInSec)
 	configItemSpecMap.AddIntItem(NetworkTestBetterInterval, 10*MinuteInSec, 0, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(NetworkTestTimeout, 15, 0, HourInSec)
 	configItemSpecMap.AddIntItem(NetworkSendTimeout, 2*MinuteInSec, 0, HourInSec)
@@ -1223,6 +1250,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddIntItem(LogRemainToSendMBytes, 2048, 10, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(DownloadMaxPortCost, 0, 0, 255)
 	configItemSpecMap.AddIntItem(BlobDownloadMaxRetries, 5, 1, 10)
+	configItemSpecMap.AddIntItem(VolumemgrWorkerPoolSize, DefaultVolumemgrWorkerPoolSize, 1, 200)
 
 	// Goroutine Leak Detection section
 	configItemSpecMap.AddIntItem(GoroutineLeakDetectionThreshold, 5000, 1, 0xFFFFFFFF)
@@ -1324,6 +1352,13 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddStringItem(K3sConfigOverride, "", base64Validator)
 	configItemSpecMap.AddStringItem(K3sVersionOverride, "", k3sVersionValidator)
 	configItemSpecMap.AddStringItem(KubernetesVmiDescheduleEvents, "", blankValidator)
+	// DnidOutageThresholdForUsage - ten minutes by default. The minimum is a
+	// minute rather than zero: at zero a backup would take over as soon as
+	// the node-monitor grace period elapsed, which defeats the point of
+	// requiring a sustained outage, and anything under the eve-app-op lease
+	// duration is floored by lease handover anyway.
+	configItemSpecMap.AddIntItem(DnidOutageThresholdForUsage, 10*MinuteInSec,
+		MinuteInSec, 24*HourInSec)
 	// LonghornSnapshotCron - Default daily at midnight. Empty string = disable recurring snapshots.
 	configItemSpecMap.AddStringItem(LonghornSnapshotCron, "0 0 * * *", cronValidator)
 	configItemSpecMap.AddStringItem(LonghornNodeDrainPolicy,
