@@ -198,7 +198,7 @@ func (handler *volumeHandlerCSI) CreateVolume() (string, error) {
 		handler.log.Noticef("CreateVolume: PVC %s exists but upload not complete, re-driving upload", pvcName)
 	}
 
-	repCount, err := kubeapi.GetSupportedReplicaCountForCluster()
+	repCount, err := kubeapi.GetSupportedReplicaCountForCluster(handler.volumeManager.IsTwoNodeHACluster())
 	if err != nil {
 		handler.log.Errorf("Can't determine dynamic replica count, defaulting to: %d due to: %v", repCount, err)
 	}
