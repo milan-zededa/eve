@@ -27,6 +27,20 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// PendingJoinDeschedulerEventPath marks that this node just completed a
+// non-bootstrap single->cluster (re)join with the controller's
+// kubernetes.vmi.deschedule.events "join" event enabled, so it owes
+// zedkube a one-time VMI-placement reconciliation once it is ready to
+// receive apps. Written by clustermode.Runner; consumed and removed by
+// zedkube (pkg/pillar/cmd/zedkube/descheduler.go), which cannot import
+// this package — keep that literal path in sync with this constant by
+// hand.
+//
+// Under /persist/vault/kube, not this container's private /var/lib
+// bind-mount: /persist is what's shared with the pillar container
+// zedkube runs in.
+const PendingJoinDeschedulerEventPath = "/persist/vault/kube/rancher/k3s/pending-join-descheduler-event"
+
 // Drop-in config files written to K3sConfigDir. k3s reads every
 // *.yaml in that directory in lexical order at startup; the numeric
 // prefixes choose the merge order. Slot 02 is intentionally reserved

@@ -150,6 +150,16 @@ type zedkube struct {
 
 	// Block 'uncordon' after running it once at boot-up
 	onBootUncordonCheckComplete bool
+	// The boot trigger event, recorded when it happens; deschedulerPending
+	// decides when to act on it. A zero deschedulerBootWindowEnd means
+	// kubernetes is not ready yet. The join trigger needs no equivalent
+	// in-memory state: it is a one-shot request recorded on disk by
+	// kube-init (see pendingJoinDeschedulerEventPath) and read fresh each
+	// tick.
+	triggeredSinceBoot       bool
+	deschedulerBootWindowEnd time.Time
+	deschedulePendingLogged  time.Time
+
 	// kubeAlive caches the last apiserver liveness probe, with the time it
 	// was taken, so the per-tick collectors can be skipped while the
 	// apiserver cannot serve rather than each one discovering it again.
@@ -157,9 +167,7 @@ type zedkube struct {
 	kubeAliveChecked time.Time
 	kubeAliveLogged  bool
 
-	// deschedulerOnBootStarted ensures the watcher goroutine is launched at most once per boot.
-	deschedulerOnBootStarted bool
-	receivedENCC             bool
+	receivedENCC bool
 
 	// longhornDiskReservedErr / longhornDiskReservedErrLogged throttle the error
 	// logging in applyLonghornDiskReserved. That reconcile has no success latch,
@@ -773,22 +781,12 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		log.Errorf("zedkube: WaitForKubenetes %v", err)
 	}
 
-	// Launch the VMI descheduler watcher once kubernetes is ready. GlobalConfig
-	// (which sets OnBoot) is processed as early as the ENCC wait loop above, so
-	// pubKubeConfig already reflects the operator's intent by the time we reach
-	// here. nodeName is also guaranteed set — WaitForEdgeNodeInfo completed
-	// before WaitForKubernetes.
-	//
-	// NOTE: if the operator enables types.KubernetesVmiDescheduleEvents after
-	// WaitForKubernetes returns (i.e. new config pushed just as k3s comes ready),
-	// the descheduler will not fire this boot. handleVmiDescheduleEventsOverride
-	// updates pubKubeConfig but there is no re-trigger once this window has passed.
-	if glbKubeConfig, ok := zedkubeCtx.pubKubeConfig.GetAll()["global"].(types.KubeConfig); ok &&
-		glbKubeConfig.VmiDescheduleEvents.OnBoot &&
-		!zedkubeCtx.deschedulerOnBootStarted {
-		zedkubeCtx.deschedulerOnBootStarted = true
-		go zedkubeCtx.deschedulerOnBootWatcher()
-	}
+	// Kubernetes is up, so the boot event may fire from here until the
+	// window closes. The app-status tick decides when, which keeps this
+	// independent of whether the operator's config has arrived yet.
+	// nodeName is guaranteed set — WaitForEdgeNodeInfo completed before
+	// WaitForKubernetes.
+	zedkubeCtx.deschedulerBootWindowEnd = time.Now().Add(deschedulerBootWindow)
 
 	err = zedkubeCtx.initKubePrefixes()
 	if err != nil { // should never happen
@@ -845,6 +843,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 				zedkubeWdUpdate()
 				zedkubeCtx.checkAppsStatus()
 				zedkubeCtx.reconcileVMIRSAffinity(zedkubeWdUpdate)
+				zedkubeCtx.runDeschedulerIfPending(zedkubeWdUpdate)
 				zedkubeWdUpdate()
 				zedkubeCtx.publishNodeHealth()
 			}
@@ -1253,28 +1252,29 @@ func (z *zedkube) handleK3sVersionOverride(currentGcp *types.ConfigItemValueMap,
 
 func (z *zedkube) handleVmiDescheduleEventsOverride(newGcp *types.ConfigItemValueMap) {
 	newVal := newGcp.GlobalValueString(types.KubernetesVmiDescheduleEvents)
-	newOnBoot := false
+	var events types.VmiDescheduleConfig
 	for _, token := range strings.Split(newVal, ",") {
-		if strings.TrimSpace(token) == types.VmiDescheduleEventBoot {
-			newOnBoot = true
-			break
+		switch strings.TrimSpace(token) {
+		case types.VmiDescheduleEventBoot:
+			events.OnBoot = true
+		case types.VmiDescheduleEventJoin:
+			events.OnJoin = true
 		}
 	}
 
-	// Compare against the currently published bool so the first call always
+	// Compare against the currently published value so the first call always
 	// reconciles the zero-value initial publish regardless of the raw string diff.
 	items := z.pubKubeConfig.GetAll()
 	glbKubeConfig, ok := items["global"].(types.KubeConfig)
-	if ok && glbKubeConfig.VmiDescheduleEvents.OnBoot == newOnBoot {
-		return
+	if !ok || glbKubeConfig.VmiDescheduleEvents != events {
+		kubeConfig := types.KubeConfig{}
+		if ok {
+			kubeConfig = glbKubeConfig
+		}
+		kubeConfig.VmiDescheduleEvents = events
+		z.pubKubeConfig.Publish("global", kubeConfig)
 	}
 
-	kubeConfig := types.KubeConfig{}
-	if ok {
-		kubeConfig = glbKubeConfig
-	}
-	kubeConfig.VmiDescheduleEvents = types.VmiDescheduleConfig{OnBoot: newOnBoot}
-	z.pubKubeConfig.Publish("global", kubeConfig)
 }
 
 func handleEdgeNodeClusterConfigCreate(ctxArg interface{}, key string,
