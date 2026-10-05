@@ -13,7 +13,7 @@
 # The tag below must be bumped whenever pkg/kube changes. It is the git
 # tree hash of pkg/kube, printed by `make kube-show-tag`;
 # check-docker-hashes-consistency is what catches a stale one.
-FROM lfedge/eve-kube:9ef5861306274b55d808d9e939f80d4b8efa6c9b AS kube
+FROM lfedge/eve-kube:3c071ae2163fc75b7d1a19243a03b599acb9a4c9 AS kube
 
 FROM lfedge/eve-alpine:b1b51db20be9651c521bf5ba14eb5c6d7481eed7 AS build
 ARG TARGETARCH
