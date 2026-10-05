@@ -15,44 +15,29 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	virtv1 "kubevirt.io/api/core/v1"
 	"kubevirt.io/client-go/kubecli"
 )
 
-// reconcileVMIRSAffinity corrects the node affinity recorded in an
-// AppInstance's VMI ReplicaSet when it no longer matches this node, but only
-// for apps whose cluster DNID is currently assigned to this node.
+// reconcileVMIRSAffinity is the general safety net: on every tick,
+// independent of any join event, it corrects a VMIRS's node affinity
+// once the node it currently names has been confirmed gone from the
+// cluster for good -- e.g. hardware replaced, or the Node object
+// otherwise removed -- not merely unreachable right now. A node that is
+// only temporarily down keeps its Node object, so this cannot misfire
+// the instant it reconnects.
 //
-// The VMIRS's affinity is set once, by whichever node happens to create it
-// (see hypervisor.CreateReplicaVMIConfig), and is never revisited by that
-// creation path afterward. A cluster DNID reassignment (e.g. node
-// replacement) does not update it, so it can keep pointing at a node that no
-// longer runs (or never ran) this app.
+// This does not cover, and is not a substitute for, the join event
+// (reconcileJoinedVMIPlacement): a live DNID reassignment while the
+// previously-designated node is still healthy and in the cluster will
+// never satisfy nodeExists==false here, by design -- that case has its
+// own authoritative trigger and needs no staleness gate.
 //
-// Gating on "am I the DNID node" -- rather than "am I the node currently
-// running this app" -- is deliberate: a temporary failover (e.g. the DNID
-// node reboots and the app runs elsewhere for a while, with DNID unchanged)
-// must NOT rewrite the affinity to the failover node, since the descheduler
-// (EnsureVMsDeschedulerAnnotated / RemovePodsViolatingNodeAffinity) relies on
-// the affinity still pointing at the true home node to move the app back
-// once it recovers.
-//
-// But IsDesignatedNodeID alone can't tell a genuine permanent reassignment
-// apart from that same DNID node simply reconnecting after such a temporary
-// failover -- both look identical from here. So patching also requires
-// nodeExists to confirm the node currently named in the affinity is gone
-// from the cluster altogether, not merely unreachable or NotReady: a node
-// that's only temporarily down keeps its Node object, so this can't misfire
-// the instant it reconnects, only once it's actually been replaced.
-//
-// Patching only spec.template.spec.affinity does not disturb a VMI already
-// running: a ReplicaSet controller consults the template only when creating
-// a NEW replica to satisfy the desired count, never retroactively for a
-// replica already running.
-//
-// wdFunc is invoked once per app so the watchdog budget resets between
-// per-app API calls; see checkAppsFailover for the same pattern. Without it,
-// N apps each incurring a kubeAPITimeout-bounded Get+Update could together
-// exceed the agent's errorTime budget.
+// It performs no rescale: once the stale node's own Pod object is
+// actually gone (because the node itself is gone), the VMIRS controller
+// creates its replacement from the now-corrected template on its own,
+// unlike the join case where the previous Pod is still very much
+// running and must be cycled explicitly.
 func (z *zedkube) reconcileVMIRSAffinity(wdFunc func()) {
 	sub := z.subAppInstanceConfig
 	items := sub.GetAll()
@@ -97,6 +82,11 @@ func anyDesignatedVMI(items map[string]interface{}) bool {
 	return false
 }
 
+// reconcileVMIRSAffinityWithClient is reconcileVMIRSAffinity's testable
+// core. Patching only spec.template.spec.affinity does not disturb a
+// VMI already running: a ReplicaSet controller consults the template
+// only when creating a NEW replica to satisfy the desired count, never
+// retroactively for a replica already running.
 func reconcileVMIRSAffinityWithClient(nodeName string, virtClient kubecli.KubevirtClient,
 	nodeClient kubernetes.Interface, items map[string]interface{}, wdFunc func()) {
 	for _, item := range items {
@@ -164,4 +154,167 @@ func nodeExists(clientset kubernetes.Interface, nodeName string) bool {
 		return true
 	}
 	return !errors.IsNotFound(err)
+}
+
+// reconcileJoinedVMIPlacement is the handler for a pending join
+// descheduler event (see pendingJoinDeschedulerEventPath). It runs
+// exactly once per actual join, with the marker itself as the sole
+// trigger and sole authorization -- unlike reconcileVMIRSAffinity's
+// general per-tick safety net above, there is deliberately no staleness
+// gate here, since the controller only ever reassigns an app's
+// designated node as part of a node joining.
+//
+// For every VMI-backed app now designated to this node, it rewrites the
+// VMIRS template affinity (if it still names a different node) and,
+// only when it just did so, cycles the VMIRS so KubeVirt actually
+// creates the VMI here. Patching the template without also cycling it
+// would be a no-op: a running VMI's own affinity is immutable, so
+// nothing else would ever revisit it to pick up the new template.
+func (z *zedkube) reconcileJoinedVMIPlacement(wdFunc func()) {
+	sub := z.subAppInstanceConfig
+	items := sub.GetAll()
+
+	config, err := kubeapi.GetKubeConfig()
+	if err != nil {
+		log.Errorf("reconcileJoinedVMIPlacement: get kubeconfig: %v", err)
+		return
+	}
+	virtClient, err := kubecli.GetKubevirtClientFromRESTConfig(config)
+	if err != nil {
+		log.Errorf("reconcileJoinedVMIPlacement: kubevirt client: %v", err)
+		return
+	}
+
+	listCtx, listCancel := context.WithTimeout(context.Background(), kubeAPITimeout)
+	vmiList, err := virtClient.VirtualMachineInstance(kubeapi.EVEKubeNameSpace).List(listCtx, metav1.ListOptions{})
+	listCancel()
+	if err != nil {
+		log.Errorf("reconcileJoinedVMIPlacement: list VMIs: %v", err)
+		return
+	}
+
+	reconcileAndRescaleVMIs(z.nodeName, virtClient, vmiList, items, wdFunc)
+}
+
+// reconcileAndRescaleVMIs is reconcileJoinedVMIPlacement's testable core:
+// given already-constructed clients and inputs, patch+cycle every
+// VMI-backed app now designated to nodeName.
+//
+// wdFunc is invoked once per app so the watchdog budget resets between
+// per-app API calls; see checkAppsFailover for the same pattern. Without
+// it, N apps each incurring kubeAPITimeout-bounded Get+Update+cycle
+// calls could together exceed the agent's errorTime budget.
+func reconcileAndRescaleVMIs(nodeName string, virtClient kubecli.KubevirtClient,
+	vmiList *virtv1.VirtualMachineInstanceList, items map[string]interface{}, wdFunc func()) {
+	for _, item := range items {
+		wdFunc()
+
+		aiconfig := item.(types.AppInstanceConfig)
+		if !aiconfig.IsDesignatedNodeID {
+			continue
+		}
+		if aiconfig.FixedResources.VirtualizationMode == types.NOHYPER {
+			// Native containers use a plain Kubernetes ReplicaSet/Pod
+			// template (CreateReplicaPodConfig), not a VMIRS.
+			continue
+		}
+
+		vmiRsName := base.GetAppKubeNameWithPurge(aiconfig.DisplayName,
+			aiconfig.UUIDandVersion.UUID, aiconfig.PurgeCmd.Counter+aiconfig.LocalPurgeCmd.Counter)
+
+		patched, err := patchVMIRSAffinity(virtClient, nodeName, vmiRsName, aiconfig.AffinityType)
+		if err != nil {
+			log.Errorf("reconcileAndRescaleVMIs: patch vmirs %s: %v", vmiRsName, err)
+			continue
+		}
+		if !patched {
+			// Already correct, or no VMIRS yet for Start() to have
+			// created -- either way, nothing to cycle.
+			continue
+		}
+		if vmi := findAppVMI(vmiList.Items, vmiRsName); vmi != nil && vmi.Status.NodeName == nodeName {
+			// A previous cycle already landed it here.
+			continue
+		}
+
+		log.Noticef("reconcileAndRescaleVMIs: cycling vmirs %s onto newly joined node %s",
+			vmiRsName, nodeName)
+		if err := kubeapi.DetachUtilVmirsReplicaReset(log, vmiRsName); err != nil {
+			log.Errorf("reconcileAndRescaleVMIs: cycle vmirs %s: %v", vmiRsName, err)
+		}
+	}
+}
+
+// patchVMIRSAffinity rewrites vmiRsName's template affinity to nodeName
+// when it currently names a different node. Returns whether it actually
+// patched anything, so the caller can skip a pointless rescale cycle
+// when the affinity already matched (or there is no VMIRS yet).
+//
+// Patching only spec.template.spec.affinity does not disturb a VMI
+// already running: a ReplicaSet controller consults the template only
+// when creating a NEW replica to satisfy the desired count, never
+// retroactively for a replica already running.
+func patchVMIRSAffinity(virtClient kubecli.KubevirtClient, nodeName, vmiRsName string,
+	affinityType types.Affinity) (bool, error) {
+	getCtx, getCancel := context.WithTimeout(context.Background(), kubeAPITimeout)
+	existing, err := virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).Get(getCtx, vmiRsName, metav1.GetOptions{})
+	getCancel()
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// Nothing to reconcile yet, Start() will create it with the
+			// correct affinity for whichever node activates it.
+			return false, nil
+		}
+		return false, err
+	}
+
+	staleNode := vmirsAffinityNode(existing)
+	if staleNode == "" || staleNode == nodeName {
+		return false, nil
+	}
+
+	existing.Spec.Template.Spec.Affinity = hypervisor.SetKubeAffinity(nodeName, affinityType)
+	updateCtx, updateCancel := context.WithTimeout(context.Background(), kubeAPITimeout)
+	_, err = virtClient.ReplicaSet(kubeapi.EVEKubeNameSpace).Update(updateCtx, existing, metav1.UpdateOptions{})
+	updateCancel()
+	if err != nil {
+		return false, err
+	}
+	log.Noticef("patchVMIRSAffinity: updated vmirs %s affinity to node %s (was %s)",
+		vmiRsName, nodeName, staleNode)
+	return true, nil
+}
+
+// vmirsAffinityNode extracts the kubernetes.io/hostname value from the EVE-set
+// node affinity in a VMIRS template spec. EVE encodes the owner node via
+// hypervisor.SetKubeAffinity using either
+// preferredDuringSchedulingIgnoredDuringExecution or
+// requiredDuringSchedulingIgnoredDuringExecution. Returns "" if neither is
+// present or the hostname matchExpression is absent.
+func vmirsAffinityNode(vmirs *virtv1.VirtualMachineInstanceReplicaSet) string {
+	if vmirs.Spec.Template == nil {
+		return ""
+	}
+	aff := vmirs.Spec.Template.Spec.Affinity
+	if aff == nil || aff.NodeAffinity == nil {
+		return ""
+	}
+	na := aff.NodeAffinity
+	for _, pref := range na.PreferredDuringSchedulingIgnoredDuringExecution {
+		for _, expr := range pref.Preference.MatchExpressions {
+			if expr.Key == "kubernetes.io/hostname" && len(expr.Values) > 0 {
+				return expr.Values[0]
+			}
+		}
+	}
+	if req := na.RequiredDuringSchedulingIgnoredDuringExecution; req != nil {
+		for _, term := range req.NodeSelectorTerms {
+			for _, expr := range term.MatchExpressions {
+				if expr.Key == "kubernetes.io/hostname" && len(expr.Values) > 0 {
+					return expr.Values[0]
+				}
+			}
+		}
+	}
+	return ""
 }
