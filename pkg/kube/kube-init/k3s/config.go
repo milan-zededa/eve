@@ -355,11 +355,31 @@ func ClusterStatusPresent() (bool, error) {
 // for everyone else. On first boot for a joining node the call blocks
 // until the bootstrap server is reachable and reports a matching
 // cluster UUID.
+//
+// It also resets this node's local k3s server state (certs, tokens,
+// managed-etcd datastore) when it no longer matches the identity the
+// controller assigns now — otherwise k3s can silently keep a foreign
+// CA, and the failure surfaces much later as a permanent "certificate
+// signed by unknown authority". No recorded identity yet just records
+// the current one, without a reset. See resetStaleServerState for the
+// QuorumRecoveryGeneration/bootstrap-node nuance.
 func ProvisionClusterConfig(ctx context.Context, isFirstBoot bool) error {
 	cs, err := GetClusterStatus()
 	if err != nil {
 		return fmt.Errorf("get cluster status: %w", err)
 	}
+	current := Generation{ClusterID: cs.ClusterID, Counter: cs.QuorumRecoveryGeneration}
+
+	reset, err := resetStaleServerState(current, cs.IsBootstrapNode)
+	if err != nil {
+		return err
+	}
+	if reset {
+		// Local state is gone, so this is a genuine first join
+		// regardless of this device's own boot/init history.
+		isFirstBoot = true
+	}
+
 	if err := provisionDisableLocalPath(); err != nil {
 		return fmt.Errorf("provision disable-local-path: %w", err)
 	}
@@ -368,9 +388,105 @@ func ProvisionClusterConfig(ctx context.Context, isFirstBoot bool) error {
 	}
 	clusterCfgPath := filepath.Join(K3sConfigDir, ClusterConfig)
 	if cs.IsBootstrapNode {
-		return writeBootstrapConfig(clusterCfgPath, cs, isFirstBoot)
+		err = writeBootstrapConfig(clusterCfgPath, cs, isFirstBoot)
+	} else {
+		err = writeJoinConfig(ctx, clusterCfgPath, cs, isFirstBoot)
 	}
-	return writeJoinConfig(ctx, clusterCfgPath, cs, isFirstBoot)
+	if err != nil {
+		return err
+	}
+	return writeClusterIdentity(current)
+}
+
+// clusterIdentityPath records the Generation the node's local k3s
+// server state (k3sServerDir) belongs to. Lives alongside that state,
+// not under /var/lib/*_initialized (ephemeral — see
+// AllComponentsInitialized), since its lifetime must track the k3s
+// state, not the current boot.
+var clusterIdentityPath = "/var/lib/rancher/k3s/cluster-identity"
+
+// k3sServerDir is k3s's own persistent state: TLS material, the
+// managed-etcd datastore, and k3s's bootstrap-data cache. Removed by
+// resetK3sServerState on a cluster-identity mismatch.
+var k3sServerDir = "/var/lib/rancher/k3s/server"
+
+// readClusterIdentity returns the Generation recorded for the node's
+// local k3s server state, and whether one was recorded at all.
+//
+// A file that fails to parse — the single-field format a build
+// predating generation tracking wrote, or a corrupt file — counts as
+// no record too, so an upgrade just records the current identity
+// instead of forcing a reset.
+func readClusterIdentity() (identity Generation, recorded bool, err error) {
+	raw, err := os.ReadFile(clusterIdentityPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Generation{}, false, nil
+		}
+		return Generation{}, false, fmt.Errorf("read %s: %w", clusterIdentityPath, err)
+	}
+	identity, recorded, err = ParseGeneration(string(raw))
+	if err != nil {
+		return Generation{}, false, nil
+	}
+	return identity, recorded, nil
+}
+
+// writeClusterIdentity records identity as what the node's local k3s
+// server state now belongs to.
+func writeClusterIdentity(identity Generation) error {
+	if err := state.AtomicWriteFile(clusterIdentityPath, []byte(identity.String()+"\n"), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", clusterIdentityPath, err)
+	}
+	return nil
+}
+
+// resetK3sServerState discards the node's local k3s server state so
+// the next cluster-init or join starts clean instead of reconciling
+// against — and keeping — material from a different cluster.
+func resetK3sServerState() error {
+	if err := os.RemoveAll(k3sServerDir); err != nil {
+		return fmt.Errorf("remove %s: %w", k3sServerDir, err)
+	}
+	return nil
+}
+
+// resetStaleServerState resets local k3s server state when it no
+// longer matches current, and reports whether it did so the caller
+// can force a genuine first join regardless of boot history. No
+// recorded identity at all is left alone — see readClusterIdentity.
+//
+// isBootstrapNode exempts a QuorumRecoveryGeneration-only mismatch for
+// the node the controller currently names bootstrap: that bump is the
+// recovery this node is about to perform (package quorum), which
+// needs the existing etcd data to reset from — wiping it first
+// destroys exactly what it needs. A ClusterID change always resets
+// regardless of role; that's a different cluster, not a recovery.
+func resetStaleServerState(current Generation, isBootstrapNode bool) (reset bool, err error) {
+	recordedIdentity, recorded, err := readClusterIdentity()
+	if err != nil {
+		return false, fmt.Errorf("read cluster identity: %w", err)
+	}
+	if !recorded {
+		log.Printf("no cluster identity recorded yet for local k3s server state; recording %s", current)
+		return false, nil
+	}
+	if recordedIdentity == current {
+		log.Printf("local k3s server state identity matches %s, no reset needed", current)
+		return false, nil
+	}
+	if recordedIdentity.ClusterID == current.ClusterID && isBootstrapNode {
+		log.Printf("local k3s server state generation %d is behind cluster %q's %d, "+
+			"but this node is bootstrap — leaving it for quorum recovery to handle",
+			recordedIdentity.Counter, current.ClusterID, current.Counter)
+		return false, nil
+	}
+	log.Printf("local k3s server state belongs to %s, controller assigns %s — resetting before provisioning",
+		recordedIdentity, current)
+	if err := resetK3sServerState(); err != nil {
+		return false, fmt.Errorf("reset k3s server state for cluster change: %w", err)
+	}
+	return true, nil
 }
 
 // ProvisionSingleNodeConfig cleans up cluster-mode drop-ins left
