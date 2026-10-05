@@ -34,8 +34,10 @@
 //
 // 10. provision-config             write cluster-mode drop-in
 //
-// 11. write-join-marker            non-bootstrap: stuck-join watchdog
-// 12. apply-registration           stage controller-supplied AddOn manifest
+//  11. write-join-marker             non-bootstrap: stuck-join watchdog
+//  12. write-descheduler-join-marker non-bootstrap + OnJoin configured: flag
+//     zedkube that a VMI-placement reconcile is owed
+//  13. apply-registration            stage controller-supplied AddOn manifest
 //
 // Cluster→single is a one-shot cleanup that ends in
 // RebootWithReason and under normal circumstances does not return.
@@ -54,6 +56,7 @@ import (
 
 	"github.com/lf-edge/eve/pkg/kube/kube-init/components"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/k3s"
+	"github.com/lf-edge/eve/pkg/kube/kube-init/kubeconfig"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/state"
 )
 
@@ -113,6 +116,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		{"clear-cni-if-join", r.StepClearCNIStateIfNonBootstrap},
 		{"provision-config", r.StepProvisionConfig},
 		{"write-join-marker", r.StepWriteJoinMarkerIfNonBootstrap},
+		{"write-descheduler-join-marker", r.StepWriteDeschedulerJoinMarkerIfNonBootstrap},
 		{"apply-registration", r.StepApplyRegistration},
 	}
 
@@ -399,6 +403,30 @@ func (r *Runner) StepWriteJoinMarkerIfNonBootstrap(_ context.Context) error {
 		return nil
 	}
 	log.Printf("wrote join marker %q", marker)
+	return nil
+}
+
+// StepWriteDeschedulerJoinMarkerIfNonBootstrap writes
+// k3s.PendingJoinDeschedulerEventPath when this is a non-bootstrap node
+// and the controller has kubernetes.vmi.deschedule.events's "join" event
+// enabled, so zedkube knows this join owes a one-time VMI-placement
+// reconciliation once it is ready to receive apps.
+//
+// Non-fatal throughout: if the KubeConfig subscription has not
+// delivered yet (a cold, first-ever join with no persisted cache), this
+// silently skips writing the marker, matching kubeconfig.K3sVersion's
+// own fallback tolerance for the same situation.
+func (r *Runner) StepWriteDeschedulerJoinMarkerIfNonBootstrap(_ context.Context) error {
+	if r.cs.IsBootstrapNode {
+		return nil
+	}
+	cfg, ok := kubeconfig.Get()
+	if !ok || !cfg.VmiDescheduleEvents.OnJoin {
+		return nil
+	}
+	if err := state.AtomicWriteFile(k3s.PendingJoinDeschedulerEventPath, nil, 0644); err != nil {
+		log.Printf("warning: write pending-join-descheduler-event marker: %v", err)
+	}
 	return nil
 }
 
