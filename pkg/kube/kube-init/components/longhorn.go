@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lf-edge/eve/pkg/kube/kube-init/kubeclient"
 	"github.com/lf-edge/eve/pkg/kube/kube-init/kubectlx"
@@ -45,6 +46,35 @@ var longhornReadyOnce sync.Once
 // The Longhorn Node CRD is shared via kubectlx.LonghornNodesGVR.
 var longhornEngineImagesGVR = schema.GroupVersionResource{
 	Group: "longhorn.io", Version: "v1beta2", Resource: "engineimages",
+}
+
+// longhornNodeMissingGrace bounds how long the Longhorn Node object may
+// appear absent before LonghornIsReady recreates it. Longhorn's node
+// controller deletes this object from a local informer cache read rather
+// than a live one, so a transient watch-reflector resync elsewhere in the
+// cluster can make a healthy node look momentarily absent. Recreating
+// mints a fresh disk UUID no pre-existing replica can resolve again (see
+// longhornNodeCreate), so a few ticks of grace let the transient case
+// clear first.
+const longhornNodeMissingGrace = 45 * time.Second
+
+// longhornNodeMissingSince records when the Longhorn Node object for this
+// device was first observed absent; zero means present (or not yet
+// checked) as of the last tick.
+var longhornNodeMissingSince time.Time
+
+// longhornNodeMissingAction decides whether to recreate the Longhorn Node
+// object, given when it was first observed absent (zero if this is the
+// first observation) and the current time. Pure and clock-free so the
+// grace period can be tested without sleeping.
+func longhornNodeMissingAction(missingSince, now time.Time, grace time.Duration) (recreate bool, newMissingSince time.Time) {
+	if missingSince.IsZero() {
+		return false, now
+	}
+	if now.Sub(missingSince) < grace {
+		return false, missingSince
+	}
+	return true, missingSince
 }
 
 // LonghornIsReady reports whether Longhorn is fully operational on
@@ -93,14 +123,28 @@ func LonghornIsReady(ctx context.Context) (bool, error) {
 			// treating it as such loops the monitor firing spurious
 			// Create attempts against an API that isn't misconfigured.
 			log.Printf("warning: get longhorn node %s: %v", nodeName, err)
+			longhornNodeMissingSince = time.Time{}
 			return false, nil
 		}
-		log.Printf("longhorn node %s missing, creating", nodeName)
+		firstSighting := longhornNodeMissingSince.IsZero()
+		recreate, newMissingSince := longhornNodeMissingAction(
+			longhornNodeMissingSince, time.Now(), longhornNodeMissingGrace)
+		longhornNodeMissingSince = newMissingSince
+		if !recreate {
+			if firstSighting {
+				log.Printf("longhorn node %s not found, waiting up to %s for a transient cache resync before recreating",
+					nodeName, longhornNodeMissingGrace)
+			}
+			return false, nil
+		}
+		log.Printf("longhorn node %s missing for over %s, creating", nodeName, longhornNodeMissingGrace)
 		if cErr := longhornNodeCreate(ctx, nodeName); cErr != nil {
 			log.Printf("warning: create longhorn node %s: %v", nodeName, cErr)
 		}
+		longhornNodeMissingSince = time.Time{}
 		return false, nil
 	}
+	longhornNodeMissingSince = time.Time{}
 	sched, err := longhornNodeSchedulable(ctx, nodeName)
 	if err != nil {
 		log.Printf("warning: read longhorn node %s Schedulable: %v", nodeName, err)
