@@ -17,6 +17,40 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// readBpduGuard reads the BPDU guard sysfs flag for a named bridge port.
+// Returns "0", "1", or "" if the path cannot be read.
+func readBpduGuard(device *evetest.EdgeDevice, bridgeName, portName string,
+	sshTimeout time.Duration) string {
+	path := "/sys/class/net/" + bridgeName + "/brif/" + portName + "/bpdu_guard"
+	output, _, err := device.RunShellScript("cat "+path, sshTimeout, 0)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(output)
+}
+
+// niHasError is a matchers.SatisfyPredicate StopIf callback: it stops an
+// Eventually early if the network instance has reached the ERROR state,
+// instead of waiting out the full timeout.
+func niHasError(info *eveinfo.ZInfoNetworkInstance) (string, bool) {
+	stop := info.State == eveinfo.ZNetworkInstanceState_ZNETINST_STATE_ERROR
+	if stop {
+		return "Network instance is in error state", true
+	}
+	return "", false
+}
+
+// appHasError is a matchers.SatisfyPredicate StopIf callback: it stops an
+// Eventually early if the application instance has reached the ERROR state,
+// instead of waiting out the full timeout.
+func appHasError(info *eveinfo.ZInfoApp) (string, bool) {
+	stop := info.State == eveinfo.ZSwState_ERROR
+	if stop {
+		return "Application instance is in error state", true
+	}
+	return "", false
+}
+
 // contentTreeTracker follows the info messages of many content trees and
 // keeps the latest one per tree, so that a test deploying many content trees
 // at once can look at their overall state without draining the watch channels
@@ -142,8 +176,12 @@ func logDownloaderView(device *evetest.EdgeDevice, namesBySHA map[string]string,
 			break
 		}
 		logged++
-		data := device.ReadFile("/run/downloader/DownloaderStatus/" +
+		data, err := device.ReadFile("/run/downloader/DownloaderStatus/" +
 			strings.ToLower(sha256Hex) + ".json")
+		if err != nil {
+			log.Warnf("Cannot read the DownloaderStatus of %s: %v", name, err)
+			continue
+		}
 		var status pillartypes.DownloaderStatus
 		if err := json.Unmarshal(data, &status); err != nil {
 			log.Warnf("Cannot parse the DownloaderStatus of %s: %v", name, err)
