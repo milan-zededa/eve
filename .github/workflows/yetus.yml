@@ -33,6 +33,19 @@ jobs:
           git checkout upstream/${{ github.base_ref }} -b ${{ github.base_ref }}
           git submodule update --init --recursive
 
+      - name: Sync the evetest harness
+        working-directory: src
+        run: |
+          # Branches carrying only the evetest tests need the harness from
+          # master (git-ignored) for the tests to compile. Skip when the base
+          # branch still tracks the harness itself.
+          if [ -e evetest/harness.go ]; then
+            echo "evetest harness is tracked on ${{ github.base_ref }}, nothing to sync."
+          else
+            make evetest-sync-harness \
+              EVETEST_HARNESS_REMOTE=${{ github.server_url }}/${{ github.repository }}.git
+          fi
+
       - name: Prepare gitconfig for container
         run: |
           cat > /tmp/gitconfig <<'EOF'
