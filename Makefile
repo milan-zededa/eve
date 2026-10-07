@@ -1447,10 +1447,8 @@ help:
 	@echo "evetest integration testing targets:"
 	@echo "   evetest NAME=<test>              run a named test or test suite (NAME or EVETEST_NAME required)"
 	@echo "                                    execution can be customized via EVETEST_* env variables;"
-	@echo "                                    see evetest/README.md for the full list"
+	@echo "                                    see evetest/README.md on master for the full list"
 	@echo "   evetest-list-tests               list available tests and test suites with their parameters"
-	@echo "   evetest-build-container          build the evetest Docker container image locally"
-	@echo "   evetest-proto                    regenerate gRPC Go bindings from evetest proto files"
 	@echo
 	@echo "Seldom used maintenance and development targets:"
 	@echo "   bump-eve-api    bump eve-api in all subprojects"

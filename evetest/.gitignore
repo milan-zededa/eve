@@ -1,3 +1,12 @@
-.config
-vendor/
-gh-runner/evetest-runner.env
+# Only the tests and their Makefile/go.mod are tracked on this branch. Anything
+# else in this directory is the master harness placed here by
+# "make sync-harness" for IDE/go vet support and must not be committed.
+/*
+!/.gitignore
+!/Makefile
+!/go.mod
+!/go.sum
+!/tests
+!/netmodels
+!/matchers
+!/sync-harness.sh
