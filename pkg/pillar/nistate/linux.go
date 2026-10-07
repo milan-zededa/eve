@@ -44,6 +44,11 @@ type LinuxCollector struct {
 	flowWatchers     []chan types.IPFlow
 	ipAssignWatchers []chan []VIFAddrsUpdate
 	capturedPackets  chan capturedPacket
+
+	// How long an IP learned from ARP is considered assigned after the last ARP.
+	arpSnoopExpiry time.Duration
+	// Notifies the event loop that arpSnoopExpiry has changed.
+	arpSnoopExpiryChanged chan struct{}
 }
 
 type niInfo struct {
@@ -216,8 +221,10 @@ func (vif *vifInfo) delIPs(sourceMask int, onlyExpired bool) *VIFAddrsUpdate {
 func NewLinuxCollector(log *base.LogObject) *LinuxCollector {
 	var err error
 	sc := &LinuxCollector{
-		log: log,
-		nis: make(map[uuid.UUID]*niInfo),
+		log:                   log,
+		nis:                   make(map[uuid.UUID]*niInfo),
+		arpSnoopExpiry:        defaultARPSnoopExpiry,
+		arpSnoopExpiryChanged: make(chan struct{}, 1),
 	}
 	sc.capturedPackets = make(chan capturedPacket, 100)
 	sc.ipLeaseWatcher, err = fsnotify.NewWatcher()
@@ -363,6 +370,27 @@ func (lc *LinuxCollector) StopCollectingForNI(niID uuid.UUID) error {
 	return nil
 }
 
+// SetARPSnoopExpiry : set how long an IP address learned from ARP packets stays
+// assigned to a VIF after the last ARP packet carrying this address was seen.
+func (lc *LinuxCollector) SetARPSnoopExpiry(expiry time.Duration) {
+	lc.mu.Lock()
+	changed := lc.arpSnoopExpiry != expiry
+	lc.arpSnoopExpiry = expiry
+	lc.mu.Unlock()
+	if changed {
+		select {
+		case lc.arpSnoopExpiryChanged <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// ipAssignmentsGCInterval returns how often expired IP assignments are garbage collected.
+// It is shortened for a short ARP expiry, otherwise expired IPs would linger.
+func ipAssignmentsGCInterval(arpSnoopExpiry time.Duration) time.Duration {
+	return min(time.Minute, max(time.Second, arpSnoopExpiry/2))
+}
+
 // GetIPAssignments returns information about currently assigned IP addresses
 // to VIFs connected to a given network instance.
 func (lc *LinuxCollector) GetIPAssignments(niID uuid.UUID) (VIFAddrsList, error) {
@@ -484,7 +512,9 @@ func (lc *LinuxCollector) WatchFlows() <-chan types.IPFlow {
 // Run periodic and on-change state data collecting for network instances
 // from a separate Go routine.
 func (lc *LinuxCollector) runStateCollecting() {
-	gcIPAssignments := time.NewTicker(time.Minute)
+	lc.mu.Lock()
+	gcIPAssignments := time.NewTicker(ipAssignmentsGCInterval(lc.arpSnoopExpiry))
+	lc.mu.Unlock()
 	fmax := float64(flowCollectInterval)
 	fmin := fmax * 0.9
 	flowCollectTimer := flextimer.NewRangeTicker(time.Duration(fmin), time.Duration(fmax))
@@ -516,6 +546,10 @@ func (lc *LinuxCollector) runStateCollecting() {
 					notifyWatchers(lc.log, "IP assignment", watchers, addrChanges)
 				}
 			}
+		case <-lc.arpSnoopExpiryChanged:
+			lc.mu.Lock()
+			gcIPAssignments.Reset(ipAssignmentsGCInterval(lc.arpSnoopExpiry))
+			lc.mu.Unlock()
 		case <-gcIPAssignments.C:
 			lc.mu.Lock()
 			var addrChanges []VIFAddrsUpdate
