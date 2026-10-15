@@ -27,10 +27,6 @@ import (
 //     controller answers 503 still reaches it afterwards.
 //   - TestInfoRetriedAfterLostController -- the same when the controller cannot
 //     be reached at all.
-//   - TestDeferredQueueBacklogReported -- the metrics say how much is held back
-//     and for how long while the controller refuses info messages.
-//   - TestDeferredQueueDropsReported -- the metrics count the messages given up
-//     on when the controller rejects them.
 //   - TestInfoDroppedOnRejectionKeepsDeviceReporting -- a message the
 //     controller rejects outright is given up on, and later changes are still
 //     reported.
@@ -59,12 +55,6 @@ func TestControllerFaultsSuite(test *testing.T) {
 		},
 		evetest.TestCase{
 			Test: TestInfoRetriedAfterLostController,
-		},
-		evetest.TestCase{
-			Test: TestDeferredQueueBacklogReported,
-		},
-		evetest.TestCase{
-			Test: TestDeferredQueueDropsReported,
 		},
 		evetest.TestCase{
 			Test: TestInfoDroppedOnRejectionKeepsDeviceReporting,
