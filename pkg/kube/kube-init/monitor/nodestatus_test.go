@@ -6,7 +6,7 @@ package monitor
 import "testing"
 
 // TestSameAnnotations guards the check that keeps an unchanged tick from
-// writing. Status changes rarely and the tick runs every 15
+// writing. Recovery status changes rarely and the tick runs every 15
 // seconds, so patching regardless would be a steady stream of writes
 // into etcd carrying no new information.
 func TestSameAnnotations(t *testing.T) {
