@@ -22,6 +22,19 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
+// failoverCycleCountParamKey is the key for the parameter controlling how
+// many times TestTwoNodeHACluster repeats its failover/recovery cycle.
+const failoverCycleCountParamKey = "CLUSTER_FAILOVER_CYCLE_COUNT"
+
+var failoverCycleCountParam = evetest.TestParameterDefinition{
+	Key:          failoverCycleCountParamKey,
+	DefaultValue: uint32(1),
+	Description: evetest.TestParameterDescription{
+		Summary: "Number of times to repeat the non-seed/seed failover and quorum-recovery cycle",
+		Default: "1",
+	},
+}
+
 // appNodeName returns the k3s node name currently hosting the app (matched
 // by display name, allowing for Kubernetes' hash suffix - mirrors
 // edgecluster.go's unexported findAppNodeName), or "" if not yet reported.
@@ -55,6 +68,24 @@ func witnessJoined(witnessIP string) func(*eveinfo.ZInfoKubeCluster) bool {
 			return false
 		}
 		return w.GetState() == eveinfo.WitnessEtcdState_WITNESS_ETCD_STATE_JOINED
+	}
+}
+
+// nodeRecoveryConverged returns a predicate checking that the named node's
+// KubeNodeInfo.Recovery reports the expected applied generation, with no
+// error and no convergence in progress.
+func nodeRecoveryConverged(
+	nodeName string, wantGeneration uint32) func(*eveinfo.ZInfoKubeCluster) bool {
+	return func(info *eveinfo.ZInfoKubeCluster) bool {
+		for _, node := range info.GetNodes() {
+			if node.GetName() != nodeName {
+				continue
+			}
+			rec := node.GetRecovery()
+			return rec.GetAppliedGeneration() == wantGeneration &&
+				!rec.GetConverging() && rec.GetError() == nil
+		}
+		return false
 	}
 }
 
@@ -141,9 +172,9 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 
 // TestTwoNodeHACluster verifies EVE-k's 2-node HA (witness) feature: two K3s
 // server nodes plus a lightweight etcd-only witness co-located with the
-// seed/bootstrap node. Losing the non-seed leaves seed+witness with quorum and
-// is handled automatically; losing the seed takes the witness with it and
-// leaves the cluster without quorum.
+// seed/bootstrap node, tolerating the loss of either physical node - either
+// automatically (non-seed dies, quorum survives) or via a controller-driven
+// quorum recovery (seed dies, quorum lost).
 //
 // Network model
 // -------------
@@ -159,11 +190,11 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 //     the 3-node test: Kubevirt, fresh image, ext4 by default), but with
 //     MinCPUs/MinRAMInMiB raised to 8/16384. The 3-node test's default 4/8
 //     floor spreads etcd, kubevirt, Longhorn, multus and traefik across
-//     three real voting members; with the seed down, the surviving node
-//     alone carries all of that plus whatever the dead node was running,
-//     on the same per-node floor. At 4/8 that was enough to make etcd too
-//     slow to serve its own leader-election lease renewals in time,
-//     crashing k3s outright.
+//     three real voting members; a quorum recovery here collapses to a
+//     single voting member, so the survivor alone carries all of that plus
+//     whatever the dead node was running, on the same per-node floor. At
+//     4/8 that was enough to make etcd too slow to serve its own
+//     leader-election lease renewals in time, crashing k3s outright.
 //   - ClusterConfig with two ClusterNode entries: edge-dev1 (seed,
 //     BootstrapNode=true, 10.244.244.2/24) and edge-dev2 (non-seed,
 //     10.244.244.3/24), ClusterInterface="ethernet1".
@@ -174,12 +205,23 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 //     kept away from the seed so that losing the seed (and the co-located
 //     witness) never interrupts it, only the control plane; losing the
 //     non-seed instead causes a short, fully automatic reschedule +
-//     failback via K3s and pkg/kube's descheduler.
+//     failback via K3s and pkg/kube's descheduler. Unlike the seed role,
+//     which follows join_server_ip on its own, the app's designated node
+//     does not move by itself: the controller repoints it explicitly
+//     after the quorum recovery below, once the old seed has rejoined as
+//     the new non-seed.
 //
 // Test parameters
 // ---------------
 //   - TPM via evetest.TPMParameter().
 //   - FILESYSTEM (ext4|zfs, defaults to ext4) via evetest.FilesystemParameter().
+//   - CLUSTER_FAILOVER_CYCLE_COUNT (uint32, defaults to 1): how many times
+//     phases 8-19 repeat. Each cycle ends with the seed and non-seed roles
+//     swapped between the two devices, so the next cycle exercises the
+//     same steps with the physical devices reversed. The quorum recovery
+//     generation keeps counting up across cycles (cycle N expects
+//     generation N) rather than resetting. Checkpoint names from phases
+//     8-19 get a "-cycle-N" suffix when this is set above 1.
 //
 // Phases
 // ------
@@ -187,16 +229,18 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 //  2. initial-config-applied
 //  3. nodes-are-ready
 //  4. witness-is-ready: ZInfoKubeCluster.Witness reports JOINED at the
-//     configured IP.
+//     configured IP, with no recovery error/in-progress.
 //  5. app-config-is-submitted / app-is-deployed: app lands on the non-seed
 //     node.
-//  6. app-verified-on-non-seed: SSH (hostname) + outbound curl checks.
+//  6. app-verified-on-non-seed: SSH (hostname) + outbound curl checks;
+//     captures a boot-time baseline (/proc/stat's btime) for later
+//     no-downtime checks.
 //  7. disk-marker-written: a unique line is written to a file on the app's
 //     Longhorn-backed root volume and fsync'd. Every later app-move
-//     checkpoint re-reads this same file and expects the exact same
-//     content, proving the node the app lands on next already had a synced
-//     Longhorn replica - not just that the running process state carried
-//     over.
+//     checkpoint (9, 11, 19) re-reads this same file and expects the exact
+//     same content, proving the node the app lands on next already had (or,
+//     for the rejoined old seed, correctly rebuilt) a synced Longhorn
+//     replica - not just that the running process state carried over.
 //  8. non-seed-powered-off
 //  9. app-failed-over-to-seed: quorum survives (seed+witness=2 of 3), K3s
 //     reschedules the app onto the seed automatically; SSH+curl and the
@@ -206,7 +250,7 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 //  11. app-failed-back-to-non-seed: pkg/kube's descheduler moves the app
 //     back to its preferred (non-seed) node once it's healthy again;
 //     SSH+curl and the disk marker re-verified. Boot time changes again
-//     (last expected restart; re-baselined here for the no-downtime check
+//     (last expected restart; re-baselined here for the no-downtime checks
 //     below).
 //  12. seed-powered-off: witness dies with it (2 of 3 votes gone) - quorum
 //     lost, but the app was never on the seed.
@@ -216,12 +260,30 @@ func verifyDiskMarker(t *WithT, cluster *evetest.EdgeCluster, appUUID uuid.UUID,
 //  14. k3s-unresponsive-confirmed: `eve exec kube kubectl get nodes` over
 //     SSH to the surviving (non-seed) device's EVE host must fail/timeout
 //     - the local apiserver can't serve requests without quorum.
-//  15. seed-powered-on: the seed returns with its etcd data intact, so the
-//     witness and the seed rejoin the surviving node and quorum is
-//     restored.
-//  16. cluster-recovered: all nodes ready, the witness JOINED again, and the
-//     app's boot time still equal to the step-11 baseline - neither the
-//     outage nor the restored quorum ever touched the running app.
+//  15. quorum-recovery-triggered: TriggerQuorumRecovery(edge-dev2) promotes
+//     the non-seed to be the new seed, and withdraws the dead seed's
+//     cluster config in the same config change, so it is never told to
+//     converge to the new generation at all.
+//  16. cluster-reset-completed: the new seed's KubeNodeInfo.Recovery
+//     reaches the new generation with no error, and the witness has
+//     followed the new seed (JOINED again). Boot time is re-checked
+//     against the step-11/13 baseline - the reset itself must not
+//     interrupt the app either.
+//  17. old-seed-powered-on: expects the power-on reboot plus one more -
+//     with no cluster config to find, it converts back to single-node the
+//     same way TestClusterToSingleConversion does.
+//  18. old-seed-converted-to-single / old-seed-rejoined: once it reports
+//     itself as a lone ready node, it is rejoined as a plain (non-
+//     bootstrap) member through the ordinary join workflow, and the
+//     controller repoints the app's DesignatedNodeName at it in the same
+//     config change - the app is placed by node id alone, so nothing else
+//     would move it here.
+//  19. app-moved-to-new-non-seed: the join event fires once edge-dev1
+//     reports its cluster ready, moving the app there; final SSH+curl
+//     checks, plus a final disk-marker check - the old seed's Longhorn
+//     replica was wiped along with everything else in steps 16-18, so
+//     finding the original marker here proves Longhorn rebuilt it correctly
+//     from the surviving node's copy before the app started.
 //
 // Suite placement
 // ---------------
@@ -235,11 +297,13 @@ func TestTwoNodeHACluster(test *testing.T) {
 	evetest.DefineTestParameters(
 		evetest.TPMParameter(),
 		evetest.FilesystemParameter(),
+		failoverCycleCountParam,
 	)
 
 	// Get parameter values set for this test execution.
 	withTPM := evetest.GetTPMParameterValue()
 	filesystem := evetest.GetFilesystemParameterValue()
+	failoverCycles := evetest.GetTestParameter[uint32](failoverCycleCountParamKey)
 
 	// Set up the test harness and specify the test prerequisites.
 	const numNodes = 2
@@ -287,13 +351,22 @@ func TestTwoNodeHACluster(test *testing.T) {
 	)
 	clusterConfig.SetWitness(evetest.IPAddress(witnessIP))
 
-	// The app is moved back to the non-seed by the descheduler once that node
-	// returns, which is the boot event. Set in the config the devices onboard
+	// The app only moves when the descheduler runs, and both moves this test
+	// makes need it: back to the non-seed once that node returns, which is
+	// the boot event, and onto the old seed once it rejoins as the new
+	// non-seed after the quorum recovery, which is the join event - a live
+	// single-to-cluster transition never restarts zedkube, so it needs its
+	// own trigger distinct from boot. Set in the config the devices onboard
 	// with, since the boot watcher is launched once just after k3s comes
 	// ready and a value arriving later does not re-trigger it.
+	//
+	// "join" is spelled out because its constant arrives with the pillar
+	// change this test exercises, and evetest builds against a published
+	// release; swap it for types.VmiDescheduleEventJoin after the next
+	// pillar bump.
 	cfgProps := types.NewConfigItemValueMap()
 	cfgProps.SetGlobalValueString(types.KubernetesVmiDescheduleEvents,
-		types.VmiDescheduleEventBoot)
+		types.VmiDescheduleEventBoot+",join")
 	clusterConfig.SetConfigProperties(cfgProps)
 
 	// Configure network adapters and networks (applied to all devices).
@@ -375,8 +448,15 @@ func TestTwoNodeHACluster(test *testing.T) {
 			},
 		},
 	}
-	// DesignatedNodeName names the node that downloads the volume, and is the
-	// node the app first lands on.
+	// Placed by plain node id. A pod's affinity is immutable once it is
+	// running, so moving the app once the non-seed role changes hands is
+	// the controller's job, not something the initial placement can do on
+	// its own: after the quorum recovery below, the controller repoints
+	// DesignatedNodeName at whichever device is the non-seed then, and the
+	// join event moves the running app to match.
+	//
+	// DesignatedNodeName also names the node that downloads the volume,
+	// and is the node the app first lands on.
 	appUUID := clusterConfig.AddApplication(evetest.ClusterApplicationInstanceConfig{
 		ApplicationInstanceConfig: appConfig,
 		DesignatedNodeName:        devName[1], // non-seed
@@ -411,74 +491,184 @@ func TestTwoNodeHACluster(test *testing.T) {
 	diskMarker := writeDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, "initial")
 	evetest.Checkpoint("disk-marker-written")
 
-	// Kill the non-seed node. Quorum survives (seed + witness = 2 of 3), so K3s
-	// reschedules the app onto the seed automatically.
-	seed, nonSeed := devName[0], devName[1]
-	nonSeedDevice := evetest.GetEdgeDevice(nonSeed)
-	nonSeedDevice.PowerOff()
-	evetest.Checkpoint("non-seed-powered-off")
+	// Phases 8-19 repeat failoverCycles times, with the seed/non-seed roles
+	// swapped between the two devices at the end of each cycle (see "Test
+	// parameters" above).
+	curSeed, curNonSeed := devName[0], devName[1]
+	var recoveryGeneration uint32
+	for cycle := uint32(1); cycle <= failoverCycles; cycle++ {
+		checkpointSuffix := ""
+		if failoverCycles > 1 {
+			checkpointSuffix = fmt.Sprintf("-cycle-%d", cycle)
+		}
+		checkpoint := func(name string) {
+			evetest.Checkpoint(name + checkpointSuffix)
+		}
 
-	rescheduleTimeout := 10 * time.Minute // no image download needed, just a K8s reschedule
-	cluster.WaitUntilClusterInfoSatisfies(rescheduleTimeout,
-		fmt.Sprintf("app %q to be rescheduled onto seed %q", appDisplayName, seed),
-		func(info *eveinfo.ZInfoKubeCluster) bool {
-			return appNodeName(info, appDisplayName) == seed
+		// Kill the non-seed node. Quorum survives (seed + witness = 2 of 3),
+		// so K3s reschedules the app onto the seed automatically.
+		nonSeedDevice := evetest.GetEdgeDevice(curNonSeed)
+		nonSeedDevice.PowerOff()
+		checkpoint("non-seed-powered-off")
+
+		rescheduleTimeout := 10 * time.Minute // no image download needed, just a K8s reschedule
+		cluster.WaitUntilClusterInfoSatisfies(rescheduleTimeout,
+			fmt.Sprintf("app %q to be rescheduled onto seed %q", appDisplayName, curSeed),
+			func(info *eveinfo.ZInfoKubeCluster) bool {
+				return appNodeName(info, appDisplayName) == curSeed
+			})
+		verifyAppReachable(t, cluster, appUUID, appAuth, sshTimeout)
+		verifyDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, diskMarker)
+		checkpoint("app-failed-over-to-seed")
+
+		// Bring the non-seed node back. pkg/kube's descheduler should move the
+		// app back to its preferred node once it's healthy again.
+		nonSeedDevice.PowerOn(true)
+		checkpoint("non-seed-powered-on")
+
+		failbackTimeout := 10 * time.Minute // node health checks + descheduler trigger
+		cluster.WaitUntilClusterInfoSatisfies(failbackTimeout,
+			fmt.Sprintf("app %q to be moved back onto non-seed %q", appDisplayName, curNonSeed),
+			func(info *eveinfo.ZInfoKubeCluster) bool {
+				return appNodeName(info, appDisplayName) == curNonSeed
+			})
+		verifyAppReachable(t, cluster, appUUID, appAuth, sshTimeout)
+		verifyDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, diskMarker)
+		checkpoint("app-failed-back-to-non-seed")
+
+		// Re-baseline boot time here. Valid only through the seed-death/
+		// quorum-recovery checks below (steps 11-15) - the app is
+		// deliberately moved again afterward (once its DesignatedNodeName is
+		// swapped in step 18), which restarts it and invalidates this
+		// baseline for anything checked after that point.
+		bootTimeBaseline := getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
+
+		// Kill the seed node. The co-located witness dies with it - 2 of 3
+		// votes gone, quorum lost - but the app was never running on the seed.
+		seedDevice := evetest.GetEdgeDevice(curSeed)
+		seedDevice.PowerOff()
+		checkpoint("seed-powered-off")
+
+		// Confirm the app was never interrupted: its boot time must be
+		// unchanged.
+		latestBootTime := getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
+		t.Expect(latestBootTime).To(Equal(bootTimeBaseline),
+			"app boot time changed - the seed outage caused unexpected downtime")
+		checkpoint("no-downtime-confirmed")
+
+		// Confirm the control plane is stuck without quorum: kubectl against
+		// the surviving node's local apiserver must fail/timeout.
+		_, _, err := nonSeedDevice.RunShellScript(
+			"eve exec kube kubectl get nodes", 30*time.Second, 0)
+		t.Expect(err).To(HaveOccurred(),
+			"kubectl succeeded despite lost quorum - k3s apiserver should be unresponsive")
+		checkpoint("k3s-unresponsive-confirmed")
+
+		// Recover: promote the non-seed to be the new seed. TriggerQuorumRecovery
+		// also withdraws the dead seed's cluster config outright in the same
+		// config change, so it converts back to single-node on its own - the
+		// same mechanism TestClusterToSingleConversion exercises.
+		//
+		// The recovery generation is a cluster-wide counter that keeps
+		// incrementing across cycles, not a per-cycle value.
+		recoveryGeneration++
+		clusterConfig.TriggerQuorumRecovery(curNonSeed)
+		// Published without waiting: the old seed is powered off until step 16
+		// and could never fetch, and the survivor needs no separate wait since
+		// the convergence check below cannot pass until it has acted on this.
+		cluster.ApplyConfig(clusterConfig, false, false)
+		checkpoint("quorum-recovery-triggered")
+
+		// Covers the whole chain, not just the reset: config to cluster
+		// status, a graceful k3s stop, the datastore snapshot, the forced
+		// reset itself, then a full configure/start/ready cycle where ready
+		// means the node and its kube-system pods, and the witness
+		// rejoining behind it. On top of that sits a fixed reporting
+		// latency of roughly a minute, since the status is stamped on a
+		// 15s health tick and collected on zedkube's 30s one.
+		//
+		// An estimate rather than a measurement, pending a hardware run.
+		recoveryTimeout := 10 * time.Minute
+		cluster.WaitUntilClusterInfoSatisfies(recoveryTimeout,
+			fmt.Sprintf("quorum recovery (generation %d) to complete on new seed %q",
+				recoveryGeneration, curNonSeed),
+			func(info *eveinfo.ZInfoKubeCluster) bool {
+				return nodeRecoveryConverged(curNonSeed, recoveryGeneration)(info) &&
+					witnessJoined(witnessIP)(info)
+			})
+		latestBootTime = getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
+		t.Expect(latestBootTime).To(Equal(bootTimeBaseline),
+			"app boot time changed - the quorum recovery caused unexpected app downtime")
+		checkpoint("cluster-reset-completed")
+
+		// Bring the old seed back. Its cluster config was withdrawn above, so
+		// once it fetches that, kube-init converts it back to a standalone
+		// node exactly as TestClusterToSingleConversion does: mark
+		// ConvertToSingleNode, reboot, and restore the pre-cluster /var/lib.
+		// That reboot is required behaviour, not a crash - declare it, or
+		// Close reports the conversion working as a failure.
+		seedDevice.ExpectAdditionalReboots(1)
+		seedDevice.PowerOn(true)
+		checkpoint("old-seed-powered-on")
+
+		// The device boot, vault unseal and install come first, then the
+		// conversion's own reboot and the restore before k3s ever starts in
+		// cluster mode again.
+		//
+		// An estimate rather than a measurement, pending a hardware run.
+		conversionTimeout := 20 * time.Minute
+		cluster.WaitUntilClusterInfoSatisfies(conversionTimeout,
+			fmt.Sprintf("old seed %q to report itself as a standalone node", curSeed),
+			func(info *eveinfo.ZInfoKubeCluster) bool {
+				return soleNodeReady(info, curSeed)
+			})
+		checkpoint("old-seed-converted-to-single")
+
+		// Rejoin the old seed as a plain (non-bootstrap) member through the
+		// same mechanism any device joins for the first time - a rejoin is
+		// not a distinct operation - and repoint the app's designated node at
+		// it in the same config change: the controller has to say explicitly
+		// that curSeed is the non-seed again, since nothing else determines
+		// where the app runs.
+		clusterConfig.RestoreClusterConfig(curSeed)
+		clusterConfig.UpdateApplication(appUUID, evetest.ClusterApplicationInstanceConfig{
+			ApplicationInstanceConfig: appConfig,
+			DesignatedNodeName:        curSeed,
+			Affinity:                  eveconfig.AffinityType_AFFINITY_TYPE_PREFERRED,
 		})
-	verifyAppReachable(t, cluster, appUUID, appAuth, sshTimeout)
-	verifyDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, diskMarker)
-	evetest.Checkpoint("app-failed-over-to-seed")
+		cluster.ApplyConfig(clusterConfig, true, true)
+		checkpoint("old-seed-rejoin-triggered")
 
-	// Bring the non-seed node back. pkg/kube's descheduler should move the
-	// app back to its preferred node once it's healthy again.
-	nonSeedDevice.PowerOn(true)
-	evetest.Checkpoint("non-seed-powered-on")
+		// Same budget as the earlier cluster formation: a fresh join plus full
+		// node readiness.
+		rejoinTimeout := 30 * time.Minute
+		cluster.WaitUntilNodesAreReady(rejoinTimeout)
+		checkpoint("old-seed-rejoined")
 
-	failbackTimeout := 10 * time.Minute // node health checks + descheduler trigger
-	cluster.WaitUntilClusterInfoSatisfies(failbackTimeout,
-		fmt.Sprintf("app %q to be moved back onto non-seed %q", appDisplayName, nonSeed),
-		func(info *eveinfo.ZInfoKubeCluster) bool {
-			return appNodeName(info, appDisplayName) == nonSeed
-		})
-	verifyAppReachable(t, cluster, appUUID, appAuth, sshTimeout)
-	verifyDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, diskMarker)
-	evetest.Checkpoint("app-failed-back-to-non-seed")
+		// The join event fires once curSeed reports its own cluster ready,
+		// which is what lets the app move here without a device reboot: unlike
+		// boot, join has to be its own trigger because a live single-to-cluster
+		// transition never restarts zedkube. Nothing could have moved the app
+		// before this point: the descheduler evicts a pod violating its
+		// affinity only once some other node actually satisfies it, and before
+		// the join above curSeed was not yet a node the app could run on.
+		finalMoveTimeout := 20 * time.Minute
+		cluster.WaitUntilClusterInfoSatisfies(finalMoveTimeout,
+			fmt.Sprintf("app %q to move to new non-seed %q", appDisplayName, curSeed),
+			func(info *eveinfo.ZInfoKubeCluster) bool {
+				return appNodeName(info, appDisplayName) == curSeed
+			})
+		verifyAppReachable(t, cluster, appUUID, appAuth, sshTimeout)
+		// The old seed was wiped back to single-node state in the steps above, so
+		// its Longhorn replica here was rebuilt from scratch from the surviving
+		// node's copy after rejoining, not left over from before. Finding the
+		// original marker proves that rebuild completed correctly before the app
+		// started on it.
+		verifyDiskMarker(t, cluster, appUUID, appAuth, sshTimeout, diskMarker)
+		checkpoint("app-moved-to-new-non-seed")
 
-	// Re-baseline boot time here, for the no-downtime check below.
-	bootTimeBaseline := getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
-
-	// Kill the seed node. The co-located witness dies with it - 2 of 3 votes
-	// gone, quorum lost - but the app was never running on the seed.
-	seedDevice := evetest.GetEdgeDevice(seed)
-	seedDevice.PowerOff()
-	evetest.Checkpoint("seed-powered-off")
-
-	// Confirm the app was never interrupted: its boot time must be unchanged.
-	latestBootTime := getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
-	t.Expect(latestBootTime).To(Equal(bootTimeBaseline),
-		"app boot time changed - the seed outage caused unexpected downtime")
-	evetest.Checkpoint("no-downtime-confirmed")
-
-	// Confirm the control plane is stuck without quorum: kubectl against
-	// the surviving node's local apiserver must fail/timeout.
-	_, _, err := nonSeedDevice.RunShellScript(
-		"eve exec kube kubectl get nodes", 30*time.Second, 0)
-	t.Expect(err).To(HaveOccurred(),
-		"kubectl succeeded despite lost quorum - k3s apiserver should be unresponsive")
-	evetest.Checkpoint("k3s-unresponsive-confirmed")
-
-	// Bring the seed back. Its etcd data is intact, so quorum is restored as
-	// soon as it and the witness are up again; no controller action needed.
-	seedDevice.PowerOn(true)
-	evetest.Checkpoint("seed-powered-on")
-
-	// Same budget as the earlier cluster formation: device boot, vault unseal
-	// and a full k3s start before the control plane answers again.
-	clusterRecoveryTimeout := 30 * time.Minute
-	cluster.WaitUntilNodesAreReady(clusterRecoveryTimeout)
-	cluster.WaitUntilClusterInfoSatisfies(5*time.Minute,
-		fmt.Sprintf("witness to rejoin at %s", witnessIP), witnessJoined(witnessIP))
-	latestBootTime = getAppBootTime(t, cluster, appUUID, appAuth, sshTimeout)
-	t.Expect(latestBootTime).To(Equal(bootTimeBaseline),
-		"app boot time changed - restoring quorum caused unexpected app downtime")
-	evetest.Checkpoint("cluster-recovered")
+		// The old seed is now the non-seed and vice versa; the next cycle
+		// repeats the same steps with the physical devices reversed.
+		curSeed, curNonSeed = curNonSeed, curSeed
+	}
 }
