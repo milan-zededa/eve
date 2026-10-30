@@ -467,8 +467,6 @@ github.com/leodido/go-urn v1.2.4 h1:XlAE/cm/ms7TE/VMVoduSpNBoyc2dOxHs5MZSwAN63Q=
 github.com/leodido/go-urn v1.2.4/go.mod h1:7ZrI8mTSeBSHl/UaRyKQW1qZeMgak41ANeCNaVckg+4=
 github.com/lf-edge/edge-containers v0.0.0-20260917202841-e36165e916c9 h1:WkTrpZLjaqm80fMIFKpdUNkPeTPdxOMR2PoRdyp1L+o=
 github.com/lf-edge/edge-containers v0.0.0-20260917202841-e36165e916c9/go.mod h1:+G+6Yqs9gmQD9l+efNjVLSynvX2I4IunMtUh9wwRJaA=
-github.com/lf-edge/eve-api/go v0.0.0-20261015104443-e46e4c3a39ce h1:rmKaUyMA4frXWagYo1WN5Zt6/5iV0W26OnTpQ87+ueE=
-github.com/lf-edge/eve-api/go v0.0.0-20261015104443-e46e4c3a39ce/go.mod h1:6HxNA/qKJVEqwpuOFkcQ0h3QyotvAs/cjHLC961FPOY=
 github.com/lf-edge/eve-libs v0.0.0-20260928172040-a59ba20797d0 h1:u7tFrmeaqkuIc06IYWLY/cEqHFzplnYgQ9MERTolKaY=
 github.com/lf-edge/eve-libs v0.0.0-20260928172040-a59ba20797d0/go.mod h1:TXOpIgx9kwsunYgGcyTAAJvI+faOAd+PWk7p8mt0I8Y=
 github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20261015084011-20eade920485 h1:UI1G5IeecS+6wwO9LVEwstKkgZ9y9WvdSvwS44Qed6M=
@@ -502,6 +500,8 @@ github.com/mdlayher/socket v0.5.1/go.mod h1:TjPLHI1UgwEv5J1B5q0zTZq12A/6H7nKmtTa
 github.com/miekg/dns v1.1.27/go.mod h1:KNUDUusw/aVsxyTYZM1oqvCicbwhgbNgztCETuNZ7xM=
 github.com/miekg/dns v1.1.43 h1:JKfpVSCB84vrAmHzyrsxB5NAr5kLoMXZArPSw7Qlgyg=
 github.com/miekg/dns v1.1.43/go.mod h1:+evo5L0630/F6ca/Z9+GAqzhjGyn8/c+TBaOyfEl0V4=
+github.com/milan-zededa/eve-api/go v0.0.0-20261030135552-3f37803dd099 h1:Oy55PPVtp0UsUdHq95NpGnZwHrtRs2Dok90Uh7pkUTY=
+github.com/milan-zededa/eve-api/go v0.0.0-20261030135552-3f37803dd099/go.mod h1:6HxNA/qKJVEqwpuOFkcQ0h3QyotvAs/cjHLC961FPOY=
 github.com/mitchellh/go-homedir v1.1.0/go.mod h1:SfyaCUpYCn1Vlf4IUYiD9fPX4A5wJrkLzIz1N1q0pr0=
 github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQflz0v0=
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
