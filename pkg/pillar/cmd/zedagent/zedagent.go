@@ -168,6 +168,7 @@ type zedagentContext struct {
 	pubNodeDrainRequest    pubsub.Publication
 	subClusterUpdateStatus pubsub.Subscription
 	subKubeClusterInfo     pubsub.Subscription
+	subClusterNodeConn     pubsub.Subscription
 
 	subNestedAppRuntimeStorageMetric pubsub.Subscription
 
@@ -1213,6 +1214,9 @@ func mainEventLoop(zedagentCtx *zedagentContext, stillRunning *time.Ticker) {
 
 		case change := <-zedagentCtx.subKubeClusterInfo.MsgChan():
 			zedagentCtx.subKubeClusterInfo.ProcessChange(change)
+
+		case change := <-zedagentCtx.subClusterNodeConn.MsgChan():
+			zedagentCtx.subClusterNodeConn.ProcessChange(change)
 
 		case change := <-zedagentCtx.subClusterUpdateStatus.MsgChan():
 			zedagentCtx.subClusterUpdateStatus.ProcessChange(change)
