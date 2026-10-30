@@ -168,6 +168,8 @@ github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20261015084011-20eade920485 h1:UI1
 github.com/lf-edge/eve/pkg/kube/cnirpc v0.0.0-20261015084011-20eade920485/go.mod h1:Vq745ozk94M81lIQlQIQv88kvgYAWvO7/5OnCrRiCQc=
 github.com/lf-edge/eve/pkg/pillar v0.0.0-20261105134359-c22104d6ca14 h1:Lw05cXk7EzkRHcwWv7c1BwBswJgk03WvLf2DLgEXpt8=
 github.com/lf-edge/eve/pkg/pillar v0.0.0-20261105134359-c22104d6ca14/go.mod h1:zT+D/+vZZET6RrTQmDNYbCUcGnXntvvEMem2tySWs9w=
+github.com/milan-zededa/eve-api/go v0.0.0-20261102094027-d518342bc238 h1:LPF534H3cV55695BKiG7AQNCiYtSGyOwOxcM2bX8BLo=
+github.com/milan-zededa/eve-api/go v0.0.0-20261102094027-d518342bc238/go.mod h1:6HxNA/qKJVEqwpuOFkcQ0h3QyotvAs/cjHLC961FPOY=
 github.com/moby/locker v1.0.1 h1:fOXqR41zeveg4fFODix+1Ch4mj/gT0NE1XJbp/epuBg=
 github.com/moby/locker v1.0.1/go.mod h1:S7SDdo5zpBK84bzzVlKr2V0hz+7x9hWbYC/kq7oQppc=
 github.com/moby/spdystream v0.5.1 h1:9sNYeYZUcci9R6/w7KDaFWEWeV4LStVG78Mpyq/Zm/Y=
