@@ -162,7 +162,7 @@ func TestDeviceInfo(test *testing.T) {
 	// Phase 3: the hardware inventory reported alongside it is plausible.
 	t.Expect(devInfo.GetMachineArch()).ToNot(BeEmpty())
 	t.Expect(devInfo.GetCpuArch()).ToNot(BeEmpty())
-	t.Expect(devInfo.GetNcpu()).To(BeNumerically(">=", minCPUs))
+	t.Expect(devInfo.GetNcpu()).To(BeNumerically(">=", 64))
 	t.Expect(devInfo.GetMemory()).To(BeNumerically(">", 0))
 	t.Expect(devInfo.GetHostName()).ToNot(BeEmpty())
 	t.Expect(devInfo.GetBootTime().IsValid()).To(BeTrue())

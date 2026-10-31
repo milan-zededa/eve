@@ -129,7 +129,7 @@ func TestDeviceMetrics(test *testing.T) {
 			return dm.GetDeviceMemory().GetMemoryMB() > 0 &&
 				dm.GetCpuMetric().GetTotalNs() > 0
 		})))
-	t.Expect(portMetric.GetLocalName()).To(Equal(portIfName))
+	t.Expect(portMetric.GetLocalName()).To(Equal("eth42"))
 	evetest.Checkpoint("network-metrics-reported")
 
 	// Phase 3: memory metrics.
