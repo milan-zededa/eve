@@ -2,6 +2,72 @@
 
 One section per nightly run with at least one failing suite.
 
+## [2026-10-31 -- 0.0.0-master-203e89f9 (run #57)](https://github.com/milan-zededa/eve/actions/runs/41197914163)
+
+[Full report](https://milan-zededa.github.io/eve/test/master/runs/57/)
+
+### TestTelemetrySuite: failure analysis
+
+#### TestDeviceInfo
+
+##### Failure
+
+```
+
+Expected
+    <uint32>: 4
+to be >=
+    <int>: 64
+```
+
+##### Claude's conclusion
+
+Root cause confirmed directly from history, not speculation: commit `115b16336` ("TEST ONLY: telemetry: break two asserts to exercise failure analysis") deliberately replaced the assertion's `minCPUs` (4) with a hardcoded `64` in `evetest/tests/telemetry/info_test.go:165`. The live device genuinely reports 4 CPUs (confirmed via `evetest status` and the controller's `DeviceInfo`), which is correct/expected for this QEMU test VM — the test itself is intentionally broken, not the device.
+
+This is the same deliberately-injected failure already present at the top of the ledger for this same run (#56, 2026-10-31), where the prior ledger entry's "Claude's conclusion" shows `Not logged in · Please run /login` (i.e., that earlier analysis attempt never actually ran). It shares a root cause with the sibling `TestDeviceMetrics` failure in this run (also from commit 115b16336, which hardcoded the mgmt port name to `eth42`). This is not a recurring organic bug — it's a one-off throwaway commit the author explicitly marked "not meant to be merged," first and only appearing in this 2026-10-31 run.
+
+#### TestDeviceMetrics
+
+##### Failure
+
+```
+
+Expected
+    <string>: eth0
+to equal
+    <string>: eth42
+```
+
+##### Claude's conclusion
+
+Confirmed directly from source: commit `115b16336` ("TEST ONLY: telemetry: break two asserts to exercise failure analysis") hardcoded `evetest/tests/telemetry/metrics_test.go:132` to assert `portMetric.GetLocalName()` equals the literal string `"eth42"` instead of the actual `portIfName` variable. The live device's mgmt port genuinely reports `eth0` (its real interface name), so the test fails exactly as intentionally rigged — the device/telemetry pipeline is working correctly.
+
+This shares the same root cause as the sibling `TestDeviceInfo` failure already investigated in this same run (recorded in `live-investigation.md`), both introduced by the same throwaway commit. Per the ledger, this exact failure (`eth0` vs `eth42`) already appears at the top of the ledger for this same run #56 (2026-10-31), but that earlier ledger entry's "Claude's conclusion" shows `Not logged in · Please run /login`, meaning this is effectively the first real analysis of it — it is not a recurring issue from prior nightly runs, just a deliberate, throwaway test-breakage not meant to be merged.
+
+#### TestKernelPanicReport
+
+##### Failure
+
+```
+
+Timed out after 600.001s.
+no kernel_panic_stacks line holding the panic message was uploaded
+Expected
+    <string>: {"file":"/pillar/cmd/nodeagent/pstore.go:279","func":"github.com/lf-edge/eve/pkg/pillar/cmd/nodeagent.logPstoreDump","level":"warning","log_event_type":"log","msg":"[kernel panic #382]: \u003c0\u003e[   55.045968][ T5281] Kernel Offset: 0x1b000000 from 0xffffffff81000000 (relocation range: 0xffffffff80000000-0xffffffffbfffffff)","obj_key":"kernel_panic_stacks","obj_type":"kernel_panic_stacks","pid":2558,"source":"nodeagent","time":"2026-10-31T12:06:01.099844777Z"}
+to contain substring
+    <string>: Kernel panic - not syncing: sysrq triggered crash
+```
+
+##### Claude's conclusion
+
+###### Root cause assessment
+
+This is a new failure — `TestKernelPanicReport` doesn't appear anywhere in `live-ledger.md`, so it's not a previously-known/recurring issue, and it's unrelated to the deliberate `115b16336` ("TEST ONLY...") commit investigated earlier in this run (that commit only touches `info_test.go`/`metrics_test.go` assertions, not `kernelpanic_test.go`).
+
+The device-side behavior is actually correct: the panic (`sysrq triggered crash`) occurred, nodeagent read the 383-line pstore dump and logged each line via `logPstoreDump` at `pstore.go:279`, and line #353 (`[kernel panic #353]: ... Kernel panic - not syncing: sysrq triggered crash`) was uploaded by newlogd/loguploader and durably written into Adam's on-disk log store for this device (confirmed directly — `adam-db/.../logs/01793448359730972391`, flushed at 12:06:53, msgid 3622, contains the exact required content) well within the 10-minute `kernelPanicReportTimeout` window (which ran ~12:06:08–12:16:08).
+
+Yet the test's `WatchLogs`/`Eventually` assertion, which subscribes live via `AdamClient.SubscribeToDeviceLogs`, timed out having apparently drained the entire 383-entry burst (the last value it inspected was item #382, the very last line of the dump) without ever matching on #353 — even though that exact entry is trivially present and retrievable right now via the equivalent historical `IterateDeviceLogs` path (`evetest eve logs` uses that same call and shows it). This points to a bug/race specifically in the live log-streaming path (used only by `WatchLogs`, not by the historical iterate/`eve logs` path) silently losing or skipping an entry when a large, near-simultaneous burst of ~383 log lines needs to be streamed to a subscriber, rather than a device/pipeline timing problem — CPU and network on the device were not under load during this window (current load average ~0.1–0.16 on 4 vCPUs, uploads/requests to Adam proceeding steadily every ~15s with no sustained backlog).
+
 ## [2026-10-31 -- 0.0.0-master-203e89f9 (run #56)](https://github.com/milan-zededa/eve/actions/runs/41195686020)
 
 [Full report](https://milan-zededa.github.io/eve/test/master/runs/56/)
