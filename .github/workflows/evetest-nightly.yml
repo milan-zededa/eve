@@ -210,7 +210,7 @@ jobs:
           post-status: 'false'
           upload-junit-results: 'true'
           analyze-failures: 'true'
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude-code-oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ledger-branch: ${{ github.ref_name }}
 
   # Combines every suite's JUnit results into one Allure report, appends a

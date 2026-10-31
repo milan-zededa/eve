@@ -53,12 +53,12 @@ inputs:
       investigate each distinct failing test live (via evetest status/eve
       ssh/eve logs/eve collect-info/sdn ssh against the still-running
       device), writing its findings to the job's step summary. Requires
-      anthropic-api-key and the `claude` CLI installed on the runner
+      claude-code-oauth-token and the `claude` CLI installed on the runner
       (evetest/deploy/proxmox/gh-runner-installer.sh).
     required: false
     default: 'false'
-  anthropic-api-key:
-    description: Anthropic API key. Required when analyze-failures is 'true'.
+  claude-code-oauth-token:
+    description: Claude Code OAuth token (from `claude setup-token`). Required when analyze-failures is 'true'.
     required: false
     default: ''
   pr-number:
@@ -224,7 +224,7 @@ runs:
         EVETEST_PAUSE_ON_FAILURE: ${{ inputs.analyze-failures == 'true' && 'true' || '' }}
         LEDGER_BRANCH: ${{ inputs.ledger-branch }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        ANTHROPIC_API_KEY: ${{ inputs.analyze-failures == 'true' && inputs.anthropic-api-key || '' }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.analyze-failures == 'true' && inputs.claude-code-oauth-token || '' }}
         GH_TOKEN: ${{ inputs.analyze-failures == 'true' && github.token || '' }}
       run: |
         set -o pipefail
