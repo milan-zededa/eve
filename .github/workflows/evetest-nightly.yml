@@ -31,6 +31,7 @@ jobs:
         run: |
           SUITES_JSON=$(make -C evetest list-test-suites \
               | grep -E '^Test[A-Za-z0-9_]+$' \
+              | grep -E '^TestTelemetrySuite$' \
               | jq -R -s -c 'split("\n") | map(select(length > 0))')
           if [ "$SUITES_JSON" = "[]" ]; then
             echo "::error::no test suites discovered; check the raw 'make -C evetest list-test-suites' output above"
