@@ -74,6 +74,11 @@ func TestNodeClusterSuite(test *testing.T) {
 			Test: TestClusterVMApp,
 		},
 		evetest.TestCase{
+			// Four devices, so no earlier test's devices can be reused. Placed
+			// before TestTwoNodeHACluster so that one still runs last.
+			Test: TestFourNodesCluster,
+		},
+		evetest.TestCase{
 			Test: TestTwoNodeHACluster,
 		},
 	)

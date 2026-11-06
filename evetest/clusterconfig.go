@@ -37,6 +37,12 @@ type ClusterNode struct {
 	//
 	// Leave it false on every node to configure no tie-breaker at all.
 	TieBreaker bool
+
+	// Worker marks the node as an "Agent" node (EdgeNodeCluster.is_worker_node),
+	// as a controller does when it adds a node that is not one of the cluster's
+	// masters. Only AddNode accepts it. A worker is left out of
+	// master_node_uuids (see syncMasterNodeUUIDs).
+	Worker bool
 }
 
 // EdgeClusterConfig manages device configurations for a cluster of edge nodes.
@@ -172,6 +178,7 @@ func (cc *EdgeClusterConfig) setNodeClusterConfig(node ClusterNode) {
 		EncryptedClusterToken:        cc.encryptClusterSecrets(node.DevName),
 		TieBreakerNodeId:             cc.tieBreakerNodeID,
 		EnableNativeK8SOrchestration: cc.nativeK8s,
+		IsWorkerNode:                 node.Worker,
 	}
 	if node.ClusterIP != nil {
 		dc.Cluster.ClusterIpPrefix = node.ClusterIP.String()
@@ -324,6 +331,8 @@ func (cc *EdgeClusterConfig) gzipManifestYAML(manifestYAML []byte) []byte {
 //
 //   - Only the first node is the template, so a GetDeviceConfig customization
 //     made on another node is not carried over.
+//   - With Worker set, the new node joins as an Agent node and is not listed
+//     in master_node_uuids.
 //   - The new node is never the bootstrap node, and never the tie-breaker:
 //     that has to be named at construction, since every node is told which
 //     node it is.
@@ -352,12 +361,12 @@ func (cc *EdgeClusterConfig) AddNode(node ClusterNode) {
 }
 
 // syncMasterNodeUUIDs sets master_node_uuids on every node that still has a
-// cluster config to the UUIDs of all nodes that do, the way a controller
-// lists the control-plane members of a cluster in every member's config.
-// EVE prunes the Kubernetes Node object of any control-plane node absent from
-// this list, which is how a member the controller removed (e.g. a seed
-// evicted by a quorum recovery) stops being reported; an empty list disables
-// that pruning.
+// cluster config to the UUIDs of all non-worker nodes that do, the way a
+// controller lists the control-plane members of a cluster in every member's
+// config. EVE prunes the Kubernetes Node object of any control-plane node
+// absent from this list, which is how a member the controller removed (e.g. a
+// seed evicted by a quorum recovery) stops being reported; an empty list
+// disables that pruning.
 //
 // Derived from the configs as they stand rather than kept in step with each
 // edit, since a test may withdraw a member's cluster config directly. Called
@@ -365,7 +374,7 @@ func (cc *EdgeClusterConfig) AddNode(node ClusterNode) {
 func (cc *EdgeClusterConfig) syncMasterNodeUUIDs() {
 	var members []string
 	for _, node := range cc.nodes {
-		if cc.configs[node.DevName].Cluster == nil {
+		if node.Worker || cc.configs[node.DevName].Cluster == nil {
 			continue
 		}
 		id, onboarded := cc.th.deviceUUID(node.DevName)
