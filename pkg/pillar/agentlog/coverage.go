@@ -7,8 +7,12 @@ package agentlog
 
 import (
 	"os"
+	"path/filepath"
 	"runtime/coverage"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lf-edge/eve/pkg/pillar/base"
 )
@@ -46,4 +50,60 @@ func FlushCoverage(log *base.LogObject) {
 		log.Errorf("FlushCoverage: WriteCountersDir(%s) failed: %v", dir, err)
 	}
 	syscall.Sync()
+}
+
+// peerFlushTimeout caps the wait for the peer's flush. COVER=y images are
+// never used in production, so this cannot delay a production reboot.
+const peerFlushTimeout = 10 * time.Second
+
+// FlushCoverageAndPeers flushes this process and asks kube-init (a separate
+// process, eve-k only) to flush too.
+func FlushCoverageAndPeers(log *base.LogObject) {
+	dir := os.Getenv("GOCOVERDIR")
+	if dir == "" {
+		FlushCoverage(log)
+		return
+	}
+	before := countCounterFiles(dir)
+	peers := 0
+	for _, pid := range findPidsByComm("kube-init") {
+		if err := syscall.Kill(pid, syscall.SIGUSR2); err != nil {
+			log.Errorf("FlushCoverageAndPeers: kill -USR2 %d failed: %v", pid, err)
+			continue
+		}
+		peers++
+	}
+	FlushCoverage(log)
+	// Our own flush adds one file, each peer one more.
+	deadline := time.Now().Add(peerFlushTimeout)
+	for peers > 0 && countCounterFiles(dir) < before+1+peers {
+		if time.Now().After(deadline) {
+			log.Warnf("FlushCoverageAndPeers: peer did not flush within %v",
+				peerFlushTimeout)
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	syscall.Sync()
+}
+
+func countCounterFiles(dir string) int {
+	files, _ := filepath.Glob(filepath.Join(dir, "covcounters.*"))
+	return len(files)
+}
+
+func findPidsByComm(name string) []int {
+	var pids []int
+	entries, _ := os.ReadDir("/proc")
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		comm, err := os.ReadFile("/proc/" + e.Name() + "/comm")
+		if err == nil && strings.TrimSpace(string(comm)) == name {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
 }
