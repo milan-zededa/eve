@@ -1356,6 +1356,9 @@ func (c *SCEPClient) retryAndStartRenew() {
 				renewCert = true
 			}
 
+		case eveinfo.CertStatus_CERT_STATUS_RENEWAL_PENDING:
+			renewCert = true
+
 		case eveinfo.CertStatus_CERT_STATUS_EXPIRED:
 			// An expired certificate cannot be used to sign SCEP renewal requests.
 			// Re-enroll from scratch (reusing the existing private key).
