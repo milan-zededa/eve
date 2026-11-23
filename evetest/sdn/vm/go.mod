@@ -8,9 +8,9 @@ require (
 	github.com/elazarl/goproxy v1.7.2
 	github.com/elazarl/goproxy/ext v0.0.0-20250305112401-088f758167d2
 	github.com/inconshreveable/go-vhost v1.0.0
-	github.com/lf-edge/eve-libs v0.0.0-20260928172040-a59ba20797d0
+	github.com/lf-edge/eve-libs v0.0.0-20260929105339-779d3f2350aa
 	github.com/lf-edge/eve/evetest v0.0.0-20260820145609-63ab025d6185
-	github.com/lf-edge/eve/pkg/pillar v0.0.0-20260421125048-8d3825045e4e
+	github.com/lf-edge/eve/pkg/pillar v0.0.0-20261016095447-da1f21294aba
 	github.com/sirupsen/logrus v1.9.4
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
@@ -59,3 +59,8 @@ require (
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
 )
+
+// TODO: temporary replace pointing at the SCEP server API changes (certificate
+// validity, backdate and renewal options) in a fork. Remove it and do a proper
+// update of the github.com/lf-edge/eve/evetest module once they are merged upstream.
+replace github.com/lf-edge/eve/evetest => github.com/milan-zededa/eve/evetest v0.0.0-20261123142556-882ec210f81d
