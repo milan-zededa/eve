@@ -113,6 +113,7 @@ func (c *SCEPClient) handleSCEPProfile(profile types.SCEPProfile, deleted bool) 
 		}
 		enrolledCert.PrivateKeyFilepath = ""
 	}
+	c.removeStagedPrivateKey(profile.ProfileName)
 
 	if enrolledCert.CACertBundleFilepath != "" {
 		if err = os.Remove(enrolledCert.CACertBundleFilepath); err != nil {
@@ -139,7 +140,16 @@ func (c *SCEPClient) handleSCEPProfile(profile types.SCEPProfile, deleted bool) 
 		return
 	}
 
-	enrolledCert.PrivateKeyFilepath, err = c.savePrivateKey(profile.ProfileName, privateKey)
+	enrolledCert.PrivateKeyFilepath = c.getPrivateKeyFilePath(profile.ProfileName)
+	if err = c.savePrivateKey(enrolledCert.PrivateKeyFilepath, privateKey); err != nil {
+		enrolledCert.PrivateKeyFilepath = ""
+		enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_ENROLLMENT_FAILED
+		enrolledCert.Error.SetErrorDescription(types.ErrorDescription{Error: err.Error()})
+		c.publishEnrolledCertStatus(enrolledCert)
+		return
+	}
+
+	caps, err := c.getCACaps(profile)
 	if err != nil {
 		enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_ENROLLMENT_FAILED
 		enrolledCert.Error.SetErrorDescription(types.ErrorDescription{Error: err.Error()})
@@ -147,7 +157,7 @@ func (c *SCEPClient) handleSCEPProfile(profile types.SCEPProfile, deleted bool) 
 		return
 	}
 
-	cert, caCerts, pending, err := c.enrollOrRenewCertificate(profile, nil, privateKey)
+	cert, caCerts, pending, err := c.enrollOrRenewCertificate(profile, caps, nil, privateKey)
 	if err != nil {
 		enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_ENROLLMENT_FAILED
 		enrolledCert.Error.SetErrorDescription(types.ErrorDescription{Error: err.Error()})
@@ -174,13 +184,14 @@ func (c *SCEPClient) handleSCEPProfile(profile types.SCEPProfile, deleted bool) 
 		return
 	}
 
-	enrolledCert.CertFilepath, err = c.saveCertificate(profile.ProfileName, cert)
-	if err != nil {
+	certFilePath := c.getCertFilePath(profile.ProfileName)
+	if err = c.saveCertificate(certFilePath, cert); err != nil {
 		enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_ENROLLMENT_FAILED
 		enrolledCert.Error.SetErrorDescription(types.ErrorDescription{Error: err.Error()})
 		c.publishEnrolledCertStatus(enrolledCert)
 		return
 	}
+	enrolledCert.CertFilepath = certFilePath
 
 	c.populateCertStatus(&enrolledCert, cert)
 	enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_AVAILABLE
@@ -226,14 +237,17 @@ func (c *SCEPClient) makePrivateKey(keyType eveconfig.KeyType) (SignerAndDecrypt
 // SCEP server via the controller proxy.
 //
 // If currentCert is not nil, this is a renewal: a CSR is generated and signed
-// using the current certificate and its private key.
+// using the current certificate and its private key. The caller must only do
+// this if caps.supportsRenewal() is true.
+//
+// caps are the server capabilities obtained by the caller via getCACaps.
 //
 // The function returns the issued certificate and the CA certificate bundle
 // (trust anchors + verified intermediate certs from the SCEP server) on success,
 // or a boolean indicating whether the request is pending (SCEP PENDING status).
 // Errors are returned if the operation fails or the SCEP response is invalid.
 func (c *SCEPClient) enrollOrRenewCertificate(profile types.SCEPProfile,
-	currentCert *x509.Certificate,
+	caps scepCaps, currentCert *x509.Certificate,
 	privateKey SignerAndDecrypter) (cert *x509.Certificate, caCerts []*x509.Certificate, pending bool, err error) {
 	if currentCert == nil {
 		c.log.Noticef("Enrolling a new certificate for profile %s", profile.ProfileName)
@@ -287,13 +301,6 @@ func (c *SCEPClient) enrollOrRenewCertificate(profile types.SCEPProfile,
 	// that is not in the profile's CACertPEM but is signed by one of the
 	// trust anchor CAs.
 	caCerts, err = c.getCACerts(profile, trustAnchors)
-	if err != nil {
-		return nil, nil, false, err
-	}
-
-	// Query SCEP server capabilities via GetCACaps operation.
-	// This determines the supported encryption and hash algorithms.
-	caps, err := c.getCACaps(profile)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -728,6 +735,12 @@ func (caps scepCaps) has(capability string) bool {
 		}
 	}
 	return false
+}
+
+// supportsRenewal returns true if the SCEP server accepts RenewalReq messages
+// (RFC 8894, Section 3.5.2).
+func (caps scepCaps) supportsRenewal() bool {
+	return caps.has("Renewal")
 }
 
 // encryptionAlgorithm returns the best content encryption algorithm supported
@@ -1323,6 +1336,9 @@ func (c *SCEPClient) retryAndStartRenew() {
 			_ = os.Remove(enrolledCert.CertFilepath)
 			c.removeCACertBundle(&enrolledCert)
 			enrolledCert.CertFilepath = ""
+			// With the old cert gone, a key staged by an unfinished re-enrollment
+			// (see below) can replace the old key without a cert/key mismatch.
+			c.promoteStagedPrivateKey(profile.ProfileName, &enrolledCert)
 			enrolledCert.CertStatus = eveinfo.CertStatus_CERT_STATUS_EXPIRED
 			c.publishEnrolledCertStatus(enrolledCert)
 		}
@@ -1361,7 +1377,7 @@ func (c *SCEPClient) retryAndStartRenew() {
 
 		case eveinfo.CertStatus_CERT_STATUS_EXPIRED:
 			// An expired certificate cannot be used to sign SCEP renewal requests.
-			// Re-enroll from scratch (reusing the existing private key).
+			// Re-enroll from scratch (reusing the existing or promoted staged key).
 			enrollNewCert = true
 
 		case eveinfo.CertStatus_CERT_STATUS_ENROLLMENT_FAILED:
@@ -1388,44 +1404,65 @@ func (c *SCEPClient) retryAndStartRenew() {
 			failureState = eveinfo.CertStatus_CERT_STATUS_RENEWAL_FAILED
 			pendingState = eveinfo.CertStatus_CERT_STATUS_RENEWAL_PENDING
 		}
+		setFailure := func(errMsg string) {
+			enrolledCert.CertStatus = failureState
+			enrolledCert.Error.SetErrorDescription(
+				types.ErrorDescription{Error: errMsg},
+			)
+			c.publishEnrolledCertStatus(enrolledCert)
+		}
+
+		// Query SCEP server capabilities. They determine the supported encryption
+		// and hash algorithms, and whether the server accepts renewal requests.
+		caps, err := c.getCACaps(profile)
+		if err != nil {
+			setFailure(err.Error())
+			continue
+		}
+
+		// If the server does not support renewal, replace the certificate by
+		// enrolling a new one (PKCSReq) while the current one remains in use.
+		// The new enrollment uses a new key pair: the SCEP transaction ID is derived
+		// from the public key, so reusing the key would repeat the transaction ID
+		// of the original enrollment. The new key is staged next to the current one
+		// and installed only together with the newly issued certificate.
+		reEnroll := renewCert && !caps.supportsRenewal()
+		if reEnroll {
+			c.log.Noticef("SCEP server for profile %s does not support renewal, "+
+				"enrolling a replacement certificate with a new private key",
+				profile.ProfileName)
+		}
 
 		// Load or generate private key
 		var privateKey SignerAndDecrypter
+		switch {
+		case reEnroll:
+			privateKey, err = c.loadOrMakeStagedPrivateKey(
+				profile.ProfileName, enrolledCert.KeyType)
+			if err != nil {
+				setFailure(err.Error())
+				continue
+			}
 
-		if enrolledCert.PrivateKeyFilepath != "" {
+		case enrolledCert.PrivateKeyFilepath != "":
 			privateKey, err = c.loadPrivateKey(enrolledCert.PrivateKeyFilepath)
 			if err != nil {
-				enrolledCert.CertStatus = failureState
-				errStr := fmt.Sprintf("failed to load private key: %v", err)
-				enrolledCert.Error.SetErrorDescription(
-					types.ErrorDescription{Error: errStr},
-				)
-				c.publishEnrolledCertStatus(enrolledCert)
-				continue
-			}
-		} else {
-			privateKey, err = c.makePrivateKey(enrolledCert.KeyType)
-			if err != nil {
-				enrolledCert.CertStatus = failureState
-				errStr := fmt.Sprintf("failed to generate private key: %v", err)
-				enrolledCert.Error.SetErrorDescription(
-					types.ErrorDescription{Error: errStr},
-				)
-				c.publishEnrolledCertStatus(enrolledCert)
+				setFailure(fmt.Sprintf("failed to load private key: %v", err))
 				continue
 			}
 
-			enrolledCert.PrivateKeyFilepath, err = c.savePrivateKey(
-				profile.ProfileName, privateKey)
+		default:
+			privateKey, err = c.makePrivateKey(enrolledCert.KeyType)
 			if err != nil {
-				enrolledCert.CertStatus = failureState
-				errStr := fmt.Sprintf("failed to save private key: %v", err)
-				enrolledCert.Error.SetErrorDescription(
-					types.ErrorDescription{Error: errStr},
-				)
-				c.publishEnrolledCertStatus(enrolledCert)
+				setFailure(fmt.Sprintf("failed to generate private key: %v", err))
 				continue
 			}
+			keyPath := c.getPrivateKeyFilePath(profile.ProfileName)
+			if err = c.savePrivateKey(keyPath, privateKey); err != nil {
+				setFailure(fmt.Sprintf("failed to save private key: %v", err))
+				continue
+			}
+			enrolledCert.PrivateKeyFilepath = keyPath
 		}
 
 		// Enrollment or renewal
@@ -1433,32 +1470,23 @@ func (c *SCEPClient) retryAndStartRenew() {
 		var caCerts []*x509.Certificate
 		var pending bool
 
-		if enrollNewCert {
+		if enrollNewCert || reEnroll {
 			cert, caCerts, pending, err = c.enrollOrRenewCertificate(
-				profile, nil, privateKey)
+				profile, caps, nil, privateKey)
 		} else {
 			// Load currently enrolled certificate for signing the SCEP renewal request.
 			var currentCert *x509.Certificate
 			currentCert, err = c.loadCertificate(enrolledCert.CertFilepath)
 			if err != nil {
-				enrolledCert.CertStatus = failureState
-				errMsg := fmt.Sprintf("failed to load current certificate: %v", err)
-				enrolledCert.Error.SetErrorDescription(
-					types.ErrorDescription{Error: errMsg},
-				)
-				c.publishEnrolledCertStatus(enrolledCert)
+				setFailure(fmt.Sprintf("failed to load current certificate: %v", err))
 				continue
 			}
 			cert, caCerts, pending, err = c.enrollOrRenewCertificate(
-				profile, currentCert, privateKey)
+				profile, caps, currentCert, privateKey)
 		}
 
 		if err != nil {
-			enrolledCert.CertStatus = failureState
-			enrolledCert.Error.SetErrorDescription(
-				types.ErrorDescription{Error: err.Error()},
-			)
-			c.publishEnrolledCertStatus(enrolledCert)
+			setFailure(err.Error())
 			continue
 		}
 
@@ -1471,26 +1499,27 @@ func (c *SCEPClient) retryAndStartRenew() {
 		// Save CA certificate bundle.
 		caBundlePath, err := c.saveCACertBundle(profile.ProfileName, caCerts)
 		if err != nil {
-			enrolledCert.CertStatus = failureState
-			errMsg := fmt.Sprintf("failed to save CA cert bundle: %v", err)
-			enrolledCert.Error.SetErrorDescription(
-				types.ErrorDescription{Error: errMsg},
-			)
-			c.publishEnrolledCertStatus(enrolledCert)
+			setFailure(fmt.Sprintf("failed to save CA cert bundle: %v", err))
 			continue
 		}
 		enrolledCert.CACertBundleFilepath = caBundlePath
 
-		// Save new certificate
-		certFilePath, err := c.saveCertificate(profile.ProfileName, cert)
-		if err != nil {
-			enrolledCert.CertStatus = failureState
-			errMsg := fmt.Sprintf("failed to save certificate: %v", err)
-			enrolledCert.Error.SetErrorDescription(
-				types.ErrorDescription{Error: errMsg},
-			)
-			c.publishEnrolledCertStatus(enrolledCert)
-			continue
+		// Save new certificate (and install the staged key if re-enrolled).
+		certFilePath := c.getCertFilePath(profile.ProfileName)
+		if reEnroll {
+			keyPath := c.getPrivateKeyFilePath(profile.ProfileName)
+			if err = c.installReEnrolledCert(profile.ProfileName, cert); err != nil {
+				setFailure(err.Error())
+				continue
+			}
+			enrolledCert.PrivateKeyFilepath = keyPath
+		} else {
+			if err = c.saveCertificate(certFilePath, cert); err != nil {
+				setFailure(fmt.Sprintf("failed to save certificate: %v", err))
+				continue
+			}
+			// A key staged for an earlier re-enrollment attempt is no longer needed.
+			c.removeStagedPrivateKey(profile.ProfileName)
 		}
 		enrolledCert.CertFilepath = certFilePath
 
@@ -1576,29 +1605,102 @@ func (c *SCEPClient) publishSCEPNetdump(
 	}
 }
 
-func (c *SCEPClient) savePrivateKey(profileName string,
-	key SignerAndDecrypter) (path string, err error) {
+func (c *SCEPClient) savePrivateKey(path string, key SignerAndDecrypter) error {
 	if key == nil {
-		return "", errors.New("nil private key")
+		return errors.New("nil private key")
 	}
-	if err = os.MkdirAll(privateKeyDir, 0700); err != nil {
-		return "", fmt.Errorf("failed to create private key directory: %w", err)
+	if err := os.MkdirAll(privateKeyDir, 0700); err != nil {
+		return fmt.Errorf("failed to create private key directory: %w", err)
 	}
 
 	derBytes, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal private key: %w", err)
+		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 	pemBytes := pem.EncodeToMemory(&pem.Block{
 		Type:  "PRIVATE KEY",
 		Bytes: derBytes,
 	})
 
-	path = c.getPrivateKeyFilePath(profileName)
 	if err = os.WriteFile(path, pemBytes, 0600); err != nil {
-		return "", fmt.Errorf("failed to write private key: %w", err)
+		return fmt.Errorf("failed to write private key: %w", err)
 	}
-	return path, nil
+	return nil
+}
+
+// loadOrMakeStagedPrivateKey returns the private key staged for re-enrollment
+// of the given profile, generating and persisting a new one if none is staged.
+// The staged key is reused across retries so that a request left PENDING
+// by the SCEP server is re-sent with the same transaction ID.
+func (c *SCEPClient) loadOrMakeStagedPrivateKey(profileName string,
+	keyType eveconfig.KeyType) (SignerAndDecrypter, error) {
+	path := c.getStagedPrivateKeyFilePath(profileName)
+	if fileutils.FileExists(c.log, path) {
+		key, err := c.loadPrivateKey(path)
+		if err == nil {
+			return key, nil
+		}
+		c.log.Warnf("Replacing unusable staged private key %s: %v", path, err)
+	}
+	key, err := c.makePrivateKey(keyType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+	if err = c.savePrivateKey(path, key); err != nil {
+		return nil, fmt.Errorf("failed to save staged private key: %w", err)
+	}
+	return key, nil
+}
+
+// promoteStagedPrivateKey moves the private key staged for re-enrollment
+// (if any) to the main private key path of the profile.
+// Only call this when no certificate is installed for the profile.
+func (c *SCEPClient) promoteStagedPrivateKey(profileName string,
+	enrolledCert *types.EnrolledCertificateStatus) {
+	stagedPath := c.getStagedPrivateKeyFilePath(profileName)
+	if !fileutils.FileExists(c.log, stagedPath) {
+		return
+	}
+	keyPath := c.getPrivateKeyFilePath(profileName)
+	if err := os.Rename(stagedPath, keyPath); err != nil {
+		c.log.Errorf("Failed to promote staged private key %s: %v", stagedPath, err)
+		return
+	}
+	enrolledCert.PrivateKeyFilepath = keyPath
+}
+
+func (c *SCEPClient) removeStagedPrivateKey(profileName string) {
+	path := c.getStagedPrivateKeyFilePath(profileName)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		c.log.Errorf("Failed to remove staged private key %s: %v", path, err)
+	}
+}
+
+// installReEnrolledCert replaces the current certificate and private key
+// of the profile with a re-enrolled certificate and the staged key it was
+// issued for. The certificate is written to a temporary file first, so that
+// what remains are two renames and the window during which the certificate
+// and the key on disk do not match is as short as possible.
+func (c *SCEPClient) installReEnrolledCert(profileName string,
+	cert *x509.Certificate) error {
+	certPath := c.getCertFilePath(profileName)
+	tmpCertPath := certPath + ".new"
+	if err := c.saveCertificate(tmpCertPath, cert); err != nil {
+		return fmt.Errorf("failed to save certificate: %w", err)
+	}
+	stagedKeyPath := c.getStagedPrivateKeyFilePath(profileName)
+	if err := os.Rename(stagedKeyPath, c.getPrivateKeyFilePath(profileName)); err != nil {
+		_ = os.Remove(tmpCertPath)
+		return fmt.Errorf("failed to install new private key: %w", err)
+	}
+	if err := os.Rename(tmpCertPath, certPath); err != nil {
+		// The old certificate does not match the new key anymore. Remove it,
+		// so that the next retry detects the missing cert and re-enrolls.
+		_ = os.Remove(certPath)
+		_ = os.Remove(tmpCertPath)
+		return fmt.Errorf("failed to install new certificate: %w", err)
+	}
+	return nil
 }
 
 func (c *SCEPClient) loadPrivateKey(path string) (SignerAndDecrypter, error) {
@@ -1628,13 +1730,12 @@ func (c *SCEPClient) loadPrivateKey(path string) (SignerAndDecrypter, error) {
 	return rsaKey, nil
 }
 
-func (c *SCEPClient) saveCertificate(profileName string,
-	cert *x509.Certificate) (path string, err error) {
+func (c *SCEPClient) saveCertificate(path string, cert *x509.Certificate) error {
 	if cert == nil {
-		return "", errors.New("nil certificate")
+		return errors.New("nil certificate")
 	}
-	if err = os.MkdirAll(certDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create cert directory: %w", err)
+	if err := os.MkdirAll(certDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cert directory: %w", err)
 	}
 
 	pemBytes := pem.EncodeToMemory(&pem.Block{
@@ -1642,11 +1743,10 @@ func (c *SCEPClient) saveCertificate(profileName string,
 		Bytes: cert.Raw,
 	})
 
-	path = c.getCertFilePath(profileName)
-	if err = os.WriteFile(path, pemBytes, 0644); err != nil {
-		return "", fmt.Errorf("failed to write certificate: %w", err)
+	if err := os.WriteFile(path, pemBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write certificate: %w", err)
 	}
-	return path, nil
+	return nil
 }
 
 func (c *SCEPClient) saveCACertBundle(profileName string,
@@ -1698,6 +1798,7 @@ func (c *SCEPClient) deleteEnrolledCert(profileName string,
 				enrolledCert.PrivateKeyFilepath, profileName, err)
 		}
 	}
+	c.removeStagedPrivateKey(profileName)
 	c.removeCACertBundle(&enrolledCert)
 	if err := c.pubEnrolledCertStatus.Unpublish(profileName); err != nil {
 		c.log.Errorf("Failed to un-publish EnrolledCertificateStatus for profile %s",
@@ -1782,6 +1883,12 @@ func (c *SCEPClient) getCACertBundleFilePath(profileName string) string {
 
 func (c *SCEPClient) getPrivateKeyFilePath(profileName string) string {
 	return filepath.Join(privateKeyDir, sanitizeProfileName(profileName)+"-key.pem")
+}
+
+// getStagedPrivateKeyFilePath returns the path of the private key generated for
+// re-enrollment of the profile with a SCEP server that does not support renewal.
+func (c *SCEPClient) getStagedPrivateKeyFilePath(profileName string) string {
+	return filepath.Join(privateKeyDir, sanitizeProfileName(profileName)+"-key.staged.pem")
 }
 
 func pkixNameToCertDistinguishedName(name pkix.Name) types.CertDistinguishedName {

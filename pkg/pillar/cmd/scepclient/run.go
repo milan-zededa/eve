@@ -91,6 +91,8 @@ const (
 // The service continuously monitors the certificate’s validity period.
 // When the renewal window is reached, it begins attempting renewal and
 // continues retrying until the certificate is successfully renewed.
+// If the SCEP server does not support renewal, a replacement certificate
+// is enrolled with a new private key instead.
 type SCEPClient struct {
 	agentbase.AgentBase
 	ps     *pubsub.PubSub
