@@ -53,7 +53,10 @@ RUN mkdir -p $GOBIN && \
 
 ARG SCEP_SERVER_VERSION=2.3.0
 ADD https://github.com/micromdm/scep.git#v${SCEP_SERVER_VERSION} scep
-RUN go build -C scep/cmd/scepserver -o $GOBIN/scepserver .
+# Allow short certificate validity (e.g. -crtvalid 5m) and disabling
+# certificate renewal (-norenewal) to test certificate renewal on EVE.
+RUN git -C scep apply ../patches/micromdm-scep.patch && \
+    go build -C scep/cmd/scepserver -o $GOBIN/scepserver .
 
 ###########################
 # Runtime stage
